@@ -630,4 +630,63 @@ describe('the recheck after a login, on the real installation', () => {
     // Both pickers are redrawn from the blocker it recorded again.
     expect(h.deps.sendState).toHaveBeenCalled();
   });
+  /** A store path with nothing there yet, which Cline's hook reads before it would spawn Cline. */
+  function emptyClineStore(): { env: Record<string, string>; file: string } {
+    store = fs.mkdtempSync(path.join(os.tmpdir(), 'ow-cline-store-'));
+    const file = path.join(store, 'providers.json');
+    return { env: { CLINE_PROVIDER_SETTINGS_PATH: file }, file };
+  }
+
+  function keylessCline(env: Record<string, string>) {
+    const registry = new RunnerRegistry();
+    const config = { aiProvider: 'cline' as PlannerBackendId, getProviderApiKey: () => '', planningModel: '', orchestratorModel: '', openaiCompatibleBaseUrl: '' };
+    const acpClient = vi.fn(async (_command: string, _args: string[], _opts?: { env?: Record<string, string | undefined> }) => [] as DiscoveredModel[]);
+    const modelResolver = new ModelResolver(registry, config as never, { env: async () => env, acpClient, workspace: () => '/ws', execImpl: async () => ({ stdout: '' }) });
+    const installation = new RunnerInstallation(registry, async () => ({ stdout: '3.0.74' }), Date.now, { launch: { platform: 'linux' }, workspace: () => '/ws' });
+    // What discovery records when Cline's hook found no provider key: Cline was never asked.
+    recordRunnerAuth('cline', signedOutAuth({ ...runnerSignIn('cline')!, needsKey: true }, 'no provider key'), '/ws');
+    return { acpClient, modelResolver, installation };
+  }
+
+  it("says Ordewell still has no key, not that Cline refused, when Cline's setup exits 0 and its hook still finds none", async () => {
+    const { env } = emptyClineStore();
+    const r = keylessCline(env);
+    const h = harness({ aiProvider: 'cline', runnerInstallation: r.installation, modelResolver: r.modelResolver, exitAfter: { polls: 1, code: 0 } });
+
+    await loginPlanner(h.deps, 'cline');
+
+    expect(h.terminal.options).toMatchObject({ shellPath: '/fake/bin/cline', shellArgs: ['auth'] });
+    // Refused before any spawn: no ACP reply exists to attribute to Cline.
+    expect(r.acpClient).not.toHaveBeenCalled();
+    expect(recordedRunnerAuth('cline', '/ws')).toMatchObject({ state: 'signed-out', detail: 'no provider key', signIn: { needsKey: true } });
+    expect(h.ended()).toEqual({
+      type: 'plannerLoginEnded', runner: 'cline', ok: false,
+      message: 'The Cline setup finished, but Ordewell still has no provider API key it can hand Cline. Set it up with /login cline, or run cline auth, and choose an API provider and enter its key; an account sign-in alone is not enough.',
+    });
+    expect(h.deps.sendState).toHaveBeenCalled();
+  });
+
+  it('turns Cline ready once its setup leaves a provider key in the store, in the shape `cline auth` 3.0.74 writes', async () => {
+    const { env, file } = emptyClineStore();
+    const r = keylessCline(env);
+    const h = harness({ aiProvider: 'cline', runnerInstallation: r.installation, modelResolver: r.modelResolver, exitAfter: { polls: 1, code: 0 } });
+    // As `cline auth -p openrouter -k <key> -m <model>` left it in a throwaway HOME (the key is a placeholder).
+    const sleep = h.deps.sleep!;
+    Object.assign(h.deps, {
+      sleep: async (ms: number) => {
+        fs.writeFileSync(file, JSON.stringify({
+          version: 1, lastUsedProvider: 'openrouter', modes: {},
+          providers: { openrouter: { settings: { provider: 'openrouter', apiKey: 'sk-or-placeholder', model: 'anthropic/claude-sonnet-4' }, updatedAt: '2026-11-25T22:04:48.563Z', tokenSource: 'manual' } },
+        }));
+        await sleep(ms);
+      },
+    });
+
+    await loginPlanner(h.deps, 'cline');
+
+    expect(r.acpClient).toHaveBeenCalled();
+    expect(r.acpClient.mock.calls.at(-1)?.[2]?.env).toMatchObject({ CLINE_PROVIDER: 'openrouter', CLINE_API_KEY: 'sk-or-placeholder', CLINE_MODEL: 'anthropic/claude-sonnet-4' });
+    expect(recordedRunnerAuth('cline', '/ws')?.state).toBe('signed-in');
+    expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner: 'cline', ok: true });
+  });
 });

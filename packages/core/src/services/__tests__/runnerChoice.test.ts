@@ -12,7 +12,7 @@ const signIn = { runner: 'cursor-agent', label: 'Cursor', login: ['cursor-agent'
 describe('runnerChoice', () => {
   it.each<[RunnerReadiness, string | undefined, string | undefined, boolean]>([
     [{ kind: 'blocked', why: 'signed-out', signIn }, 'Signed out', 'Sign in', true],
-    [{ kind: 'blocked', why: 'no-credential', signIn }, 'API key needed', 'Add key', true],
+    [{ kind: 'blocked', why: 'no-credential' }, 'API key needed', 'Add key', true],
     [{ kind: 'no-usable-model' }, 'No usable model', 'Refresh models', true],
     [{ kind: 'discovery-failed' }, "Couldn't load models", 'Retry', false],
     [{ kind: 'pending' }, 'Checking models…', undefined, false],
@@ -65,6 +65,45 @@ describe('orderByChoice', () => {
       ['f', { kind: 'discovery-failed' }],
     ];
     expect(orderByChoice(rows, ([, r]) => runnerChoice(r)).map(([id]) => id)).toEqual(['c', 'e', 'f', 'a', 'd', 'b']);
+  });
+});
+
+/**
+ * Cline's verdict as discovery records it when its credential hook found no
+ * provider key: the sign-in it carries is the payload the daemon and VS Code
+ * send, with no key route of Ordewell's and `cline auth` as its only setup.
+ */
+const clineNoKey = { runner: 'cline', label: 'Cline', login: ['cline', 'auth'], needsKey: true as const };
+
+describe('a coding agent whose only way to a key is its own setup (Cline)', () => {
+  it('reads "API key needed" with its own setup as the one recovery, never a key entry that cannot reach it', () => {
+    const choice = runnerChoice({ kind: 'blocked', why: 'no-credential', signIn: clineNoKey });
+    expect(choice).toMatchObject({ status: 'no-credential', text: 'API key needed', recovery: { kind: 'set-up', label: 'Set up Cline' }, blocksNewChoice: true, group: 'blocked' });
+  });
+
+  it('reads no-credential from the recorded verdict alone, as a row whose discovery reason is gone does', () => {
+    const auth = { state: 'signed-out' as const, loginCommand: ['cline', 'auth'], detail: 'no provider key', signIn: clineNoKey };
+    expect(runnerReadiness({ usable: true, auth })).toEqual({ kind: 'blocked', why: 'no-credential', signIn: clineNoKey });
+  });
+
+  it('marks the sign-in of a no-credential row that discovery read, so every surface words it as a key it lacks', () => {
+    const auth = { state: 'signed-out' as const, signIn: { runner: 'cline', label: 'Cline', login: ['cline', 'auth'] } };
+    expect(runnerReadiness({ usable: true, auth }, 'no-credential')).toEqual({ kind: 'blocked', why: 'no-credential', signIn: clineNoKey });
+  });
+
+  it('keeps an explicit sign-out a sign-in: the agent itself refused', () => {
+    expect(runnerChoice({ kind: 'blocked', why: 'signed-out', signIn: { runner: 'cline', label: 'Cline', login: ['cline', 'auth'] } }).recovery)
+      .toEqual({ kind: 'sign-in', label: 'Sign in' });
+  });
+
+  it('keeps Add key for an agent Ordewell hands a key, which opens the key entry for that vendor', () => {
+    const qwen = { runner: 'qwen-code', label: 'Qwen Code', key: { provider: 'openrouter' as const, label: 'OpenRouter' }, byHand: 'run qwen and sign in there', needsKey: true as const };
+    expect(runnerChoice({ kind: 'blocked', why: 'no-credential', signIn: qwen }).recovery).toEqual({ kind: 'add-key', label: 'Add key' });
+  });
+
+  it('refuses a new pick with the setup and the key route it needs, not as a sign-out', () => {
+    expect(runnerChoiceRefusal('Cline', { kind: 'blocked', why: 'no-credential', signIn: clineNoKey }))
+      .toBe('Cline has no provider API key Ordewell can hand it. Set it up with /login cline, or run cline auth, and choose an API provider and enter its key; an account sign-in alone is not enough. Then pick it again.');
   });
 });
 

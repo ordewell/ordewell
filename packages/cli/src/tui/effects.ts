@@ -6,7 +6,7 @@ import {
 } from '@ordewell/core';
 import { describeConnectionRefused, isConnectionRefused } from '../daemon';
 import { RequestTimeoutError, UnreadableResponseError, deliveryOf, type ApiClient } from '../apiClient';
-import { DaemonRefusal } from '@ordewell/core';
+import { DaemonRefusal, describeLoginStillBlocked, describeSignIn, runnerEntryReadiness, setsUpKey, TERMINAL_UI_SIGN_IN } from '@ordewell/core';
 import { normalizeCatalog } from '../catalog';
 import { plannerSwitchRecall, uninstalledPlannerRefusal } from '../plannerModelSwitch';
 import type { Action, Effect } from './reducer';
@@ -684,13 +684,19 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       }
       // The child's exit code is not the runner's verdict: a login can print
       // success and persist nothing, so the fresh probe decides what to claim.
-      const fresh = refreshed?.runners.find((r) => r.name === effect.label)?.auth?.state;
+      const row = refreshed?.runners.find((r) => r.name === effect.label);
+      const fresh = row?.auth?.state;
+      // A recheck whose credential hook still found no key never asked the agent: say what Ordewell lacks.
+      const blocked = row ? runnerEntryReadiness(row) : undefined;
+      const keyless = blocked?.kind === 'blocked' && setsUpKey(blocked.signIn) ? blocked.signIn : undefined;
       const message = fresh === 'signed-in'
         ? `${effect.label} is signed in.`
         : fresh === 'signed-out'
-          ? `${effect.label} still reports not logged in.${
-            result.ok ? '' : ` ${result.message ?? 'The login did not finish.'}`
-          }`
+          ? keyless && !result.ok
+            ? `${describeSignIn(keyless, TERMINAL_UI_SIGN_IN)} ${result.message ?? 'The login did not finish.'}`
+            : `${describeLoginStillBlocked(effect.label, keyless, TERMINAL_UI_SIGN_IN)}${
+              result.ok ? '' : ` ${result.message ?? 'The login did not finish.'}`
+            }`
           : result.ok
             ? `Could not confirm that ${effect.label} is signed in.`
             : `Could not confirm that ${effect.label} is signed in: ${result.message ?? 'the login did not finish'}`;

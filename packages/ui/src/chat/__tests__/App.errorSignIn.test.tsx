@@ -124,3 +124,52 @@ describe('a planner error with no interactive sign-in', () => {
     expect(screen.getByRole('button', { name: 'Try Again' })).toBeInTheDocument();
   });
 });
+
+/**
+ * A Cline planner refused at the send because its credential hook found no
+ * provider key (ADR-0052, ADR-0060 R9): Cline was never asked, so the banner
+ * offers its setup for a key, never a sign-in, and keeps the draft.
+ */
+describe('a planner error for a Cline that has no provider key', () => {
+  const CLINE: RunnerSignIn = { runner: 'cline', label: 'Cline', login: ['cline', 'auth'], needsKey: true };
+  const NO_KEY = 'Cline has no provider API key Ordewell can hand it. Set it up with /login cline, or run cline auth, and choose an API provider and enter its key; an account sign-in alone is not enough. Then try again.';
+  const STILL_NO_KEY = 'The Cline setup finished, but Ordewell still has no provider API key it can hand Cline. Set it up with /login cline, or run cline auth, and choose an API provider and enter its key; an account sign-in alone is not enough.';
+  const setUp = () => screen.queryByRole('button', { name: /^(Set up Cline with a provider API key|Setting up Cline)$/ });
+
+  beforeEach(() => {
+    render(<App />);
+    post({ type: 'setConfiguredProviders', providers: [] });
+    post({ type: 'promptUnsent', text: DRAFT });
+    post({ type: 'showError', error: NO_KEY, code: 'planner_not_ready', signIn: CLINE });
+    api.post.mockClear();
+  });
+
+  it('offers Set up Cline, which runs its setup, and no Sign in', () => {
+    expect(screen.getByText(NO_KEY)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Sign in/ })).toBeNull();
+    expect(setUp()?.textContent).toBe('Set up Cline');
+
+    fireEvent.click(setUp()!);
+
+    expect(sent()).toEqual([{ type: 'loginPlanner', runner: 'cline' }]);
+    expect(setUp()?.textContent).toBe('Setting up…');
+  });
+
+  it('says the setup left no key when the host reports it, offers it again, and keeps the draft', () => {
+    fireEvent.click(setUp()!);
+    post({ type: 'plannerLoginEnded', runner: 'cline', ok: false, message: STILL_NO_KEY });
+
+    expect(screen.getByRole('status').textContent).toBe(STILL_NO_KEY);
+    expect(setUp()).not.toBeDisabled();
+    expect(composer().value).toBe(DRAFT);
+  });
+
+  it('says Cline is set up once a key reaches it, sending nothing', () => {
+    fireEvent.click(setUp()!);
+    post({ type: 'plannerLoginEnded', runner: 'cline', ok: true });
+
+    expect(screen.getByRole('status').textContent).toBe('Cline is set up. Send your message again.');
+    expect(sent().filter((m) => m.type === 'sendMessage')).toEqual([]);
+    expect(composer().value).toBe(DRAFT);
+  });
+});
