@@ -227,7 +227,9 @@ export function useSettings(host: DaemonHost, sessionId: string): {
   const setRunner = useCallback(async (id: string, enabled: boolean): Promise<void> => {
     setView((current) => ({ ...current, busy: true, error: undefined }));
     try {
-      await callDaemon('runners.setEnabled', { id }, { enabled });
+      // The rows show this workspace's sign-in, so switching one on is judged
+      // there too: a runner signed out here is a pick the daemon refuses (ADR-0052).
+      await callDaemon('runners.setEnabled', { id, workspace: host.workspace }, { enabled });
       const runners = await within(callDaemon('runners.list', { workspace: host.workspace }), SETTINGS_TIMEOUT_MS, 'its coding agents');
       setView((current) => {
         const list = runners.runners ?? [];
