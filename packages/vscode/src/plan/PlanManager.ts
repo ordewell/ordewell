@@ -11,6 +11,7 @@ import type { TaskDraft, TaskEdit, WebviewToHost } from '@ordewell/ui/protocol';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
 import { VsCodeConfig } from '../adapters/VsCodeConfig';
 import { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
+import { admitWorkspaceFolder } from '../adapters/workspaceFolder';
 import {
   removeTaskConfirmation, TaskActions, TaskControls, type SessionCue, type TaskActionPort, type TaskControlPort, type TurnOutcome,
 } from '@ordewell/ui/host';
@@ -198,11 +199,18 @@ function adoptTurnPlan(prior: string, plan: LegacyPlanState, deps: PlanManagerDe
 /** Said with each user message, so the planner names VS Code's controls whatever host holds the session (ADR-0030). */
 const FROM_VSCODE = { surface: 'vscode' } as const;
 
+/**
+ * A turn refused before it began, so nothing was sent: the chat gives the
+ * message back to the composer, as it does for a planner that cannot plan.
+ */
+const NO_FOLDER_TURN: TurnOutcome = { ok: false, code: 'planner_not_ready' };
+
 export async function handleStartPlanning(
   userDescription: string,
   deps: PlanManagerDeps,
   pendingRunners?: RunnerId[],
 ): Promise<void> {
+  if (!admitWorkspaceFolder()) return;
   const runners = resolveRunnerSet(deps, pendingRunners, deps.getCurrentPlan().runners);
   if (!runners) {
     return;
@@ -229,6 +237,7 @@ export async function handleContinueConversation(
   text: string,
   deps: PlanManagerDeps,
 ): Promise<void> {
+  if (!admitWorkspaceFolder()) return;
   // A reply is a planner turn too, and the signed-out refusal's way back runs
   // in another process: ask again before the session's gate judges.
   const recheck = recheckSignedOutPlanner(deps);
@@ -249,6 +258,7 @@ export async function handleSendMessageNow(
   text: string,
   deps: PlanManagerDeps,
 ): Promise<TurnOutcome> {
+  if (!admitWorkspaceFolder()) return NO_FOLDER_TURN;
   const recheck = recheckSignedOutPlanner(deps);
   if (recheck) await recheck;
   return inPlannerTurn(deps, async () => {
@@ -273,6 +283,8 @@ export async function handleApprovePlan(deps: PlanManagerDeps, requestId?: numbe
   // must not make its late answer speak for the one now on screen.
   const session = deps.session;
   try {
+    // A run starts runners in the project and saves the session there.
+    if (!admitWorkspaceFolder()) return;
     // A run under way keeps going: Execute then approves what waits for approval, and the session says how many (#95).
     if (session.isExecuting) {
       try {
@@ -339,7 +351,10 @@ export async function handleSendMessage(
   deps: PlanManagerDeps,
   pendingRunners: RunnerId[] | undefined,
   setPendingRunners: (r: RunnerId[] | undefined) => void,
-): Promise<void> {
+): Promise<TurnOutcome> {
+  // Checked before anything reads the plan: with no folder there is no
+  // project to plan in, and the refused message goes back to the composer.
+  if (!admitWorkspaceFolder()) return NO_FOLDER_TURN;
   setPendingRunners(pendingRunners);
 
   const plan = deps.getCurrentPlan();
@@ -355,6 +370,8 @@ export async function handleSendMessage(
   } else {
     await handleStartPlanning(text, deps, pendingRunners);
   }
+  // A turn that started reported its own failure.
+  return { ok: true };
 }
 
 /** The Session's plan becomes the host's, and the webview is shown it. */
@@ -577,6 +594,7 @@ export function taskControlPort(deps: PlanManagerDeps): TaskControlPort {
     cancelPlannerResend: async () => { deps.session.cancelPlannerResend(); },
     // A planner turn: it streams to the chat as any does, and fails as one.
     retryPlannerCompaction: async () => {
+      if (!admitWorkspaceFolder()) return;
       try {
         // The retry is a planner turn too, and the signed-out refusal's
         // login runs outside this host: ask the account again before the

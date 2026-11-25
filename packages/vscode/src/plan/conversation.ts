@@ -3,6 +3,7 @@ import { CHAT_COMMANDS, describePlannerNotReady, PlannerNotReadyError, PlannerTu
 import { forkStopsRunConfirmation } from '@ordewell/ui/host';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
 import { confirm } from './confirm';
+import { admitWorkspaceFolder } from '../adapters/workspaceFolder';
 import { recheckSignedOutPlanner, type PlanManagerDeps } from './PlanManager';
 
 export interface ConversationDeps {
@@ -45,6 +46,8 @@ async function confirmLeavingRun(session: ConversationDeps['session']): Promise<
 
 export async function forkConversation(deps: ConversationDeps): Promise<void> {
   if (plannerIsAnswering(deps)) return;
+  // A fork is a new session in the project, and a compaction a planner turn.
+  if (!admitWorkspaceFolder()) return;
   try {
     if (!(await confirmLeavingRun(deps.session))) return;
     const originalId = deps.session.sessionId;
@@ -65,6 +68,7 @@ export async function forkConversation(deps: ConversationDeps): Promise<void> {
  */
 export async function rewindConversation(deps: ConversationDeps, arg?: string): Promise<void> {
   if (plannerIsAnswering(deps)) return;
+  if (!admitWorkspaceFolder()) return;
   if (arg !== undefined && !/^\d+$/.test(arg)) {
     void vscode.window.showWarningMessage('Usage: /rewind [<message>]: or /rewind alone to pick one.');
     return;
@@ -107,6 +111,7 @@ export async function rewindConversation(deps: ConversationDeps, arg?: string): 
  */
 export async function compactConversation(deps: ConversationDeps): Promise<void> {
   if (plannerIsAnswering(deps)) return;
+  if (!admitWorkspaceFolder()) return;
   // A compaction is a planner turn too, and the signed-out refusal's login
   // runs outside this host: ask the account again before the gate judges.
   const recheck = recheckSignedOutPlanner(deps);
