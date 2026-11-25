@@ -354,6 +354,7 @@ describe('runners and mouse', () => {
     });
   });
 
+  // ADR-0052: a blocked row says its status and the usual command, below the choosable ones.
   it('/runners names the way in on each row whose agent is signed out, or whose sign-in nobody could read', () => {
     const { state } = run('/runners', {
       runners: [
@@ -374,13 +375,11 @@ describe('runners and mouse', () => {
     });
     const items = state.overlay?.kind === 'picker' ? state.overlay.picker.items : [];
     expect(items).toEqual([
-      { id: 'cursor-agent', label: 'Cursor', detail: 'Cursor is not signed in. Sign in with /login cursor-agent, or run cursor-agent login.', warn: true },
-      {
-        id: 'qwen-code', label: 'Qwen Code', warn: true,
-        detail: 'Qwen Code is not signed in. Run /key-set and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.',
-      },
       { id: 'copilot-cli', label: 'GitHub Copilot CLI', detail: 'Sign in with /login copilot-cli, or run copilot login.' },
       { id: 'codex', label: 'Codex' },
+      // Both are on already, so they stay tickable: the user can switch them off.
+      { id: 'cursor-agent', label: 'Cursor', detail: 'Signed out · /login cursor-agent', warn: true },
+      { id: 'qwen-code', label: 'Qwen Code', detail: 'Signed out · /key-set', warn: true },
     ]);
   });
 
@@ -395,7 +394,7 @@ describe('runners and mouse', () => {
 
     const items = state.overlay?.kind === 'picker' ? state.overlay.picker.items : [];
     expect(items).toEqual([
-      { id: 'claude-code', label: 'Claude Code' },
+      { id: 'claude-code', label: 'Claude Code', detail: 'Sign-in not checked' },
       { id: 'copilot-cli', label: 'GitHub Copilot CLI', detail: reason, disabled: true },
     ]);
   });
@@ -410,7 +409,7 @@ describe('runners and mouse', () => {
 
     const items = state.overlay?.kind === 'picker' ? state.overlay.picker.items : [];
     expect(items).toEqual([
-      { id: 'claude-code', label: 'Claude Code' },
+      { id: 'claude-code', label: 'Claude Code', detail: 'Sign-in not checked' },
       { id: 'openrouter', label: 'OpenRouter', detail: 'built-in runner, on its API key' },
     ]);
   });

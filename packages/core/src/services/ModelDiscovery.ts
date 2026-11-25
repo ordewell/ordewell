@@ -82,9 +82,11 @@ export const defaultAcpClient: AcpClientImpl = (command, args, options) =>
  * start it with, and a refresh alone cannot fill the list. `no-choice` is an
  * agent that answered with no model to choose, so a planner on it runs on the
  * agent's own default model. `no-answer` is an ask that got nothing back (a
- * timeout, a failed start), which says nothing about the sign-in.
+ * timeout, a failed start, a fallback-only answer), which says nothing about
+ * the sign-in. `no-models` is a discovery that finished and listed nothing,
+ * from a runner with no default of its own to run on.
  */
-export type UnlistedReason = 'pending' | 'signed-out' | 'no-credential' | 'no-choice' | 'no-answer';
+export type UnlistedReason = 'pending' | 'signed-out' | 'no-credential' | 'no-choice' | 'no-answer' | 'no-models';
 
 /** What one ACP ask said, before the manifest's other methods answer. */
 type AcpOutcome =
@@ -617,7 +619,10 @@ export class ModelDiscovery {
     // Asked before a refresh: what the runner says now is the next lookup's to learn.
     if (generation !== this.generation || forgotten !== (this.forgotten.get(runner) ?? 0)) return models;
     this.refusals.delete(runner);
-    if (models.length > 0 || !found.acp || found.acp.kind === 'signed-in') this.unlisted.delete(runner);
+    if (models.length > 0 || found.acp?.kind === 'signed-in') this.unlisted.delete(runner);
+    // With no handshake to say why: a cacheable answer is the runner's own
+    // complete, empty catalog; any other is a degraded one, which says nothing.
+    else if (!found.acp) this.unlisted.set(runner, found.cacheable ? 'no-models' : 'no-answer');
     else {
       this.unlisted.set(runner, found.acp.kind);
       if (found.acp.kind === 'no-credential' && found.acp.refused) this.refusals.set(runner, found.acp.refused);

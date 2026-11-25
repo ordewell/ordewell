@@ -69,6 +69,20 @@ describe('ModelDiscovery readiness (#46 F4–F6)', () => {
     expect(discovery.whyUnlisted()).toEqual({ 'cursor-agent': 'no-choice' });
   });
 
+  it('tells a finished, empty catalog from a degraded one for a runner with no handshake', async () => {
+    const bare: RunnerManifest = { ...CLINE_MANIFEST, name: 'bare', displayName: 'Bare', modelDiscovery: { method: 'hardcoded' } };
+    const listed = discoveryOf(bare, vi.fn(async () => null));
+    await listed.discover('bare');
+    // Its own complete catalog, and empty: nothing to run it on.
+    expect(listed.whyUnlisted()).toEqual({ bare: 'no-models' });
+
+    const cli: RunnerManifest = { ...bare, modelDiscovery: { method: 'command', command: 'bare', args: ['models'] } };
+    const unreached = discoveryOf(cli, vi.fn(async () => null));
+    await unreached.discover('bare');
+    // The command failed and only the empty fallback answered: no evidence either way.
+    expect(unreached.whyUnlisted()).toEqual({ bare: 'no-answer' });
+  });
+
   it('keeps Cline\'s credential refusal as its reason, worded by the resolver, without asking the agent', async () => {
     const client: AcpClientImpl = vi.fn(async () => []);
     const resolver = new ModelResolver(registryWith(CLINE_MANIFEST), fakeConfig(), { env: async () => ({}), acpClient: client, workspace: () => '/w' });
