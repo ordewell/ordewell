@@ -1,9 +1,9 @@
 import * as vscode from 'vscode';
 import { spawn as nodeSpawn } from 'child_process';
 import * as os from 'os';
-import { createIsolationPreview, AccountLimitMonitor, claudeAccountLimitCollector, codexAccountLimitCollector, openCodeGoAccountLimitCollector, createSession, CodexSandboxAvailability, RunnerRegistry, removedPluginNotice, ModelResolver, RunnerInstallation, SettingsService, PlannerModelMemory, StructuredRunner, runnerForProvider, processLeaseHost, setHostCredentials, workspaceEnvOf } from '@ordewell/core';
+import { createIsolationPreview, AccountLimitMonitor, claudeAccountLimitCollector, codexAccountLimitCollector, openCodeGoAccountLimitCollector, createSession, CodexSandboxAvailability, RunnerRegistry, removedPluginNotice, ModelResolver, RunnerInstallation, SettingsService, PlannerModelMemory, StructuredRunner, runnerForProvider, processLeaseHost, workspaceEnvOf } from '@ordewell/core';
 import { ChatViewProvider } from './providers/ChatViewProvider';
-import { VsCodeConfig, moveAutonomyFromVsCodeSetting, moveEnabledRunnersFromVsCodeSetting } from './adapters/VsCodeConfig';
+import { VsCodeConfig, lendHeldCredentials, moveAutonomyFromVsCodeSetting, moveEnabledRunnersFromVsCodeSetting } from './adapters/VsCodeConfig';
 import { VsCodeFileSystem } from './adapters/VsCodeFileSystem';
 import { workspaceFolderRoot } from './adapters/workspaceFolder';
 import { SecretStore } from './adapters/SecretStore';
@@ -16,6 +16,7 @@ const UPDATE_POPUP_KEY = 'ordewell.updatePopupShownAt';
 import { createExtension, type ExtensionHost } from './ExtensionHost';
 
 let activeHost: ExtensionHost | undefined;
+let unlendCredentials: (() => void) | undefined;
 let versionCheck: { dispose(): void } | undefined;
 
 function logTo(outputChannel: vscode.OutputChannel, msg: string): void {
@@ -46,8 +47,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return runner && modelResolver ? modelResolver.getCachedRunnerModels(runner).map((model) => model.modelId) : [];
     });
     // The keys stay out of this process's environment, which every child and
-    // every other extension here inherits: the built-in runner is lent them (ADR-0070).
-    setHostCredentials((env) => config.heldProviderEnv(env));
+    // every other extension here inherits: the built-in runner is lent them
+    // (ADR-0070), and Cline's credential hook the shared store's (ADR-0060 R9).
+    unlendCredentials = lendHeldCredentials(config);
     const runnerRegistry = new RunnerRegistry();
     const fsAdapter = new VsCodeFileSystem();
     // Read from the account the runners use, as the login probe below is: a
@@ -145,5 +147,6 @@ export function deactivate(): void {
   versionCheck?.dispose();
   versionCheck = undefined;
   activeHost?.dispose();
-  setHostCredentials(undefined);
+  unlendCredentials?.();
+  unlendCredentials = undefined;
 }
