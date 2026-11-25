@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Signing in to Cursor or Cline no longer spins until the terminal is closed or
+  five minutes pass. The login runs as the terminal's own process, the same
+  binary the agent check found, and its end is checked at once.
+
 ## [0.14.11] - 2026-11-24
 
 ### Added
