@@ -248,7 +248,24 @@ holds the token.**
   no cask and says so in a notice. The `winget`
   job submits the rendered manifests to `microsoft/winget-pkgs` with
   Microsoft's `wingetcreate`, pinned to a version and checked against the
-  SHA256 that version publishes, and only when `WINGET_TOKEN` exists. A missing
+  SHA256 that version publishes, and only when `WINGET_TOKEN` exists.
+  `scripts/winget-submit.mjs` runs the submission, so a release needs no hand
+  on it. It first brings the default branch of the token's own fork of
+  winget-pkgs (its owner read from the token, never named) up to date with
+  upstream. GitHub can refuse that sync, as for a token that may not write
+  workflow files once upstream has changed one, and wingetcreate reports any
+  refusal only as "sync your fork manually", as at 0.14.12. So the job prints
+  GitHub's own error and a line saying what to change, and fails there, before
+  wingetcreate runs; a fork that does not exist yet is wingetcreate's to
+  create. The pull request is titled `New version: Ordewell.Ordewell version
+  X` once upstream holds `manifests/o/Ordewell/Ordewell`, and `New package:`
+  before. After it opens, each older open submission by the same account
+  whose title is exactly one this job writes, of a lower version or of the
+  same version opened earlier, is closed with the comment `Superseded by #N
+  (Ordewell.Ordewell X).`, so a re-run of an older release closes nothing
+  newer. That step fails nothing: the submission has landed, so a failure is a
+  warning. The token reaches gh and wingetcreate in their environment alone
+  (`GH_TOKEN`, `WINGET_CREATE_GITHUB_TOKEN`), on no command line. A missing
   credential is a notice, not a failure: a release is complete without either
   package manager. Once the formula is in the tap, `homebrew-verify` installs
   it as a user does, on one runner per archive it names (`macos-latest`,
@@ -616,3 +633,4 @@ allows script only from the app's own bundle, with no inline script.
 - 2026-11-13 — H3: the contract is also raised when a client needs a route, or a value on one, that an older daemon lacks or refuses.
 - 2026-11-17 — H9: no update check at launch; the update banner offers Update, then Restart to update after a confirm about live work, on a signed build and Download elsewhere, and Check for updates… asks on demand.
 - 2026-11-18 — H11: `homebrew-verify` also installs the release's cask on the macOS runners and checks its version and Gatekeeper.
+- 2026-11-25 — H11: the `winget` job syncs the token's fork before submitting and stops with GitHub's reason if it cannot, titles a submission `New version` once upstream holds the package, and closes the account's older open submissions as superseded (`scripts/winget-submit.mjs`).

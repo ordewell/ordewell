@@ -557,9 +557,14 @@ jobs:
           $actual = (Get-FileHash -Algorithm SHA256 wingetcreate.exe).Hash.ToLowerInvariant()
           if ($actual -ne $expected) { throw "wingetcreate.exe hashed to $actual, not the pinned $expected" }
 
-      # wingetcreate forks winget-pkgs under the token's account, commits the
-      # rendered manifests at manifests/o/Ordewell/Ordewell/<version>/ and opens
-      # the pull request. The first submission of a package is reviewed by hand.
+      # scripts/winget-submit.mjs syncs the token's fork of winget-pkgs with
+      # upstream and stops with GitHub's reason if it cannot, then has
+      # wingetcreate commit the rendered manifests at
+      # manifests/o/Ordewell/Ordewell/<version>/ and open the pull request,
+      # titled "New version" once upstream holds the package, and closes the
+      # account's older open submissions as superseded. The token reaches gh
+      # and wingetcreate in their environment alone. The first submission of a
+      # package is reviewed by hand.
       - name: Open the pull request on microsoft/winget-pkgs
         if: env.WINGET_TOKEN_SET == 'true'
         shell: pwsh
@@ -569,9 +574,8 @@ jobs:
         run: |
           $tag = $env:TAG
           $version = $tag.TrimStart('v')
-          ./wingetcreate.exe submit --token $env:WINGET_TOKEN --no-open `
-            --prtitle "New package: Ordewell.Ordewell version $version" `
-            "rendered/winget/manifests/o/Ordewell/Ordewell/$version"
+          node scripts/winget-submit.mjs --version $version --wingetcreate ./wingetcreate.exe `
+            --manifests "rendered/winget/manifests/o/Ordewell/Ordewell/$version"
 
       - name: Say why no pull request was opened
         if: env.WINGET_TOKEN_SET != 'true'
