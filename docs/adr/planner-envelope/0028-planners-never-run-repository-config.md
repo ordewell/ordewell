@@ -459,7 +459,7 @@ specifies.
   - *What the user is told*, in either level. A landing that adds, changes or
     removes one of these paths says so as it lands, naming the task and each
     path, read from the file list its count of the change already takes from
-    git. A write no landing carries (an ops task's in the checkout, or a
+    git. A write a landing does not carry (an ops task's in the checkout, or a
     task's through the `.claude` or `.opencode` a worktree links from it) is
     compared with the run's first look at the checkout as the task that ran
     ends, and said once per path in the run, naming that task; a launch in
@@ -468,9 +468,9 @@ specifies.
     what was added or changed, the live one of what a directory holds), so
     a removal is told at its landing alone; an ignored file a task writes in
     its own worktree, which does not land, so its landing does not say it,
-    while the next start in that worktree is checked for it as above; and a script
-    task's write into the checkout as the script ends, which the next launch
-    in Full that reads it says instead.
+    while the next start in that worktree is checked for it as above; and a
+    script task's write into the checkout as the script ends, which the next
+    launch in Full that reads it says instead.
 - **A name cannot be taken over.** A Claude change or ops task launch reads
   the working directory's `.mcp.json` and refuses to start when it declares a
   server named `ordewell`. Claude takes MCP servers from that file and the
