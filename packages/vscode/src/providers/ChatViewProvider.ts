@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { DELEGATION_OFFERED, type AccountLimitSnapshot, type GlobalRunSettings, type IsolationPreview, surfacePlan, type AiProvider, type LegacyPlanState, type DiscoveredModel, type PlanStatus, type RunnerId, type SurfacePlan, type RunActivity, type RunView } from '@ordewell/core';
+import { DELEGATION_OFFERED, type AccountLimitSnapshot, type GlobalRunSettings, type IsolationPreview, surfacePlan, type AiProvider, type LegacyPlanState, type DiscoveredModel, type PlanStatus, type RunnerId, type RunnerSignIn, type SurfacePlan, type RunActivity, type RunView } from '@ordewell/core';
 import { SessionView, type SavedConversation } from '@ordewell/ui/host';
 import { renderWebviewHtml } from './webviewHtml';
 import type { ChatState, HostToWebview, ModelOption, PlannerBackend, RunnerMeta, RunnerModeMeta, WebviewToHost } from '@ordewell/ui/protocol';
@@ -73,8 +73,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     else void vscode.commands.executeCommand('ordewellChatView.focus');
   }
   setState(state: ChatState): void { this.postMessage({ type: 'setState', state }); }
-  /** `code` marks an error whose Try Again detects coding agents again. */
-  showError(error: string, code?: 'planner_not_ready'): void { this.postMessage({ type: 'showError', error, ...(code ? { code } : {}) }); }
+  /**
+   * `code` marks an error whose Try Again detects coding agents again; `signIn`
+   * the agent the failure names as signed out, whose Sign in the error offers.
+   */
+  showError(error: string, code?: 'planner_not_ready', signIn?: RunnerSignIn): void {
+    this.postMessage({ type: 'showError', error, ...(code ? { code } : {}), ...(signIn ? { signIn } : {}) });
+  }
   /**
    * The session's own plan stays with the extension host (it persists and
    * resumes from there); the webview is sent it without skill bodies. The plan
