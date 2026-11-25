@@ -35,3 +35,14 @@ export function repositoryRunnerConfigPaths(paths: readonly string[]): string[] 
     path.startsWith('.pi/extensions/')
   ))].sort();
 }
+
+/**
+ * The runner configuration among `paths`, named from a repository's top, for
+ * a runner that starts `prefix` below it (`''` at the top): one of the top's
+ * own, which Claude reads there too, or one of the runner's directory, as
+ * the launch check names each (ADR-0028).
+ */
+export function runnerConfigFromTop(paths: readonly string[], prefix: string): string[] {
+  return [...new Set(paths.filter((name) => repositoryRunnerConfigPaths([name]).length > 0
+    || (prefix !== '' && name.startsWith(prefix) && repositoryRunnerConfigPaths([name.slice(prefix.length)]).length > 0)))].sort();
+}

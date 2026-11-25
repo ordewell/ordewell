@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, realpathSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
+import { createTask as createTaskOf, type LegacyPlanState, type Task } from '../../models/Task';
 import type { IsolationMergeResult, IsolationRemoval, IsolationRun, IsolationTaskRecord } from '../../interfaces/IWorktreeIsolation';
 import type { IRunner } from '../../interfaces/IRunner';
 import type { ExecutionActor } from '../../models/Execution';
@@ -179,6 +179,10 @@ const SCRIPT: Pick<Task, 'type' | 'commands'> = { type: 'script', commands: [['n
  */
 function plan(state: RunState, only: readonly string[] | null, readOnlyFirst = false, shape: Shape = 'record', config: Config = 'tree'): LegacyPlanState {
   const now = new Date().toISOString();
+  // Full, where a model's and autorun's starts go unasked, which is what the
+  // table is about; in a mode Claude Code does not offer for Full, so each
+  // start is checked for configuration as Guarded checks it (ADR-0028).
+  const createTask = (over: NonNullable<Parameters<typeof createTaskOf>[0]>) => createTaskOf(over.type === 'script' ? over : { assignedRunner: 'claude-code', taskMode: 'acceptEdits', ...over });
   const kept = (task: Task) => only === null || ['t1', 't2', 'keep', 't0', 't7', 't8'].includes(task.id) || only.includes(task.id);
   return {
     tasks: [

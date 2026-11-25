@@ -93,11 +93,12 @@ function writingRunner(files: Record<string, { write: string[]; needs?: string[]
 }
 
 describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
+  // The configuration holds below run in Guarded, where a start is held whatever its runner's mode (ADR-0028).
   it('holds a dependent task when configuration was added during the run', async () => {
     const root = repo();
     const { runner } = writingRunner({ t1: { write: ['.mcp.json'] }, t2: { write: [] } });
     const isolation = createWorktreeIsolation({ config: fakeConfig({ worktreeIsolation: true }), resolvePath: async () => process.env.PATH ?? '' });
-    const orchestrator = TaskOrchestrator.compose({ config: fakeConfig(), notifications: fakeNotification(), runner, output: new BufferedTaskOutputSource(), isolation, workspaceRoot: () => root });
+    const orchestrator = TaskOrchestrator.compose({ config: fakeConfig({ autonomousMode: false }), notifications: fakeNotification(), runner, output: new BufferedTaskOutputSource(), isolation, workspaceRoot: () => root });
     orchestrator.loadPlan([
       createTask({ id: 't1', order: 1, title: 'Add config', prompt: 'write config' }),
       createTask({ id: 't2', order: 2, title: 'Next', prompt: 'continue', dependencies: ['t1'] }),
@@ -115,9 +116,10 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     function run(root: string, plan: Task[], files: Parameters<typeof writingRunner>[0], extra: { registry?: RunnerRegistry } = {}) {
       const { runner } = writingRunner(files);
       const isolation = createWorktreeIsolation({ config: fakeConfig({ worktreeIsolation: true }), resolvePath: async () => process.env.PATH ?? '' });
-      const orchestrator = TaskOrchestrator.compose({ config: fakeConfig(), notifications: fakeNotification(), runner, output: new BufferedTaskOutputSource(), isolation, workspaceRoot: () => root, ...extra });
+      const notifications = fakeNotification();
+      const orchestrator = TaskOrchestrator.compose({ config: fakeConfig({ autonomousMode: false }), notifications, runner, output: new BufferedTaskOutputSource(), isolation, workspaceRoot: () => root, ...extra });
       orchestrator.loadPlan(plan);
-      return { orchestrator, runner };
+      return { orchestrator, runner, warned: () => vi.mocked(notifications.warn).mock.calls.map(([line]) => String(line)) };
     }
     const first = createTask({ id: 't1', order: 1, title: 'Add config', prompt: 'write config' });
     const next = (over: Partial<Task> = {}) => createTask({ id: 't2', order: 2, title: 'Next', prompt: 'continue', dependencies: ['t1'], ...over });
@@ -191,11 +193,14 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
       mkdirSync(join(root, '.claude'));
       writeFileSync(join(root, '.claude', 'notes.md'), 'ignored\n');
       writeFileSync(join(root, '.git', 'info', 'exclude'), '.claude/\n');
-      const { orchestrator, runner } = run(root, [first, next()], { t1: { write: ['.claude/settings.json'] }, t2: { write: [] } });
+      const { orchestrator, runner, warned } = run(root, [first, next()], { t1: { write: ['.claude/settings.json'] }, t2: { write: [] } });
       await orchestrator.approveReview();
       await vi.waitFor(() => expect(orchestrator.holdReason('t2')).toContain('.claude/settings.json'));
       expect(readFileSync(join(root, '.claude', 'settings.json'), 'utf8')).toBe('written by t1\n');
       expect(runner.spawn).toHaveBeenCalledTimes(1);
+      // No landing carries a write through the link, so t1's end says it (ADR-0028).
+      expect(warned()).toContain('As task "Add config" ends, repository configuration ".claude/settings.json" in your checkout differs from where this run started; a later task that starts there, or reads it through a worktree\'s link, can load it.');
+      expect(warned().filter((line) => line.includes(' landed a change to repository configuration '))).toEqual([]);
     });
 
     it('holds an ops task for configuration written above the directory the run is rooted in', async () => {
@@ -238,6 +243,23 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
       await orchestrator.approveReview();
       await vi.waitFor(() => expect(orchestrator.holdReason('t2')).toContain('sub/.mcp.json'));
       expect(runner.spawn).toHaveBeenCalledTimes(1);
+    });
+
+    it('says a landing of configuration below the repository top, or in a group\'s repository, by the path its hold names', async () => {
+      const top = repo();
+      mkdirSync(join(top, 'sub'));
+      writeFileSync(join(top, 'sub', 'file.txt'), 'x\n');
+      git(top, 'add', '-A');
+      git(top, 'commit', '-q', '-m', 'sub');
+      const group = tempDir();
+      repo(join(group, 'api'));
+      repo(join(group, 'web'));
+      for (const [root, file, named] of [[join(top, 'sub'), '.mcp.json', 'sub/.mcp.json'], [group, 'api/.claude/settings.json', 'api/.claude/settings.json']] as const) {
+        const { orchestrator, warned } = run(root, [first, next()], { t1: { write: [file] }, t2: { write: [] } });
+        await orchestrator.approveReview();
+        await vi.waitFor(() => expect(orchestrator.holdReason('t2')).toContain(`"${named}"`));
+        expect(warned()).toContain(`Task "Add config" landed a change to repository configuration "${named}", which a runner loads as it starts.`);
+      }
     });
 
     it('holds a dependent for linked configuration written where the runner starts below the repository top', async () => {
@@ -300,7 +322,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
       const root = repo();
       const { runner } = writingRunner({ t1: { write: ['.claude-plugin/plugin.json'] }, t2: { write: ['checked.txt'] } });
       const isolation = createWorktreeIsolation({ config: fakeConfig({ worktreeIsolation: true }), resolvePath: async () => process.env.PATH ?? '' });
-      const orchestrator = TaskOrchestrator.compose({ config: fakeConfig(), notifications: fakeNotification(), runner, output: new BufferedTaskOutputSource(), isolation, workspaceRoot: () => root });
+      const orchestrator = TaskOrchestrator.compose({ config: fakeConfig({ autonomousMode: false }), notifications: fakeNotification(), runner, output: new BufferedTaskOutputSource(), isolation, workspaceRoot: () => root });
       orchestrator.loadPlan([
         createTask({ id: 't1', order: 1, title: 'Bump the plugin', prompt: 'write the manifest' }),
         createTask({ id: 't2', order: 2, title: 'Check the plugin', prompt: 'check it', dependencies: ['t1'] }),
@@ -374,7 +396,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     const root = repo(undefined, { '.mcp.json': '{}' });
     const { runner } = writingRunner({ t1: { write: [] } });
     const isolation = createWorktreeIsolation({ config: fakeConfig({ worktreeIsolation: true }), resolvePath: async () => process.env.PATH ?? '' });
-    const orchestrator = TaskOrchestrator.compose({ config: fakeConfig(), notifications: fakeNotification(), runner, output: new BufferedTaskOutputSource(), isolation, workspaceRoot: () => root });
+    const orchestrator = TaskOrchestrator.compose({ config: fakeConfig({ autonomousMode: false }), notifications: fakeNotification(), runner, output: new BufferedTaskOutputSource(), isolation, workspaceRoot: () => root });
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Start', prompt: 'work' })]);
     await orchestrator.approveReview();
     expect(runner.spawn).toHaveBeenCalledTimes(1);
@@ -385,7 +407,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     const root = repo();
     const { runner } = writingRunner({ t1: { write: ['CLAUDE.md'] }, t2: { write: [] } });
     const isolation = createWorktreeIsolation({ config: fakeConfig({ worktreeIsolation: true }), resolvePath: async () => process.env.PATH ?? '' });
-    const orchestrator = TaskOrchestrator.compose({ config: fakeConfig(), notifications: fakeNotification(), runner, output: new BufferedTaskOutputSource(), isolation, workspaceRoot: () => root });
+    const orchestrator = TaskOrchestrator.compose({ config: fakeConfig({ autonomousMode: false }), notifications: fakeNotification(), runner, output: new BufferedTaskOutputSource(), isolation, workspaceRoot: () => root });
     orchestrator.loadPlan([
       createTask({ id: 't1', order: 1, title: 'Instructions', prompt: 'write instructions' }),
       createTask({ id: 't2', order: 2, title: 'Next', prompt: 'work', dependencies: ['t1'] }),

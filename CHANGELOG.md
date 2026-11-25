@@ -10,6 +10,20 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Changed
 
+- **In Full, a task in its runner's Full mode starts though agent settings
+  changed during the run, and you are told.** A change or ops task's start was
+  held when the agent settings its runner loads at launch (`.mcp.json`,
+  `.claude/settings.json` and its hooks and plugins, `opencode.json`, `.codex/`,
+  `.pi/`) differed from where the run started. In Full, where Claude Code runs
+  with `bypassPermissions` and Codex with `danger-full-access` and neither asks
+  before a command, that hold stopped the run without keeping a question in
+  place, so a task whose mode is one its runner offers for Full now
+  starts, with a warning naming the task and each file, once per file in the
+  run. In Guarded, and in Full for a task in another mode or a delegated task's
+  own start, the start is held as before. At either level, a task whose landing
+  adds, changes or removes such a file now says so as it lands, and a task that
+  leaves one changed in your checkout says so as it ends.
+
 - **`ordewell run` names `ordewell continue` where it answers a wait without
   the TUI.** The line for a task whose landing git refused now says that
   `ordewell continue <id> "<message>"` lands its kept work and runs nothing

@@ -107,11 +107,20 @@ function stats(raw: string): Array<{ path: string; added: string; removed: strin
  * from its runner's words.
  */
 export async function landedChange(invoker: GitInvoker, root: string, merge: string): Promise<HandoffChange> {
+  return (await landedFiles(invoker, root, merge)).change;
+}
+
+/**
+ * {@link landedChange}, with the paths it counted from the repository's top:
+ * every one the landing added, changed or removed, in the one read of git
+ * the count takes.
+ */
+export async function landedFiles(invoker: GitInvoker, root: string, merge: string): Promise<{ change: HandoffChange; paths: string[] }> {
   const common = await readOnlyGitArgs(invoker, root);
   const files = stats(await git(invoker, root, [...common, 'diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--numstat', '-z', `${merge}^1`, merge]));
   const binary = files.filter((file) => file.added === '-').length;
   const lines = (count: (file: { added: string; removed: string }) => string) => files.reduce((sum, file) => sum + (file.added === '-' ? 0 : Number(count(file))), 0);
-  return { files: files.length, added: lines((f) => f.added), removed: lines((f) => f.removed), binary };
+  return { change: { files: files.length, added: lines((f) => f.added), removed: lines((f) => f.removed), binary }, paths: files.map((file) => file.path) };
 }
 
 function inside(root: string, target: string): boolean {

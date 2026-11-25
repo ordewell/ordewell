@@ -170,8 +170,8 @@ describe.skipIf(!hasGit)('rule 4: what the hold offers at the root starts the ta
 });
 
 /** t1 lands the hook; t2, after it, is held. */
-async function heldAfterHook() {
-  const held = heldPlan([{ id: 't1', title: 'Add a hook', hook: true }, { id: 't2', title: 'Check the hook', dependencies: ['t1'] }]);
+async function heldAfterHook({ autonomous = false } = {}) {
+  const held = heldPlan([{ id: 't1', title: 'Add a hook', hook: true }, { id: 't2', title: 'Check the hook', dependencies: ['t1'] }], { autonomous });
   await ok(held.session, { command: 'run_plan' }, USER);
   await vi.waitFor(() => expect(held.holdOf('t2')).toContain(HOOK), { timeout: 20_000 });
   return held;
@@ -216,7 +216,8 @@ describe.skipIf(!hasGit)('F1: a run whose only landed record a held start droppe
   });
 
   it('(c) the user\'s Merge all, Stop and Mark not done of the task that landed, then the planner\'s run_task of it, held, and again', async () => {
-    const held = await heldAfterHook();
+    // Full, where the planner's start goes unasked, in a mode not offered for Full.
+    const held = await heldAfterHook({ autonomous: true });
     const { session } = held;
     await ok(session, { command: 'merge_all' }, USER);
     await ok(session, { command: 'stop_run' }, USER);

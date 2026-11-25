@@ -1,4 +1,4 @@
-import { changeNames, landedChange, readTaskDiff, type TaskDiffRead, type TaskDiffResult } from './taskDiffRead';
+import { changeNames, landedFiles, readTaskDiff, type TaskDiffRead, type TaskDiffResult } from './taskDiffRead';
 import { randomBytes } from 'crypto';
 import { spawnSync } from 'child_process';
 import * as fs from 'fs';
@@ -56,6 +56,7 @@ import { alsoLandedBy, carriedTipsIn, forgetReverted, freshLedger, isCarried, ke
 import { OLDER_RUN_REFUSAL } from './taskRevert';
 import { landingMessage, messageArgs, revertMessage, runMergeMessage, type LandingCommit, type LandingSubject } from './landingMessage';
 import { childDirs, groupPaths, hasGitEntry, workspaceRepoGroup } from './repoGroup';
+import { runnerConfigFromTop } from './repositoryRunnerConfig';
 
 export type { GitExecFn } from './gitExec';
 
@@ -880,6 +881,17 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     return prefix ? path.join(worktree, prefix) : worktree;
   }
 
+  /**
+   * The runner configuration among the paths a landing brought (ADR-0028),
+   * named as the launch check names it: from a group's repository, its path
+   * first; in a lone repository whose workspace is below its top, at the top
+   * and in the directory the runner starts in.
+   */
+  private async configIn(repo: IsolationRepo, paths: readonly string[]): Promise<string[]> {
+    if (repo.path !== SELF_REPO) return runnerConfigFromTop(paths, '').map((name) => path.posix.join(repo.path, name));
+    return runnerConfigFromTop(paths, paths.length > 0 ? await this.prefixOf(repo).catch(() => '') : '');
+  }
+
   private async prefixOf(repo: IsolationRepo): Promise<string> {
     return (await this.git(repo.root, ['rev-parse', '--show-prefix'])).trim();
   }
@@ -1527,9 +1539,14 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
 
     // Counted as it lands, while git can still say what this landing brought; a count git cannot give is none, never a guess.
     const changes = new Map<string, HandoffChange>();
+    // The configuration among it is read from the same count, for the landing to say (ADR-0028).
+    const configs = new Map<string, string[]>();
     for (const [repo, tip] of landedTips) {
-      const change = await landedChange(this.gitInvoker, repo.root, tip).catch(() => undefined);
-      if (change) changes.set(repo.path, change);
+      const landed = await landedFiles(this.gitInvoker, repo.root, tip).catch(() => undefined);
+      if (!landed) continue;
+      changes.set(repo.path, landed.change);
+      const config = await this.configIn(repo, landed.paths);
+      if (config.length > 0) configs.set(repo.path, config);
     }
     // A run that started without the record never gets one (recordCarried), so git is not asked for it.
     const carried = startedOlder(run) ? [] : await this.carriedIn(run, record, landedTips);
@@ -1549,6 +1566,9 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       const change = changes.get(repoPath);
       if (change) entry.change = change;
       else delete entry.change;
+      const config = configs.get(repoPath);
+      if (config) entry.config = config;
+      else delete entry.config;
     }
     // The work is on the integration branches already; a stuck cleanup must
     // not turn that into a failure. `pruneOrphans` sweeps up whatever it leaves.

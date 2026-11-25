@@ -130,3 +130,33 @@ it('holds runner configuration a task took in from a sibling\'s landing, compare
 
   expect(await new TaskStartConfig().check(runs, 't1', { epoch: 1, root: top, cwd: worktree, worktree: true })).toEqual(['.mcp.json']);
 });
+
+it('compares the checkout at a task\'s end only with a look a launch took, and takes none itself (ADR-0028)', async () => {
+  const cwd = checkout();
+  const guard = new TaskStartConfig();
+  // An end before any launch of the run: no baseline, so nothing to say, and none taken from what it finds.
+  writeFileSync(join(cwd, '.mcp.json'), '{"before":true}');
+  expect(guard.checkoutChanges(1, cwd)).toEqual([]);
+  rmSync(join(cwd, '.mcp.json'));
+  expect(await guard.check(noRun, 't1', at(cwd))).toEqual([]);
+  writeFileSync(join(cwd, '.mcp.json'), '{}');
+  expect(guard.checkoutChanges(1, cwd)).toEqual(['.mcp.json']);
+  // What an end reads leaves the next launch's check as it was.
+  expect(await guard.check(noRun, 't2', at(cwd))).toEqual(['.mcp.json']);
+  expect(guard.checkoutChanges(2, cwd)).toEqual([]);
+});
+
+it('says each path once per run at a launch, and at an end only what no notice has said', () => {
+  const guard = new TaskStartConfig();
+  expect(guard.untold(1, 'launch', ['.mcp.json', '.claude/settings.json'])).toEqual(['.mcp.json', '.claude/settings.json']);
+  expect(guard.untold(1, 'launch', ['.mcp.json', '.codex/config.toml'])).toEqual(['.codex/config.toml']);
+  // A launch said them, so an end says none of them, and something new once.
+  expect(guard.untold(1, 'end', ['.mcp.json', '.pi/settings.json'])).toEqual(['.pi/settings.json']);
+  expect(guard.untold(1, 'end', ['.pi/settings.json'])).toEqual([]);
+  // An end's notice does not stand for a launch's, which says what the run in Full lets through.
+  expect(guard.untold(1, 'launch', ['.pi/settings.json'])).toEqual(['.pi/settings.json']);
+  // A new run says them again; the plan going takes what was said with it.
+  expect(guard.untold(2, 'launch', ['.mcp.json'])).toEqual(['.mcp.json']);
+  guard.clear();
+  expect(guard.untold(1, 'launch', ['.mcp.json'])).toEqual(['.mcp.json']);
+});

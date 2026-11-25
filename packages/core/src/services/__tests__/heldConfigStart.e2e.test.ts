@@ -61,8 +61,11 @@ const HELD = 'Task "Check the hook" is on hold: ';
  * runner records, at each spawn, which task it is and whether the hook is
  * where the runner starts. `holdT1` keeps t1 running until {@link release};
  * `ops` adds t3, an ops task after t1, whose merge gate merges t1's work.
+ * `autonomous` runs it in Full, where a model's start goes unasked; the tasks'
+ * mode, `acceptEdits`, is not one Claude Code offers for Full, so their starts
+ * are checked there too (ADR-0028).
  */
-async function heldStart({ mergeAtGatesAutomatically = false, holdT1 = false, run = true, ops = false } = {}) {
+async function heldStart({ mergeAtGatesAutomatically = false, holdT1 = false, run = true, ops = false, autonomous = false } = {}) {
   const root = repo();
   const spawned: string[] = [];
   const hookAtSpawn: boolean[] = [];
@@ -87,7 +90,8 @@ async function heldStart({ mergeAtGatesAutomatically = false, holdT1 = false, ru
     stopAll: vi.fn(),
     activeCount: 0,
   };
-  const config = fakeConfig({ worktreeIsolation: true, autonomousMode: true });
+  // Guarded unless asked, where a start is held for configuration whatever its runner's mode (ADR-0028).
+  const config = fakeConfig({ worktreeIsolation: true, autonomousMode: autonomous });
   const notifications = fakeNotification();
   const told = () => [notifications.info, notifications.warn, notifications.error].flatMap((say) => vi.mocked(say).mock.calls.map(([line]) => String(line)));
   const session = makeSession({
@@ -190,7 +194,8 @@ describe.skipIf(!hasGit)('a start held for configuration the run landed, once th
     });
 
     it('a planner turn\'s Stop and run_task after the user\'s Merge all', async () => {
-      const held = await heldStart();
+      // Full, where the planner's start goes unasked, in a mode not offered for Full.
+      const held = await heldStart({ autonomous: true });
       const { session, hookAtSpawn, runner } = held;
       const planner: ExecutionActor = { kind: 'planner-turn' };
 

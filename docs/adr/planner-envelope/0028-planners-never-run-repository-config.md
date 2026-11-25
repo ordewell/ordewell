@@ -395,10 +395,12 @@ specifies.
   the user. ADR-0035 accepts the same asymmetry — in Full with autorun its
   consent rule reroutes an effect into a task rather than preventing it — and
   what holds is the approved plan, the record an attempt leaves (a log, a
-  verdict, a landing) and the two launch boundaries below. Ordewell claims no
+  verdict, a landing) and the two launch boundaries below, the first of which
+  tells the user, in Full, of a start it lets through. Ordewell claims no
   launch-time consent it does not have.
-- **Where the boundary sits.** Configuration introduced during a run reaches a
-  later launch only after the user consents to it. Before a change or ops
+- **Where the boundary sits.** In Guarded, configuration introduced during a
+  run holds a later launch that reads it until the user consents to it, but
+  for the exceptions the last item below names. Before a change or ops
   task's runner is spawned, the directories it reads are compared with where
   the run started, untracked and ignored files included, for the paths that
   can run code or redirect the runner: `.mcp.json`, `.claude/settings.json`,
@@ -408,7 +410,9 @@ specifies.
   and Pi's `.pi/settings.json`, `.pi/mcp.json` and `.pi/extensions/`
   (the list is the runners', and holds a start for any of them whichever
   runner it launches). A difference holds the start with a reason naming each
-  path, so a landing that added one stops the run's later starts.
+  path, so a landing that added one stops the run's later starts. In Full a
+  start in its runner's Full mode goes ahead instead, and says so (*In Full*
+  below).
   - *A worktree* is compared with the base commit the run recorded, at the
     repository's top and, when the workspace is below it, in the directory the
     runner starts in. The `.claude` and `.opencode` directories a worktree
@@ -422,9 +426,9 @@ specifies.
     workspace root and each level above it up to the repository's top, which
     the runner reads too. A run that never isolates is held the same way. The
     baseline is kept in memory for the run: a restarted daemon takes it anew at
-    its next launch. A Merge all that changes the checkout holds the next ops
-    start, which the user lifts by removing the configuration or starting a new
-    run.
+    its next launch. A Merge all that changes the checkout is such a
+    difference for the next ops start, a hold the user lifts by removing the
+    configuration or starting a new run.
   - The baseline does not move, so a hold stands for the run: the user
     consents by reviewing the configuration and starting a run whose base holds
     it, and one they do not keep is removed. Committing it does not lift the
@@ -433,6 +437,40 @@ specifies.
     checked before its attempt reopens, and a held start keeps its worktree. A
     script task has no runner and a read-only task withholds project
     configuration (ADR-0046), so neither is checked.
+  - *In Full* a launch is not held when both are true as it launches: its
+    node's autonomy is Full (a child plan's is its own mandate's), and the
+    mode its runner starts in is one that runner's manifest tags for Full
+    (`autonomous`: Claude Code's `bypassPermissions`, Codex's `fullAccess`,
+    OpenCode's `build`, Pi's `agent`, the built-in runner's `full`, and the
+    other runners' Allow all). Claude Code's launches with
+    `--permission-mode bypassPermissions` and Codex's with
+    `danger-full-access` and approvals never: neither runner asks before a
+    command there, so a hold stopped the run without keeping a question in
+    place. Every other launch is checked as in Guarded, and so is one where
+    either fact cannot be read: a runner with no manifest, a task with no
+    mode. A delegated task's own start is a child plan, whose tasks have no
+    mode at that launch, so it is checked in either level; the repair of one
+    runs in the level's mode (ADR-0055 D14) and follows the rule. The check
+    still runs, so the run's baselines are taken as in Guarded, and a launch
+    it would have held goes ahead with a warn notice, the channel a hold's
+    notice takes, naming the task about to start and each path that differs,
+    and saying that later tasks in Full load it without a hold too when they
+    run in such a mode. Each path is said once per run.
+  - *What the user is told*, in either level. A landing that adds, changes or
+    removes one of these paths says so as it lands, naming the task and each
+    path, read from the file list its count of the change already takes from
+    git. A write no landing carries (an ops task's in the checkout, or a
+    task's through the `.claude` or `.opencode` a worktree links from it) is
+    compared with the run's first look at the checkout as the task that ran
+    ends, and said once per path in the run, naming that task; a launch in
+    Full that reads it says it again, as above. Not said: a removal at a
+    launch, since neither comparison lists a path that is gone (git's is of
+    what was added or changed, the live one of what a directory holds), so
+    a removal is told at its landing alone; an ignored file a task writes in
+    its own worktree, which does not land, so its landing does not say it,
+    while the next start in that worktree is checked for it as above; and a script
+    task's write into the checkout as the script ends, which the next launch
+    in Full that reads it says instead.
 - **A name cannot be taken over.** A Claude change or ops task launch reads
   the working directory's `.mcp.json` and refuses to start when it declares a
   server named `ordewell`. Claude takes MCP servers from that file and the
@@ -492,6 +530,19 @@ specifies.
   configuration.** Rejected: a card cannot show what a hook does, the plan's
   approval is already the consent to the task, and in Full with autorun there
   is no person to ask.
+- **Hold in Full too.** That was the rule. Dropped for a launch in its
+  runner's Full mode (History, 2026-11-25): there the runner does not ask
+  before a command, so the hold stopped the run without keeping a question in
+  place, and the notices now tell the user, at either level, what the hold
+  told them.
+- **Exempt by the level alone.** Rejected: a task keeps the mode it was
+  planned in (ADR-0001), so one planned in Guarded, or moved to a mode that
+  asks, still asks before a command after the level is raised, and a hook it
+  loads would act before that question.
+- **Drop the hold in Guarded too.** Rejected: there a settings write inside a
+  worktree is not asked on Codex, OpenCode or Pi, and the next launch would
+  run its hook or start its server as it starts, before an approval is asked
+  for; the hold is what keeps "it asks before running a command" true.
 - **Refuse a repository server named `ordewell` for planners only.** That was
   the rule. Rejected for tasks: a Claude task launch has the same collision,
   and the task could lose the very server its completion call needs.
@@ -578,3 +629,4 @@ specifies.
 - 2026-11-18 — a Pi planner or read-only task starts with `--no-approve` and no extension but Ordewell's, out of reach of the repository's `.pi/`; a planner's context files are injected by Ordewell; a change task's start is held for `.pi/` config added during the run (#78).
 - 2026-11-20 — every Pi start names its session directory, which a repository's `.pi/settings.json` could otherwise move; a read-only task's Pi starts with `--no-context-files` too, its context files handed over as text; a server in the user's Pi `mcp.json` that would displace Ordewell's fails the start (#78).
 - 2026-11-21 — on Windows every Pi start sets `NoDefaultCurrentDirectoryInExePath`, so a repository's `rg.exe` or `fd.exe` is never the search program Pi starts by bare name.
+- 2026-11-25 — in Full a start whose task runs in its runner's Full mode is no longer held for configuration that differs from where its run started, and says so instead; a landing that changes such configuration, and a task that leaves it changed in the checkout, say so in either level. The owner's reason: in Guarded a settings write inside a worktree is not asked on Codex, OpenCode or Pi, and the next launch runs its hook or starts its MCP server as it starts, before an approval is asked for, so the hold keeps "it asks before running a command" true; in Full Claude Code launches with `bypassPermissions` and Codex with `danger-full-access` and approvals never, so there the hold stopped the run without keeping a question in place, and it was what told the user a task had changed agent settings.

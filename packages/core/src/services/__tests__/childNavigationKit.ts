@@ -92,16 +92,17 @@ export const DONE: Turn = async (tools) => {
 
 export const REPLY: Turn = async () => undefined;
 
-export interface TreeOptions { runner: IRunner; tasks?: Task[]; parallel?: number }
+/** `autonomous` is the root's level, which a child's mandate holds: Full unless it is false. */
+export interface TreeOptions { runner: IRunner; tasks?: Task[]; parallel?: number; autonomous?: boolean }
 
 /** A root over delegated tasks, each child's planner reading its task's own turns: `{ d: [...], n: [...] }`. */
-export function tree(turns: Record<string, Turn[]>, { runner, tasks = [delegated({ grants: ['delegate'] })], parallel = 3 }: TreeOptions) {
+export function tree(turns: Record<string, Turn[]>, { runner, tasks = [delegated({ grants: ['delegate'] })], parallel = 3, autonomous = true }: TreeOptions) {
   const root = repo();
   const planners = Object.fromEntries(Object.entries(turns).map(([id, script]) => [id, scriptedPlanner(script)]));
   const frames: SessionMessage[] = [];
   const parent = makeSession({
     runner, isolation: isolation(), workspaceRoot: () => root, saveSession, openTaskLog, leaseHost: new LeaseHost(), sessionId: 'session-root', broadcast: (frame) => frames.push(frame),
-    config: fakeConfig({ maxParallelSessions: parallel }),
+    config: fakeConfig({ maxParallelSessions: parallel, autonomousMode: autonomous }),
     settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', delegationTokens: 5_000_000, mergeAtGatesAutomatically: false } }),
     delegationOffered: true,
     childDeps: (task) => ({ aiService: { reset: vi.fn(), ...planners[task.id].service } as unknown as IAiService, fsAdapter: { ...fakeFs(), getWorkspaceRoot: () => root } }),

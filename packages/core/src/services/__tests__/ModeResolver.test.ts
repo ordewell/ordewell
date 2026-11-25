@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { carryPlannedModes, plannedMode, readOnlyMode, type RunnerModeInfo } from '../ModeResolver';
+import { carryPlannedModes, offeredForFull, plannedMode, readOnlyMode, type RunnerModeInfo } from '../ModeResolver';
 import { createTask } from '../../models/Task';
 import { ordewellManifest } from '../../plugins/builtin/ordewell.manifest';
 import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
@@ -21,6 +21,22 @@ const noReadOnly: RunnerModeInfo[] = [
   { id: 'plan', label: 'Plan', description: 'untagged' },
 ];
 const runnerModes = { 'claude-code': claude, opencode, custom: noReadOnly };
+
+describe('offeredForFull (ADR-0028)', () => {
+  it('is a mode the manifest tags autonomous, and nothing else', () => {
+    const modes: RunnerModeInfo[] = [
+      { id: 'ask', label: 'Ask', description: '', safe: true },
+      { id: 'both', label: 'Both', description: '', safe: true, autonomous: true },
+      { id: 'yolo', label: 'Yolo', description: '', autonomous: true },
+      { id: 'plan', label: 'Read-only', description: '', readOnly: true },
+    ];
+    expect(['ask', 'both', 'yolo', 'plan', 'gone'].filter((id) => offeredForFull(modes, id))).toEqual(['both', 'yolo']);
+    expect(offeredForFull(modes, undefined)).toBe(false);
+    expect(offeredForFull(undefined, 'yolo')).toBe(false);
+    // An untagged manifest's positional fallback is not a tag.
+    expect(offeredForFull([{ id: 'build', label: 'Build', description: '' }], 'build')).toBe(false);
+  });
+});
 
 describe('readOnlyMode', () => {
   it('is the mode the manifest tags readOnly, never one found by id', () => {

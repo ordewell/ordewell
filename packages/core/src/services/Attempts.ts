@@ -1,5 +1,5 @@
 import * as path from 'path';
-import { resolveDefaultMode, taggedReadOnlyMode, unavailableTaskModeMessage } from './ModeResolver';
+import { offeredForFull, resolveDefaultMode, taggedReadOnlyMode, unavailableTaskModeMessage } from './ModeResolver';
 import { McpAttachError, McpAttachTimeout, RunnerStartupExit, SessionNotResumable } from './harness/ordewellBinding';
 import type { Parked, RunnerId, Task, TaskOutputSummary, TaskSkillSnapshot, TurnAuthority, Verdict } from '../models/Task';
 import type { INotification } from '../interfaces/INotification';
@@ -15,7 +15,7 @@ import type { PlanStore } from './PlanStore';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type { IsolationDecision, IsolationRunController } from './IsolationRunController';
 import type { Landing, LandingOutcome } from './Landing';
-import { configHoldReason, TaskStartConfig, type StartConfigFound } from './taskStartConfig';
+import { checkoutConfigNotice, configHoldReason, TaskStartConfig, unheldConfigNotice, type StartConfigFound } from './taskStartConfig';
 import { taskRefOf } from './TaskRefs';
 import { classifyRunnerStop, PROVIDER_RETRY_DELAYS_MS, stopsRunner, type AttemptEnd, type TurnFailure } from './runnerExit';
 import type { ResearchTasks } from './ResearchTasks';
@@ -648,6 +648,8 @@ export class Attempts {
       const unspawned = this.unspawned.get(taskId);
       if (unspawned) unspawned.endKeeps = how.keep;
     }
+    // A runner that never started wrote nothing; a plan load takes the baselines with it.
+    if (attempt && session && reason !== 'load') this.tellCheckoutConfig(taskId, attempt);
     if (attempt) {
       attempt.endKeeps = how?.keep ?? false;
       attempt.spawning.abort();
@@ -890,7 +892,7 @@ export class Attempts {
       if (kind.kind === 'delegated') await this.deps.discardChild?.(task);
       if (kind.kind === 'repair' && checksConfig(kind, attempt.script)) {
         const paths = await this.startConfig.check(runs, task.id, { epoch: runs.epoch, root: this.deps.workspaceRoot(), cwd: null, worktree: true });
-        if (paths.length) throw new TaskStartConfigError(this.startConfig.found(paths), runs.inChildPlan);
+        if (paths.length) this.configDiffers(task, attempt, paths);
       }
       const intent = attemptWorkspace(kind);
       if (intent.kind === 'worktree' && !attempt.isolationDecision) throw new Error('No isolation decision was taken for this attempt.');
@@ -908,7 +910,7 @@ export class Attempts {
       attempt.worktree = worktree;
       if (kind.kind !== 'repair' && checksConfig(kind, attempt.script)) {
         const paths = await this.startConfig.check(runs, task.id, { epoch: runs.epoch, root: this.deps.workspaceRoot(), cwd, worktree });
-        if (paths.length) throw new TaskStartConfigError(this.startConfig.found(paths), runs.inChildPlan);
+        if (paths.length) this.configDiffers(task, attempt, paths);
       }
       if (checksTree(kind)) attempt.snapshot = await runs.snapshotWorkspace();
       if (this.live.get(task.id) !== attempt) return await this.leaveEnded(task, attempt);
@@ -942,6 +944,53 @@ export class Attempts {
       await this.host.settle(this.spawnFailed(task, attempt, err));
       return false;
     }
+  }
+
+  /**
+   * A launch whose runner would read configuration that differs from where its
+   * run started (ADR-0028). It is held, as the check's own rule says, unless
+   * it {@link launchesUnasked}: then it goes ahead, and the user is told,
+   * once per path in the run, through the channel a hold's notice takes.
+   */
+  private configDiffers(task: Task, attempt: TaskAttempt, paths: string[]): void {
+    const { runs } = this.deps;
+    if (!this.launchesUnasked(task, attempt)) throw new TaskStartConfigError(this.startConfig.found(paths), runs.inChildPlan);
+    const untold = this.startConfig.untold(runs.epoch, 'launch', paths);
+    if (untold.length) this.host.tell('warn', unheldConfigNotice(task.title, untold));
+  }
+
+  /**
+   * Whether the launch's runner does not ask before a command, so a hold for
+   * configuration keeps no question in place (ADR-0028): this node's autonomy is
+   * Full as it launches, and the mode its runner starts in is one that
+   * runner's manifest tags for Full. A delegated task's own start is a child
+   * plan, whose tasks have no mode yet, and a fact that cannot be read is
+   * not taken as proof, so either launch is held as the check says.
+   */
+  private launchesUnasked(task: Task, attempt: TaskAttempt): boolean {
+    if (attempt.delegated || attempt.script) return false;
+    try {
+      if (this.deps.autonomous() !== true) return false;
+      return offeredForFull(this.deps.registry?.get(attempt.runner)?.manifest.modes, this.modeOf(task, attempt));
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * What an attempt that ran leaves in the checkout's configuration as it ends
+   * (ADR-0028): an ops task's write there, or one through the `.claude` or
+   * `.opencode` a worktree links from it, which a landing does not carry. Compared
+   * with the run's first look, as a later start's check compares it, and said
+   * once per path in the run, unless a launch said it already.
+   */
+  private tellCheckoutConfig(taskId: string, attempt: TaskAttempt): void {
+    if (!checksConfig(attempt.kind, attempt.script)) return;
+    const { runs } = this.deps;
+    try {
+      const untold = this.startConfig.untold(runs.epoch, 'end', this.startConfig.checkoutChanges(runs.epoch, this.deps.workspaceRoot()));
+      if (untold.length) this.host.tell('warn', checkoutConfigNotice(this.deps.store.get(taskId)?.title ?? taskId, untold));
+    } catch { /* a notice that cannot be read leaves the end as it was */ }
   }
 
   /** Follow a running attempt's session: its usage, its verdict, its turns and what its runner switches to. */

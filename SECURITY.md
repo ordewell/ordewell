@@ -325,8 +325,14 @@ Ordewell, that means it can:
   process's environment.
 
 Guarded changes what runs without asking you: the runner asks before a shell
-command (on Claude Code, its own classifier decides). A command that runs still
-runs as you, with all of the above. This is accepted, not an oversight: the
+command (on Claude Code, its own classifier decides). Guarded also holds a
+task's start when the agent settings its runner loads at launch (`.mcp.json`,
+`.claude/settings.json` and its hooks and plugins, `opencode.json`, `.codex/`,
+`.pi/`) differ from where the run started, since a hook or a server there can
+run as the runner starts, before it asks you anything. In Full a task in its runner's Full mode
+starts anyway, and Ordewell tells you which task starts with which file; at
+either level, a task whose landing changes such a file says so. A command that
+runs still runs as you, with all of the above. This is accepted, not an oversight: the
 token keeps browsers and other users out and separates roles and attempts, but
 it is not a sandbox against a process of yours
 ([ADR-0022](docs/adr/runners/0022-ordewell-mcp-server.md) A6,
@@ -356,7 +362,8 @@ What you can do:
 - For a repository you do not trust, plan the work as read-only tasks where a
   report is enough (a review, an audit, an investigation), and use **Guarded**
   for tasks that must change it, so a command waits for you (on Claude Code,
-  for its classifier) before it runs.
+  for its classifier) before it runs, and a task's start is held when agent
+  settings it would load changed during the run.
 - Keep other long-lived secrets out of the environments and command lines of
   the processes you run beside Ordewell, as Sealed runs above advises for macOS.
 - Running change tasks in containers, where your files and this machine's

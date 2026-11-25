@@ -62,8 +62,9 @@ const asked: Turn = async (tools, text) => {
 describe.skipIf(!hasGit)('a child plan\'s task held for configuration its sibling landed', () => {
   it('is held with words a person can act on there, and starts once the subplanner does what they ask', async () => {
     const { runner, spawns } = hookRunner();
+    // Guarded, the child's level too, where a start is held whatever its runner's mode (ADR-0028).
     const { parent } = tree({ d: [SUBMIT([childTask('a', 1), childTask('b', 2, ['a'])]), ...Array.from({ length: 8 }, () => asked)] }, {
-      runner, tasks: [delegated({ grants: ['delegate'] })],
+      runner, tasks: [delegated({ grants: ['delegate'] })], autonomous: false,
     });
     await parent.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(async () => expect((await parent.children.list()).length).toBe(1), WAIT);
@@ -84,8 +85,8 @@ describe.skipIf(!hasGit)('a child plan\'s task held for configuration its siblin
     await vi.waitFor(() => expect(spawns.map((s) => s.taskId)).toEqual(['a', 'b']), WAIT);
     // Read-only, it loads no project configuration, though the hook is in its worktree.
     expect(spawns[1]).toMatchObject({ taskId: 'b', hook: true });
-    // Claude Code's read-only mode, against a's own.
-    expect(spawns.map((s) => s.options.mode)).toEqual(['bypassPermissions', 'plan']);
+    // Claude Code's read-only mode, against a's own, Guarded's.
+    expect(spawns.map((s) => s.options.mode)).toEqual(['auto', 'plan']);
     await vi.waitFor(() => expect(child.view().run.tasks.find((t) => t.id === 'b')?.status).toBe('completed'), WAIT);
     parent.destroy();
   });

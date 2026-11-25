@@ -2,7 +2,7 @@
 
 import { expect, vi } from 'vitest';
 import { execFileSync } from 'child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
@@ -37,7 +37,8 @@ export async function cleanUp(): Promise<void> {
   while (roots.length) await removeDir(roots.pop()!);
 }
 
-export function repo(): string {
+/** A fresh repository whose first commit holds a README and `files`. */
+export function repo(files: readonly string[] = []): string {
   // Native, as git names a path: on Windows the JS realpath keeps the 8.3 short name of the temp folder.
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'ordewell-held-config-')));
   roots.push(root);
@@ -46,6 +47,10 @@ export function repo(): string {
   git(root, 'config', 'user.email', 'test@example.com');
   git(root, 'config', 'commit.gpgsign', 'false');
   writeFileSync(join(root, 'README.md'), 'hello\n');
+  for (const file of files) {
+    mkdirSync(dirname(join(root, file)), { recursive: true });
+    writeFileSync(join(root, file), '{}\n');
+  }
   git(root, 'add', '-A');
   git(root, 'commit', '-q', '-m', 'initial');
   return root;
@@ -57,13 +62,19 @@ export const SUPERVISOR: ExecutionActor = { kind: 'supervisor', level: 'act' };
 export const USER: ExecutionActor = { kind: 'user' };
 export const PLANNER: ExecutionActor = { kind: 'planner-turn' };
 
-/** One task of a plan {@link heldPlan} builds: `hook` lands the configuration, `ops` works in the checkout and writes nothing. */
+/**
+ * One task of a plan {@link heldPlan} builds: `hook` lands the configuration,
+ * `ops` works in the checkout and writes nothing; `writes` names the file it
+ * writes instead, ops or not, and `removes` one it deletes.
+ */
 export interface HeldTask {
   id: string;
   title: string;
   dependencies?: string[];
   hook?: true;
   ops?: true;
+  writes?: string;
+  removes?: string;
 }
 
 /**
@@ -73,10 +84,18 @@ export interface HeldTask {
  * which attempt wrote it. The tasks in `hold` keep running until
  * {@link HeldPlan.release}, and those in `holdOnce` only at their first spawn;
  * the others finish at once. A start held for configuration never reaches the
- * runner, so it records no spawn.
+ * runner, so it records no spawn. `autonomous` runs it in Full, where a
+ * model's start goes unasked; its tasks' mode, `acceptEdits`, is not one
+ * Claude Code offers for Full, so their starts are checked there too (ADR-0028).
  */
-export function heldPlan(tasks: readonly HeldTask[], { hold = [], holdOnce = [], mergeAtGatesAutomatically = false }: { hold?: readonly string[]; holdOnce?: readonly string[]; mergeAtGatesAutomatically?: boolean } = {}) {
-  const root = repo();
+export function heldPlan(tasks: readonly HeldTask[], { hold = [], holdOnce = [], mergeAtGatesAutomatically = false, autonomous = false, mode = 'acceptEdits', files = [] }: {
+  hold?: readonly string[]; holdOnce?: readonly string[]; mergeAtGatesAutomatically?: boolean; autonomous?: boolean;
+  /** The mode every task runs in. */
+  mode?: string;
+  /** What the repository's first commit holds besides its README. */
+  files?: readonly string[];
+} = {}) {
+  const root = repo(files);
   const spawned: string[] = [];
   const hookAtSpawn: boolean[] = [];
   const cwds: string[] = [];
@@ -92,7 +111,11 @@ export function heldPlan(tasks: readonly HeldTask[], { hold = [], holdOnce = [],
       const session = new FakeRunnerSession(`s${spawned.length}`, opts.taskId);
       const spec = byId.get(opts.taskId);
       const done = () => {
-        if (!spec?.ops) {
+        if (spec?.removes) rmSync(join(opts.cwd!, spec.removes), { force: true });
+        if (spec?.writes) {
+          mkdirSync(dirname(join(opts.cwd!, spec.writes)), { recursive: true });
+          writeFileSync(join(opts.cwd!, spec.writes), '{}\n');
+        } else if (!spec?.ops && !spec?.removes) {
           const file = spec?.hook ? HOOK : `${opts.taskId}.txt`;
           mkdirSync(dirname(join(opts.cwd!, file)), { recursive: true });
           writeFileSync(join(opts.cwd!, file), spec?.hook ? HOOK_BODY : `${opts.taskId} attempt ${attempt}\n`);
@@ -107,7 +130,8 @@ export function heldPlan(tasks: readonly HeldTask[], { hold = [], holdOnce = [],
     stopAll: vi.fn(),
     activeCount: 0,
   };
-  const config = fakeConfig({ worktreeIsolation: true, autonomousMode: true });
+  // Guarded unless asked, where a start is held for configuration whatever its runner's mode (ADR-0028).
+  const config = fakeConfig({ worktreeIsolation: true, autonomousMode: autonomous });
   const notifications = fakeNotification();
   const told = () => [notifications.info, notifications.warn, notifications.error].flatMap((say) => vi.mocked(say).mock.calls.map(([line]) => String(line)));
   const session = makeSession({
@@ -121,7 +145,7 @@ export function heldPlan(tasks: readonly HeldTask[], { hold = [], holdOnce = [],
   const now = new Date().toISOString();
   const plan: LegacyPlanState = {
     tasks: tasks.map((t, i): Task => createTask({
-      id: t.id, order: i + 1, title: t.title, prompt: t.title, assignedRunner: 'claude-code', taskMode: 'acceptEdits',
+      id: t.id, order: i + 1, title: t.title, prompt: t.title, assignedRunner: 'claude-code', taskMode: mode,
       ...(t.dependencies ? { dependencies: t.dependencies } : {}), ...(t.ops ? { ops: true } : {}),
     })),
     generatedAt: now, status: 'approved', runners: ['claude-code'], lastUpdated: now,
