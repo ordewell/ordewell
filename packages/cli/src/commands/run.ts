@@ -162,6 +162,20 @@ function releasing(wait: Escalation, ref: string): string {
   return all.length === 1 ? all[0] : `${all.slice(0, -1).join(', ')} or ${all[all.length - 1]}`;
 }
 
+/**
+ * What `ordewell continue` (retry_task from "session") does to a task's own
+ * wait, said beside the inbox for whoever has no TUI: core lands the kept work
+ * of a refused landing, and resumes a usage-limit pause whose wait offers a
+ * resume. It refuses a conflict, a changed checkout and a pause with no saved
+ * session, so those name none.
+ */
+function continuing(wait: Escalation, ref: string): string {
+  const does = wait.options.some((o) => o.id === 'land') ? 'lands the kept work and runs nothing again, the message unread'
+    : wait.options.some((o) => o.id === 'resume') ? 'resumes its saved session with the message'
+      : null;
+  return does ? `, and so does \`ordewell continue ${ref} "<message>"\` without it, which ${does}; or` : ', or';
+}
+
 /** The run's level, as the session holds it; null when the daemon cannot say. */
 async function sessionLevel(api: ApiClient, sessionId: string): Promise<SupervisorLevel | null> {
   try {
@@ -205,7 +219,7 @@ export async function followExecution(
   const level = await sessionLevel(api, sessionId);
   if (level) {
     process.stderr.write(`· Supervisor: ${SUPERVISOR_LEVEL_LABEL[level]}.\n`);
-    if (level !== 'act') process.stderr.write('· A task waiting on a person (a checkpoint, input or an approval) waits until someone answers it.\n');
+    if (level !== 'act') process.stderr.write('· A task waiting on a person waits until someone answers it.\n');
   }
   const summary = await followRun(api, sessionId, start, onBlocked, level, unattended);
   if (summary === 'waits') process.exitCode = RUN_WAITS_EXIT;
@@ -398,8 +412,8 @@ async function followRun(
         const own = OWN_WAIT_LABEL[wait.kind];
         if (own) {
           waitsSaid.add(wait.id);
-          // The inbox offers what no command does: a resolver task, landing the kept work, a resume.
-          process.stderr.write(`· ${own}: ${wait.task.ref} ${wait.task.title}: ${wait.reason.replace(/[.\s]+$/, '')}: \`ordewell tui\`, then \`/inbox\`, answers it, or ${releasing(wait, bare(wait.task.ref))} releases it and what needs it.${whoAnswers(level)}\n`);
+          // Only the inbox adds a resolver task; `ordewell continue` answers a refused landing and a pause as the inbox does.
+          process.stderr.write(`· ${own}: ${wait.task.ref} ${wait.task.title}: ${wait.reason.replace(/[.\s]+$/, '')}: \`ordewell tui\`, then \`/inbox\`, answers it${continuing(wait, bare(wait.task.ref))} ${releasing(wait, bare(wait.task.ref))} releases it and what needs it.${whoAnswers(level)}\n`);
           continue;
         }
         if (wait.kind !== 'input' && wait.kind !== 'approval') continue;

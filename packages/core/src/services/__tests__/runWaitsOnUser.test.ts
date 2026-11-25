@@ -317,3 +317,95 @@ describe('a task whose own wait only a person moves on', () => {
     expect(env.ended).toEqual([]);
   });
 });
+
+/**
+ * What `ordewell continue <n> <message>` sends (retry_task from "session", as
+ * the user) does to each of those waits: what `ordewell run` may print as the
+ * way to answer one without the TUI.
+ */
+describe('a continue from its session, sent as the user to a task whose own wait only a person moves on', () => {
+  type Kind = 'conflict' | 'landing-failed' | 'files-changed' | 'usage-limit';
+
+  async function waitingOn(kind: Kind) {
+    const isolation = new FakeWorktreeIsolation();
+    if (kind === 'conflict') isolation.outcomes.set('t1', 'conflict');
+    if (kind === 'landing-failed') isolation.outcomes.set('t1', 'failed');
+    if (kind === 'files-changed') isolation.changedFiles = ['package.json'];
+    const env = setup(3, { isolation, config: { worktreeIsolation: true } });
+    env.load([task('t1', 1, kind === 'files-changed' ? { ops: true } : {})]);
+    await env.run({ command: 'run_plan' });
+    await vi.waitFor(() => expect(env.status('t1')).toBe('in_progress'));
+    const first = env.latest('t1');
+    if (kind === 'usage-limit') {
+      // No reset time: nothing resumes it by itself.
+      first.emitEvent({ type: 'error', message: 'Rate limit exceeded. Please try again later.' });
+      first.emitOutput('Rate limit exceeded. Please try again later.\n');
+      first.emitTurnEnd('failed');
+    } else {
+      first.reportComplete({ status: 'done', summary: 'done' });
+    }
+    await vi.waitFor(() => expect(env.orchestrator.storeInstance.get('t1')!.awaitingReason).toBe(kind));
+    await vi.waitFor(() => expect(env.session.activity.waitsOnUser).toBe(true));
+    const sent: ExecutionCommand = { command: 'retry_task', task: '1', from: 'session', message: 'Go on.' };
+    return { ...env, isolation, first, continueIt: () => env.run(sent) };
+  }
+
+  it('is refused for a landing conflict, which it says to resolve or repair, and nothing moves', async () => {
+    const env = await waitingOn('conflict');
+
+    const outcome = await env.continueIt();
+
+    expect(outcome).toMatchObject({ ok: false, outcome: 'refused' });
+    expect(outcome.message).toMatch(/^Task "Task t1" cannot be continued: its work is waiting on a merge conflict\. Resolve or repair the conflict instead\./);
+    expect(env.spawn).toHaveBeenCalledTimes(1);
+    expect(env.status('t1')).toBe('awaiting_user');
+    expect(env.orchestrator.storeInstance.get('t1')!.awaitingReason).toBe('conflict');
+  });
+
+  it('lands the kept work of a task whose landing git refused, once git can commit, without running it again', async () => {
+    const env = await waitingOn('landing-failed');
+    env.isolation.outcomes.delete('t1');
+
+    const outcome = await env.continueIt();
+
+    expect(outcome).toMatchObject({ ok: true, message: 'Landed the kept work of task #1 "Task t1", without running it again.' });
+    expect(env.status('t1')).toBe('completed');
+    expect(env.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a task whose landing git refuses again waiting, and says so', async () => {
+    const env = await waitingOn('landing-failed');
+
+    const outcome = await env.continueIt();
+
+    expect(outcome.message).toMatch(/^Task #1 "Task t1"'s kept work still did not land: git refused it again\./);
+    expect(env.status('t1')).toBe('awaiting_user');
+    expect(env.orchestrator.storeInstance.get('t1')!.awaitingReason).toBe('landing-failed');
+    expect(env.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('is refused for an ops task that changed tracked files, and nothing moves', async () => {
+    const env = await waitingOn('files-changed');
+
+    const outcome = await env.continueIt();
+
+    expect(outcome).toMatchObject({ ok: false, outcome: 'refused' });
+    expect(outcome.message).toMatch(/^Task "Task t1" cannot be continued: only a completed, failed, stopped or skipped task, or one paused on a usage limit, can be\./);
+    expect(env.spawn).toHaveBeenCalledTimes(1);
+    expect(env.status('t1')).toBe('awaiting_user');
+    expect(env.orchestrator.storeInstance.get('t1')!.awaitingReason).toBe('files-changed');
+  });
+
+  it('resumes a task paused on a usage limit with no reset time in its saved session, with the message', async () => {
+    const env = await waitingOn('usage-limit');
+
+    const outcome = await env.continueIt();
+
+    expect(outcome).toMatchObject({ ok: true, message: 'Resumed task #1 "Task t1" in its saved session with your message.' });
+    await vi.waitFor(() => expect(env.spawn).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(env.status('t1')).toBe('in_progress'));
+    // The first attempt's own session, which the fake runner names native-1.
+    expect(env.spawn.mock.calls[1][0]).toMatchObject({ taskId: 't1', resumeSessionId: 'native-1' });
+    expect(env.spawn.mock.calls[1][0].prompt).toContain('Go on.');
+  });
+});
