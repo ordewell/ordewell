@@ -2,7 +2,7 @@ import { repeatsUnansweredOpening, type ResearchLogEntry, type ResearchStep, typ
 import type { SerializedConversationMessage, SerializedPendingTurn } from '../services/SessionMessage';
 import { isMeasured, usageLine, type PlannerUsage } from '../models/Usage';
 import type { DisplayBlock, MessageRole } from './blocks';
-import { compactionBlock, planMarker, settledMessage, skillLoadBlock, skillLoadNotice, subagentBlock, toolFromStep, usageBlock, userMessage } from './records';
+import { compactionBlock, planMarker, settledMessage, signedOutFailure, skillLoadBlock, skillLoadNotice, subagentBlock, toolFromStep, usageBlock, userMessage } from './records';
 import type { ConversationView } from './reduce';
 import { isCheckpoint } from '../services/conversationSummary';
 
@@ -32,7 +32,14 @@ function fromEntry(entry: SerializedConversationMessage, loaded: readonly SkillL
     });
   }
   if (entry.role === 'user' && !entry.kind) return (id) => userMessage(id(), entry.content, loaded.map(skillLoadNotice), { forced: entry.forced });
+  const { signIn } = entry;
+  if (signIn) return (id) => signedOutFailure(id(), entry.content, signIn);
   return (id) => settledMessage(id(), roleOf(entry), entry.content);
+}
+
+/** One run of a saved reply: a signed-out failure is its last, the note written in the reply's place. */
+function runBlock(id: string, entry: SerializedConversationMessage, text: string, last: boolean): DisplayBlock {
+  return entry.signIn && last ? signedOutFailure(id, text, entry.signIn) : settledMessage(id, roleOf(entry), text);
 }
 
 function roleOf(entry: SerializedConversationMessage): MessageRole {
@@ -154,7 +161,7 @@ export function fromTranscript(
   const placed: Placed[] = [
     ...kept.flatMap((entry, i): Placed[] => (entry.runs
       // ADR-0017 A1: each run of a reply where it streamed, among the research.
-      ? entry.runs.map((run) => ({ at: run.startedAt, rank: SETTLED, build: (id) => settledMessage(id(), roleOf(entry), run.text) }))
+      ? entry.runs.map((run, n, all) => ({ at: run.startedAt, rank: SETTLED, build: (id) => runBlock(id(), entry, run.text, n === all.length - 1) }))
       : [{ at: entry.timestamp, rank: rankOf(entry), build: fromEntry(entry, loadsAfter(kept, i)) }])),
     ...research(researchLog ?? []).filter((item) => item.at >= cutoff),
   ];
