@@ -21,6 +21,8 @@ export interface RunnerRow {
   /** The daemon found the binary: a missing one is listed with why, never toggleable. */
   installed: boolean;
   auth?: RunnerSetting['auth'];
+  /** The daemon's readiness for it, which marks a key it lacks where the verdict alone may not (ADR-0052). */
+  readiness?: RunnerSetting['readiness'];
   /** Why it cannot be used, as core's planner list words it; absent when it can. */
   reason?: string;
 }
@@ -61,6 +63,7 @@ export function runnerRowsFor(
       enabled: found?.enabled ?? false,
       installed: found !== undefined,
       ...(found?.auth ? { auth: found.auth } : {}),
+      ...(found?.readiness ? { readiness: found.readiness } : {}),
       ...(backend && !backend.usable ? { reason: backend.reason } : {}),
     };
   });
@@ -72,6 +75,7 @@ export function runnerRowsFor(
       enabled: runner.enabled,
       installed: true,
       ...(runner.auth ? { auth: runner.auth } : {}),
+      ...(runner.readiness ? { readiness: runner.readiness } : {}),
     });
   }
   return rows;

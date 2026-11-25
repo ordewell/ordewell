@@ -71,6 +71,17 @@ describe('parseRunners', () => {
     ]);
   });
 
+  it('keeps a missing provider key on the ways in, from the verdict or from a readiness blocked on it (ADR-0060)', () => {
+    const ways = { runner: 'cline', label: 'Cline', login: ['cline', 'auth'] };
+    const row = (signIn: Record<string, unknown>, readiness?: Record<string, unknown>) => parseRunners({
+      runners: [{ id: 'cline', name: 'Cline', enabled: true, auth: { state: 'signed-out', signIn }, ...(readiness ? { readiness } : {}) }],
+    })?.find((line) => line.id === 'cline')?.signIn;
+    expect(row({ ...ways, needsKey: true })).toEqual({ ...ways, needsKey: true });
+    expect(row(ways, { kind: 'blocked', why: 'no-credential', signIn: ways })).toEqual({ ...ways, needsKey: true });
+    // A plain sign-out is still one.
+    expect(row(ways, { kind: 'blocked', why: 'signed-out', signIn: ways })).toEqual(ways);
+  });
+
   it('answers undefined for anything but the runners response', () => {
     expect(parseRunners(undefined)).toBeUndefined();
     expect(parseRunners([])).toBeUndefined();

@@ -52,7 +52,13 @@ function signInOf(value: unknown): RunnerSignIn | undefined {
     ...(login ? { login } : {}),
     ...(key ? { key } : {}),
     ...(typeof value.byHand === 'string' ? { byHand: value.byHand } : {}),
+    ...(value.needsKey === true ? { needsKey: true as const } : {}),
   };
+}
+
+/** A readiness blocked on a missing key marks its ways in so, as core's runnerReadiness does for the chat. */
+function lacksKey(readiness: unknown): boolean {
+  return isRecord(readiness) && readiness.kind === 'blocked' && readiness.why === 'no-credential';
 }
 
 /**
@@ -67,7 +73,8 @@ export function parseRunners(data: unknown): RunnerLine[] | undefined {
     const auth = isRecord(entry.auth) ? entry.auth : undefined;
     const signedState = auth?.state === 'signed-in' || auth?.state === 'signed-out' ? auth.state : 'unknown';
     const loginCommand = stringList(auth?.loginCommand);
-    const signIn = signInOf(auth?.signIn);
+    const verdictSignIn = signInOf(auth?.signIn);
+    const signIn = verdictSignIn && lacksKey(entry.readiness) ? { ...verdictSignIn, needsKey: true as const } : verdictSignIn;
     found.set(entry.id, {
       id: entry.id,
       name: typeof entry.name === 'string' && entry.name !== '' ? entry.name : RUNNER_LABELS[entry.id] ?? entry.id,

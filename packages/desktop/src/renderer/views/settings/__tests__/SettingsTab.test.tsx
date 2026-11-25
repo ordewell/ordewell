@@ -331,6 +331,30 @@ describe('the Settings view', () => {
     await waitFor(() => expect(handle).toHaveBeenCalledWith({ type: 'loginPlanner', runner: 'codex' }));
   });
 
+  it('says a Cline with no key Ordewell can hand it needs one, and its Set up runs the same login through the host (ADR-0060)', async () => {
+    // The row the daemon really sends for a Cline whose hook found no key.
+    const keyless = { runner: 'cline', label: 'Cline', login: ['cline', 'auth'], needsKey: true };
+    await mount('dark', {
+      runners: {
+        runners: [...RUNNERS.runners, {
+          id: 'cline', name: 'Cline', enabled: true,
+          auth: { state: 'signed-out', detail: 'no provider key', loginCommand: ['cline', 'auth'], signIn: keyless },
+          readiness: { kind: 'blocked', why: 'no-credential', signIn: keyless },
+        }],
+        orchestratorModel: 'claude-sonnet',
+      },
+    });
+    await screen.findByRole('heading', { name: 'Planner' });
+    const row = screen.getByRole('checkbox', { name: /Cline/ }).closest('li') as HTMLElement;
+    expect(row).toHaveTextContent('API key needed · Set it up with /login cline, or run cline auth, and choose an API provider and enter its key; an account sign-in alone is not enough.');
+    expect(row).not.toHaveTextContent('Signed out');
+    expect(within(row).queryByRole('button', { name: 'Log in' })).toBeNull();
+
+    const handle = vi.spyOn(daemonHost(WORKSPACE), 'handle');
+    fireEvent.click(within(row).getByRole('button', { name: 'Set up Cline' }));
+    await waitFor(() => expect(handle).toHaveBeenCalledWith({ type: 'loginPlanner', runner: 'cline' }));
+  });
+
   it('offers Set API key on a key-based runner, through the same host', async () => {
     await mount();
     await screen.findByRole('heading', { name: 'Planner' });
