@@ -241,6 +241,8 @@ function fakeResolver(modelsByRunner: Partial<Record<string, DiscoveredModel[]>>
     invalidate: vi.fn(),
     getDiscoveryErrors: vi.fn(() => ({})),
     getRunnerDiscoveryErrors: vi.fn(() => ({})),
+    getRunnerUnlisted: vi.fn(() => ({})),
+    rediscoverRunner: vi.fn(async (runner: string) => modelsByRunner[runner] ?? []),
     getCachedRunnerModels: vi.fn((runner: string) => modelsByRunner[runner] ?? []),
     getCachedPickerOptions: vi.fn(() => []),
     plannerCatalog: vi.fn(async () => []),

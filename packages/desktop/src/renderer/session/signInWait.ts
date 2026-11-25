@@ -16,9 +16,14 @@ export interface SignInOutcome {
   message?: string;
 }
 
+/** A login that exited cleanly, for an agent that still cannot say: never taken as signed in (ADR-0052). */
+export const signInUnconfirmed = (label: string): string =>
+  `The login finished, but ${label} cannot say whether it is signed in. Send again to try it.`;
+export const signInStillOut = (label: string): string => `${label} still reports not logged in.`;
+
 export interface SignInWaitDeps {
-  /** Resolves when the login terminal's process exits or its tab closes. */
-  ended: Promise<void>;
+  /** Resolves with the login's exit code when its process exits, or with none when its tab closes first. */
+  ended: Promise<number | void>;
   /** The agent's own status command: the only thing that may say it worked. */
   signedIn(): Promise<boolean>;
   pollMs?: number;
@@ -27,6 +32,16 @@ export interface SignInWaitDeps {
   sleep?: (ms: number) => Promise<void>;
   /** The clock the timeout is measured against; injectable with `sleep`. */
   now?: () => number;
+  /**
+   * Asked once when the login exits 0: the daemon's recheck of the agent
+   * (`runners.list?recheck=`), which forgets the refusal it recorded and asks
+   * again. An agent with no status command never reads signed in on its own,
+   * so without this a login that worked ended as a closed terminal (#46 F7).
+   * A failed or cancelled login is never rechecked, so its blocker stays.
+   */
+  recheck?(): Promise<'signed-in' | 'signed-out' | 'unknown' | undefined>;
+  /** The agent as the recheck's outcome names it. */
+  label?: string;
 }
 
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -45,7 +60,7 @@ export async function waitForSignIn(deps: SignInWaitDeps): Promise<SignInOutcome
       sleep(pollMs).then(() => 'tick' as const),
       deps.ended.then(() => 'ended' as const),
     ]);
-    if (next === 'ended') return { ok: false, message: SIGN_IN_CLOSED };
+    if (next === 'ended') return afterExit(deps, await deps.ended);
     let signedIn = false;
     try {
       signedIn = await deps.signedIn();
@@ -55,4 +70,14 @@ export async function waitForSignIn(deps: SignInWaitDeps): Promise<SignInOutcome
     if (signedIn) return { ok: true };
   }
   return { ok: false, message: SIGN_IN_TIMEOUT };
+}
+
+async function afterExit(deps: SignInWaitDeps, code: number | void): Promise<SignInOutcome> {
+  if (code !== 0 || !deps.recheck) return { ok: false, message: SIGN_IN_CLOSED };
+  const state = await deps.recheck().catch(() => undefined);
+  if (state === 'signed-in') return { ok: true };
+  const label = deps.label ?? 'The agent';
+  if (state === 'signed-out') return { ok: false, message: signInStillOut(label) };
+  if (state === 'unknown') return { ok: false, message: signInUnconfirmed(label) };
+  return { ok: false, message: SIGN_IN_CLOSED };
 }

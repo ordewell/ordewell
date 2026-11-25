@@ -54,6 +54,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // workspace's CLAUDE_CONFIG_DIR moves Claude's picker lineup with it.
     modelResolver = new ModelResolver(runnerRegistry, config, {
       env: async () => ({ ...process.env, ...(await workspaceEnvOf(fsAdapter.getWorkspaceRoot())) }),
+      // What its ACP handshake hears is the sign-in verdict for this workspace's account (ADR-0052).
+      workspace: () => fsAdapter.getWorkspaceRoot(),
     });
     const settingsService = new SettingsService();
     await moveAutonomyFromVsCodeSetting(settingsService);

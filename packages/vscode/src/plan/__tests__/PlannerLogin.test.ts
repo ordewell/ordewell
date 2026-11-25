@@ -325,6 +325,32 @@ describe('loginPlanner', () => {
     expect(h.deps.notifications.warn).toHaveBeenCalledWith(expect.stringContaining('Claude Code'));
   });
 
+  // ADR-0052, #46 F7: Cursor has no status command, so no poll can confirm its
+  // login. Closing the terminal is the user's word that it is done: Ordewell
+  // rechecks it once, by the agent's own handshake, and never calls it signed in.
+  it.each([
+    ['unknown', { ok: false, message: 'The login finished, but Cursor cannot say whether it is signed in. Send again to try it.' }],
+    ['signed-out', { ok: false, message: 'Cursor still reports not logged in.' }],
+    ['signed-in', { ok: true }],
+  ] as const)('rechecks an agent with no status command once its terminal closes: %s', async (answer, ended) => {
+    // The recheck records what the agent answered, which every later look reads.
+    let rechecked = false;
+    const h = harness({
+      aiProvider: 'cursor-agent',
+      verdict: () => ({ state: rechecked ? answer : 'signed-out', loginCommand: ['cursor-agent', 'login'] }),
+      afterProbe: (probe, close) => { if (probe === 2) close(); },
+    });
+    const recheck = vi.fn(async () => { rechecked = true; return { usable: true, auth: { state: answer } }; });
+    Object.assign(h.deps.runnerInstallation, { recheck });
+
+    await loginPlanner(h.deps);
+
+    expect(recheck).toHaveBeenCalledWith('cursor-agent');
+    expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner: 'cursor-agent', ...ended });
+    // The recheck changed what is recorded, so both roles are redrawn from it.
+    expect(h.deps.sendState).toHaveBeenCalled();
+  });
+
   it('ends as a failure after the time limit, with the reason inline', async () => {
     const h = harness({ timeoutMs: 60_000, verdict: () => SIGNED_OUT_CLAUDE });
 

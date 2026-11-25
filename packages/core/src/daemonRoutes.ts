@@ -203,7 +203,8 @@ export const DAEMON_ROUTES = {
   // `cached=1` reads only what discovery holds, starting none.
   'models.list': row<ModelsResponse>()({ method: 'GET', path: '/api/models', query: [...WS, 'cached'] }),
 
-  'runners.list': row<RunnersResponse>()({ method: 'GET', path: '/api/runners', query: WS }),
+  // `recheck`: the runner whose sign-in its user asked to look at again (ADR-0052).
+  'runners.list': row<RunnersResponse>()({ method: 'GET', path: '/api/runners', query: ['workspace', 'recheck'] as const }),
   'skills.list': row<SkillsResponse>()({ method: 'GET', path: '/api/skills', query: WS }),
   'runners.setEnabled': row<OkResponse, { enabled: boolean }>()({ method: 'PUT', path: '/api/runners/:id' }),
 

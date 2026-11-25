@@ -48,8 +48,8 @@ export function LoginDialog({ runner, label, platform, onClose, onSignedIn, poll
 
   useEffect(() => {
     let live = true;
-    let ended: () => void = () => undefined;
-    const done = new Promise<void>((resolve) => { ended = resolve; });
+    let ended: (code?: number) => void = () => undefined;
+    const done = new Promise<number | void>((resolve) => { ended = resolve; });
 
     const run = async (): Promise<void> => {
       try {
@@ -73,7 +73,7 @@ export function LoginDialog({ runner, label, platform, onClose, onSignedIn, poll
             if (event.kind !== 'exit') return;
             handle.write('\r\n\x1b[2m[Process exited.]\x1b[0m\r\n');
             pty.current = undefined;
-            ended();
+            ended(event.exitCode);
           },
         );
         if (!live) { if (result.ok) void window.ordewell.terminal.close(result.id); return; }
@@ -87,19 +87,18 @@ export function LoginDialog({ runner, label, platform, onClose, onSignedIn, poll
         handle.focus();
         const outcome = await waitForSignIn({
           ended: done,
+          label,
+          // A login that exited cleanly is the user's recovery: the daemon
+          // forgets the refusal it recorded and asks again (ADR-0052).
+          recheck: async () => {
+            const answer = await window.ordewell.daemon.call('runners.list', { recheck: runner });
+            return authStateOf(answer.ok ? answer.data : undefined, runner);
+          },
           ...(pollMs !== undefined ? { pollMs } : {}),
           ...(timeoutMs !== undefined ? { timeoutMs } : {}),
           signedIn: async () => {
             const answer = await window.ordewell.daemon.call('runners.list');
-            const runners = answer.ok && typeof answer.data === 'object' && answer.data !== null
-              ? Reflect.get(answer.data, 'runners')
-              : undefined;
-            if (!Array.isArray(runners)) return false;
-            return runners.some((entry: unknown) => (
-              typeof entry === 'object' && entry !== null
-              && Reflect.get(entry, 'id') === runner
-              && Reflect.get(Reflect.get(entry, 'auth') ?? {}, 'state') === 'signed-in'
-            ));
+            return authStateOf(answer.ok ? answer.data : undefined, runner) === 'signed-in';
           },
         });
         if (!live) return;
@@ -176,4 +175,14 @@ export function LoginDialog({ runner, label, platform, onClose, onSignedIn, poll
       </div>
     </div>
   );
+}
+
+/** The login verdict a runner list gives `runner`, read from the daemon's untyped answer. */
+function authStateOf(data: unknown, runner: string): 'signed-in' | 'signed-out' | 'unknown' | undefined {
+  const runners = typeof data === 'object' && data !== null ? Reflect.get(data, 'runners') : undefined;
+  if (!Array.isArray(runners)) return undefined;
+  const entry: unknown = runners.find((row: unknown) => typeof row === 'object' && row !== null && Reflect.get(row, 'id') === runner);
+  const auth: unknown = typeof entry === 'object' && entry !== null ? Reflect.get(entry, 'auth') : undefined;
+  const state: unknown = typeof auth === 'object' && auth !== null ? Reflect.get(auth, 'state') : undefined;
+  return state === 'signed-in' || state === 'signed-out' || state === 'unknown' ? state : undefined;
 }

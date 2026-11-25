@@ -204,6 +204,18 @@ describe('daemon admission control', () => {
       expect(JSON.parse(res.body)).toMatchObject({ live: true });
     });
 
+    it('hands a runner list\'s recheck to the pool as the user\'s recovery, and a plain list none (ADR-0052)', async () => {
+      const getInstalledRunners = vi.fn().mockReturnValue([]);
+      const own = await startDaemon(fakePool({ getInstalledRunners }));
+      try {
+        await request(own.port, '/api/runners?workspace=%2Fw&recheck=cursor-agent%2Cqwen-code', { headers: AUTH });
+        await request(own.port, '/api/runners?workspace=%2Fw', { headers: AUTH });
+      } finally {
+        await own.close();
+      }
+      expect(getInstalledRunners.mock.calls).toEqual([['/w', { recheck: ['cursor-agent', 'qwen-code'] }], ['/w']]);
+    });
+
     it('reaches the API when it dials localhost by name', async () => {
       const res = await request(daemon.port, '/api/runners', {
         headers: { ...AUTH, host: `localhost:${daemon.port}` },

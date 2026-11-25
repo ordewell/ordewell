@@ -13,10 +13,13 @@ import { GEMINI_CLI_MANIFEST } from '../../plugins/builtin/gemini-cli.manifest';
 import { CURSOR_AGENT_MANIFEST } from '../../plugins/builtin/cursor-agent.manifest';
 import { PI_MANIFEST } from '../../plugins/builtin/pi.manifest';
 import { CONNECTORS } from '../harness/connectors';
-import { recordedRunnerAuth, recordRunnerAuth, resetRunnerAuth, signedOutFromFailure, type RunnerAuthExec } from '../runnerAuth';
+import { forgetSignedOutRunnerAuth, recordedRunnerAuth, recordRunnerAuth, resetRunnerAuth, signedOutFromFailure, type RunnerAuthExec } from '../runnerAuth';
 import type { LaunchDeps } from '../../utils/launch';
 import { augmentedPath, clearAugmentedPathCache } from '../../utils/shellPath';
 import * as path from 'path';
+import { plannerNotReadyFor } from '../plannerReadiness';
+import { providerForRunner } from '../ProviderRegistry';
+import { fakeConfig } from '../../testing';
 
 /**
  * Off Windows' PATH lookup: these cases are about what `--version` and the
@@ -332,7 +335,7 @@ describe('RunnerInstallation auth (ADR-0009 preflight)', () => {
     expect(authExec).toHaveBeenCalledTimes(2);
   });
 
-  it('answers with the sign-out a failed turn recorded since its last probe, until it asks again', async () => {
+  it('answers with the sign-out a failed turn recorded since its last probe', async () => {
     const exec: ExecImpl = vi.fn(async () => ({ stdout: '2.0.0' }));
     // Cursor has no status command: only a refused turn can say it is signed out.
     const inst = new RunnerInstallation(registryWith(CURSOR_AGENT_MANIFEST), exec, () => 0, { launch: POSIX, workspace: () => '/w' });
@@ -344,9 +347,85 @@ describe('RunnerInstallation auth (ADR-0009 preflight)', () => {
       state: 'signed-out',
       signIn: { runner: 'cursor-agent', label: 'Cursor', login: ['cursor-agent', 'login'] },
     });
+  });
+
+  // #46 F1/F2: a status-less agent's probe answers `unknown`, which is no
+  // evidence, so neither a runner-list refresh nor the TTL may erase a refusal.
+  for (const manifest of [CURSOR_AGENT_MANIFEST, COPILOT_CLI_MANIFEST, CLINE_MANIFEST]) {
+    it(`keeps ${manifest.displayName}'s refused turn through refresh() and the TTL, for the list, the gate and the catalog`, async () => {
+      let clock = 0;
+      const exec: ExecImpl = vi.fn(async () => ({ stdout: '9.9.9' }));
+      const inst = new RunnerInstallation(registryWith(manifest), exec, () => clock, { launch: POSIX, workspace: () => '/w' });
+      expect((await inst.runnerUsability(manifest.name)).auth?.state).toBe('unknown');
+
+      recordRunnerAuth(manifest.name, signedOutFromFailure(manifest, 'Authentication required')!, '/w');
+      inst.refresh();
+      expect((await inst.runnerUsability(manifest.name)).auth?.state).toBe('signed-out');
+      clock += 31_000;
+      expect((await inst.runnerUsability(manifest.name)).auth?.state).toBe('signed-out');
+
+      const provider = providerForRunner(manifest.name)!;
+      expect(plannerNotReadyFor(fakeConfig({ aiProvider: provider }), (runner) => recordedRunnerAuth(runner, '/w'))?.code).toBe('signed_out');
+      // Another workspace's account is not this one's.
+      expect(recordedRunnerAuth(manifest.name, '/other')).toBeUndefined();
+    });
+  }
+
+  it('recheck() returns a status-less agent to an honest unknown, never signed in, and a new refusal restores the blocker', async () => {
+    const exec: ExecImpl = vi.fn(async () => ({ stdout: '9.9.9' }));
+    const inst = new RunnerInstallation(registryWith(CURSOR_AGENT_MANIFEST), exec, () => 0, { launch: POSIX, workspace: () => '/w' });
+    recordRunnerAuth('cursor-agent', signedOutFromFailure(CURSOR_AGENT_MANIFEST, 'Authentication required')!, '/w');
+    recordRunnerAuth('cursor-agent', signedOutFromFailure(CURSOR_AGENT_MANIFEST, 'Authentication required')!, '/v');
+
+    expect((await inst.recheck('cursor-agent')).auth).toMatchObject({ state: 'unknown', loginCommand: ['cursor-agent', 'login'] });
+    expect(recordedRunnerAuth('cursor-agent', '/w')?.state).toBe('unknown');
+    // Scoped to the workspace that asked.
+    expect(recordedRunnerAuth('cursor-agent', '/v')?.state).toBe('signed-out');
+
+    recordRunnerAuth('cursor-agent', signedOutFromFailure(CURSOR_AGENT_MANIFEST, 'Authentication required')!, '/w');
+    inst.refresh();
+    expect((await inst.runnerUsability('cursor-agent')).auth?.state).toBe('signed-out');
+  });
+
+  it('a saved key forgets a status-less refusal, and the next look reads unknown', async () => {
+    const exec: ExecImpl = vi.fn(async () => ({ stdout: '9.9.9' }));
+    const inst = new RunnerInstallation(registryWith(CLINE_MANIFEST), exec, () => 0, { launch: POSIX, workspace: () => '/w' });
+    recordRunnerAuth('cline', signedOutFromFailure(CLINE_MANIFEST, 'Authentication required')!, '/w');
+
+    forgetSignedOutRunnerAuth();
+    inst.refresh();
+
+    expect((await inst.runnerUsability('cline')).auth?.state).toBe('unknown');
+  });
+
+  it('keeps a turn\'s refusal from hiding a working status command: a newer signed-in answer replaces it', async () => {
+    // The account stays signed in: the turn's refusal was stale by the time the status command answers.
+    const authExec: RunnerAuthExec = vi.fn(async () => ({ code: 0, stdout: '{"authMethod":"claude.ai"}', stderr: '' }));
+    const exec: ExecImpl = vi.fn(async () => ({ stdout: '2.0.0' }));
+    const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec, Date.now, { authExec, launch: POSIX, workspace: () => '/w' });
+    expect((await inst.plannerUsability('claude-code')).auth?.state).toBe('signed-in');
+
+    recordRunnerAuth('claude-code', signedOutFromFailure(CLAUDE_CODE_MANIFEST, 'Not logged in · Please run /login')!, '/w');
+    expect((await inst.plannerUsability('claude-code')).auth?.state).toBe('signed-out');
 
     inst.refresh();
-    expect((await inst.runnerUsability('cursor-agent')).auth?.state).toBe('unknown');
+    expect((await inst.plannerUsability('claude-code')).auth?.state).toBe('signed-in');
+    expect(recordedRunnerAuth('claude-code', '/w')?.state).toBe('signed-in');
+  });
+
+  it('drops a probe that was asked before a refusal arrived: the newer evidence stands', async () => {
+    let release!: (answer: { code: number; stdout: string; stderr: string }) => void;
+    const authExec: RunnerAuthExec = vi.fn(() => new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => { release = resolve; }));
+    const exec: ExecImpl = vi.fn(async () => ({ stdout: '2.0.0' }));
+    const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec, Date.now, { authExec, launch: POSIX, workspace: () => '/w' });
+
+    const pending = inst.plannerUsability('claude-code');
+    await vi.waitFor(() => expect(authExec).toHaveBeenCalled());
+    recordRunnerAuth('claude-code', signedOutFromFailure(CLAUDE_CODE_MANIFEST, 'Not logged in · Please run /login')!, '/w');
+    release({ code: 0, stdout: '{"authMethod":"claude.ai"}', stderr: '' });
+
+    expect((await pending).auth?.state).toBe('signed-out');
+    expect(recordedRunnerAuth('claude-code', '/w')?.state).toBe('signed-out');
   });
 
   it('re-probes a verdict once its short TTL expires', async () => {

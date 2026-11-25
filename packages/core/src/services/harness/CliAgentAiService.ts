@@ -41,9 +41,9 @@ import { researchAgentSetting, type OfferedResearchAgent, type ResearchAgentSett
 import { loginResearchAgent, openCodeVersion } from './openCodeResearchAgent';
 import type { PlannerToolHandler } from '../mcp';
 import { providerForRunner, runnerForProvider } from '../ProviderRegistry';
-import { recordRunnerAuth, signedOutFromFailure } from '../runnerAuth';
+import { recordRunnerAuth, signedOutAuth, signedOutFromFailure } from '../runnerAuth';
 import { describePlannerNotReady, TERMINAL_UI_COMMANDS, type PlannerNotReady } from '../plannerReadiness';
-import { describeSignIn } from '../signInHint';
+import { describeSignIn, RunnerSignedOutError } from '../signInHint';
 import { workspaceEnvOf } from '../workspaceEnv';
 import { augmentedPath, withPath } from '../../utils/shellPath';
 import { BUILTIN_MANIFESTS } from '../../plugins/builtin';
@@ -1108,7 +1108,7 @@ export class CliAgentAiService implements IAiService {
     // A planner that exits before it answers the attach check refused what it was started with, so its words are the failure and no respawn repeats it.
     let startupExit: string | null = null;
     let starting: AgentAdapter | null = null;
-    const spawned = await spawnAttached({
+    const spawned = await this.recordingRefusal(spawnAttached({
       runner: this.runner,
       create: () => this.newAdapter(),
       issueToken: () => {
@@ -1135,7 +1135,7 @@ export class CliAgentAiService implements IAiService {
       cancelled: firstTurn?.signal ? AbortSignal.any([session.discarded, firstTurn.signal]) : session.discarded,
       ...(firstTurn ? { firstTurn: (adapter: AgentAdapter) => firstTurn.send(adapter) } : {}),
       failed: (first, second) => `Could not start the ${this.runner} planner with Ordewell's tools. First spawn: ${first}. Respawn: ${second}.`,
-    });
+    }));
     if (!spawned) throw new Error(`The ${this.runner} planner session ended before its agent started.`);
     session.adapter = spawned.adapter;
     session.token = spawned.token;
@@ -1161,6 +1161,21 @@ export class CliAgentAiService implements IAiService {
   }
 
   /** Whether the runner uses its token only once a prompt runs, so its first turn spawns it as the attach check (ADR-0060, R5). */
+  /**
+   * A start the agent refused as signed out is recorded for this workspace's
+   * planner gate as it happens: it never reaches a turn's words, so without
+   * this the first refusal was not recorded and the next send spawned the
+   * agent to be refused again (ADR-0052, #49 F2).
+   */
+  private async recordingRefusal<T>(start: Promise<T>): Promise<T> {
+    try {
+      return await start;
+    } catch (err) {
+      if (err instanceof RunnerSignedOutError) recordRunnerAuth(this.runner, signedOutAuth(err.signIn), this.workspaceRoot());
+      throw err;
+    }
+  }
+
   private spawnsOnFirstTurn(): boolean { return connectorFor(this.runner)?.attachesOnFirstTurn === true; }
 
   private newAdapter(): AgentAdapter {
