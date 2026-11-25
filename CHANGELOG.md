@@ -97,8 +97,9 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 - **Cline's "API key needed" offers Set up Cline, and no longer blames Cline.**
   When Ordewell has no provider key it can hand Cline, every picker, the send
-  refusal and the error banner offer Set up Cline, which runs `cline auth`, and
-  say to choose an API provider and enter its key. Add key now opens only the
+  refusal, the error banner, and the desktop launcher's card and Settings row
+  say "API key needed" and offer Set up Cline, which runs `cline auth`; each
+  says to choose an API provider and enter its key. Add key now opens only the
   key entry. In VS Code it used to run Cline's login under that name. A setup
   that still leaves no key now says Ordewell lacks one, not "Cline still
   reports not logged in." A Cline account sign-in alone is not enough, and the

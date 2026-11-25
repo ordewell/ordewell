@@ -3,7 +3,10 @@ import { ChevronDown, ChevronRight, CircleAlert, KeyRound, LogIn, RotateCw } fro
 import { Button, EmptyState, Icon, LoadingState } from '@ordewell/ui/design';
 import type { DiscoveredModel, SettingsResponse, SupervisorLevel } from '@ordewell/core';
 import type { PlannerBackend } from '@ordewell/ui/protocol';
-import { AGENT_DEFAULT_MODEL, describeSignInWays, isProviderRunner, signInAction, signInOfVerdict, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_SIGN_IN } from '@ordewell/core/plan-utils';
+import {
+  AGENT_DEFAULT_MODEL, describeSignInWays, isProviderRunner, runnerEntryReadiness, setsUpKey, signInAction, signInOfVerdict,
+  SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_SIGN_IN, type RunnerSignIn,
+} from '@ordewell/core/plan-utils';
 import type { FrameApi, Unregister } from '../../frame/api';
 import { THEME_CHOICES, type ThemePref } from '../../frame/themePref';
 import { daemonHost, type DaemonHost } from '../../session/DaemonHost';
@@ -23,6 +26,15 @@ const AUTONOMY = [
 ] as const;
 
 const SUPERVISORS: readonly SupervisorLevel[] = ['off', 'watch', 'act'];
+
+/**
+ * A runner row's ways in, read as the chat's picker reads them: a readiness
+ * blocked on a missing key marks them so, which the verdict alone may not.
+ */
+function rowSignIn(row: RunnerRow): RunnerSignIn | undefined {
+  const readiness = row.auth?.state === 'signed-out' ? runnerEntryReadiness(row) : undefined;
+  return (readiness?.kind === 'blocked' ? readiness.signIn : undefined) ?? signInOfVerdict(row.id, row.name, row.auth);
+}
 
 function Pills<T extends string | boolean>({ label, options, current, onPick }: {
   label: string;
@@ -183,8 +195,10 @@ function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
     if (isProviderRunner(row.id) && row.installed) return `The built-in runner, on your ${row.name} key`;
     const parts: string[] = [];
     const state = row.auth?.state;
-    const signIn = signInOfVerdict(row.id, row.name, row.auth);
-    if (state) parts.push(state === 'signed-in' ? 'Signed in' : state === 'signed-out' ? 'Signed out' : 'Sign-in unknown');
+    const signIn = rowSignIn(row);
+    // An agent that only lacks a key was never asked, so it is not signed out (ADR-0060).
+    const signedOut = setsUpKey(signIn) ? 'API key needed' : 'Signed out';
+    if (state) parts.push(state === 'signed-in' ? 'Signed in' : state === 'signed-out' ? signedOut : 'Sign-in unknown');
     const ways = signIn && state !== 'signed-in' ? describeSignInWays(signIn, TERMINAL_UI_SIGN_IN) : '';
     if (ways) parts.push(ways);
     if (row.reason) parts.push(row.reason);
@@ -242,9 +256,11 @@ function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
         </p>
         <ul className="settings-runners">
           {runnerRows.map((row) => {
-            const signIn = signInOfVerdict(row.id, row.name, row.auth);
+            const signIn = rowSignIn(row);
             const state = row.auth?.state;
             const action = state === 'signed-out' ? signInAction(signIn) : null;
+            // The same login, offered as the setup that stores a key Ordewell reads.
+            const setsUp = setsUpKey(signIn);
             return (
               <li key={row.id} className="settings-runner">
                 <Toggle
@@ -269,8 +285,8 @@ function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
                 {row.installed && (action === 'login' || signIn?.key) && (
                   <span className="settings-runner-actions">
                     {action === 'login' && (
-                      <Button size="sm" icon={LogIn} disabled={busy} onClick={() => { void host.handle({ type: 'loginPlanner', runner: row.id }); }}>
-                        Log in
+                      <Button size="sm" icon={setsUp ? KeyRound : LogIn} disabled={busy} onClick={() => { void host.handle({ type: 'loginPlanner', runner: row.id }); }}>
+                        {setsUp ? `Set up ${row.name}` : 'Log in'}
                       </Button>
                     )}
                     {signIn?.key && (

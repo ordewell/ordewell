@@ -1,4 +1,4 @@
-import { describeLoginStillBlocked, TERMINAL_UI_SIGN_IN, type RunnerSignIn } from '@ordewell/core/plan-utils';
+import { describeLoginStillBlocked, TERMINAL_UI_SIGN_IN, type RunnerSignIn, type SignInSyntax } from '@ordewell/core/plan-utils';
 
 /**
  * How long a sign-in is given, and how often the agent's own status command is
@@ -22,7 +22,7 @@ export interface SignInOutcome {
 export const signInUnconfirmed = (label: string): string =>
   `The login finished, but ${label} cannot say whether it is signed in. Send again to try it.`;
 /** A recheck still signed out: for an agent that only lacks a key, what Ordewell lacks, since the agent was never asked. */
-export const signInStillOut = (label: string, signIn?: RunnerSignIn): string => describeLoginStillBlocked(label, signIn, TERMINAL_UI_SIGN_IN);
+export const signInStillOut = (label: string, signIn?: RunnerSignIn, syntax: SignInSyntax = TERMINAL_UI_SIGN_IN): string => describeLoginStillBlocked(label, signIn, syntax);
 
 type AuthState = 'signed-in' | 'signed-out' | 'unknown';
 
@@ -47,6 +47,8 @@ export interface SignInWaitDeps {
   recheck?(): Promise<AuthState | { state: AuthState; signIn?: RunnerSignIn } | undefined>;
   /** The agent as the recheck's outcome names it. */
   label?: string;
+  /** How that outcome names the surface's ways in: the chat's /login unless the surface has buttons instead. */
+  syntax?: SignInSyntax;
 }
 
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -85,7 +87,7 @@ async function afterExit(deps: SignInWaitDeps, code: number | void): Promise<Sig
   const state = verdict?.state;
   if (state === 'signed-in') return { ok: true };
   const label = deps.label ?? 'The agent';
-  if (state === 'signed-out') return { ok: false, message: signInStillOut(label, verdict?.signIn) };
+  if (state === 'signed-out') return { ok: false, message: signInStillOut(label, verdict?.signIn, deps.syntax) };
   if (state === 'unknown') return { ok: false, message: signInUnconfirmed(label) };
   return { ok: false, message: SIGN_IN_CLOSED };
 }
