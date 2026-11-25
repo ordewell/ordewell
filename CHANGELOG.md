@@ -13,9 +13,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **`ordewell run` names `ordewell continue` where it answers a wait without
   the TUI.** The line for a task whose landing git refused now says that
   `ordewell continue <id> "<message>"` lands its kept work and runs nothing
-  again, and the line for a usage limit with no reset time that it resumes the
-  task in its saved session with the message, so a run in CI or a script can
-  be answered from the shell. A landing conflict and an ops task that changed
+  again, and the line for a usage limit with no reset time, when the paused
+  task has a saved session of its own runner, that it resumes the task in that
+  session with the message, so a run in CI or a script can be answered from
+  the shell; without such a session the line names the retry that releases the
+  task, and no continue. A landing conflict and an ops task that changed
   tracked files name none: `ordewell continue` refuses both, and only the
   TUI's `/inbox` adds a resolver task. Below Act, the line `ordewell run`
   starts with no longer lists only checkpoints, inputs and approvals among the

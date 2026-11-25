@@ -97,7 +97,9 @@ command that answers it and who can, and, at a task on hold or a manual task,
 the commands that release it. Where the TUI's `/inbox` is the place to answer
 a wait, the line also names the command that answers it without the TUI, if
 one does: `ordewell continue <id> "<message>"` lands the kept work of a task
-git refused to land and resumes one paused on a usage limit, while a landing
+git refused to land and resumes one paused on a usage limit when that task
+has a saved session of its own runner to resume (without one, the line names
+the retry or skip that releases it, and no continue), while a landing
 conflict (whose resolver task only the inbox adds) and an ops task that
 changed tracked files name only the retry, complete or skip that releases
 them. Below Act nobody answers such a wait unattended,

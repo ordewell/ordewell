@@ -219,7 +219,7 @@ export async function followExecution(
   const level = await sessionLevel(api, sessionId);
   if (level) {
     process.stderr.write(`· Supervisor: ${SUPERVISOR_LEVEL_LABEL[level]}.\n`);
-    if (level !== 'act') process.stderr.write('· A task waiting on a person waits until someone answers it: each such wait is named as it comes, with what answers it.\n');
+    if (level !== 'act') process.stderr.write('· A task waiting on a person waits until someone answers it.\n');
   }
   const summary = await followRun(api, sessionId, start, onBlocked, level, unattended);
   if (summary === 'waits') process.exitCode = RUN_WAITS_EXIT;
