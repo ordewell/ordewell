@@ -64,6 +64,25 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   lost.** The clear-up forgot the plan's run once git had finished, even when a
   start had opened a new one meanwhile, which left that run's branches with no
   record naming them.
+- **The desktop app no longer looks frozen while its daemon starts.** Before
+  its script has run, a window shows the Ordewell mark and "Starting
+  Ordewell…" on its own background instead of an empty page. A project window
+  waiting for the daemon is dimmed and busy as before, and after a moment a
+  card over it names the wait ("Starting Ordewell's daemon on port 3742…");
+  five seconds in, it adds where the daemon's log is, in the line `ordewell
+  tui` prints. The Sessions sidebar says the daemon is starting, not that it
+  is "back". Nothing becomes usable any sooner or later: every control still
+  waits for the daemon.
+- **The desktop app learns its daemon is up without probing a closed port.**
+  While the daemon it started comes up, the app reads the PID file the daemon
+  writes once it listens, then asks it once over HTTP. Before, it probed the
+  port every 250 ms, and on Windows each probe before the daemon listened was
+  refused only after about a second. Giving up after 15 seconds, a port
+  another program holds, a daemon someone else started and a refused token end
+  as they did.
+- **Checking which coding agents are installed and signed in, and which
+  models they offer, no longer flashes a console window on Windows** when the
+  daemon runs without one, as the desktop app's does.
 
 ## [0.14.12] - 2026-11-25
 

@@ -4,9 +4,29 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Ordewell</title>
+    <!--
+      What the window shows before the app's script has run: the mark and one
+      line, on the window's own background (main's canvasColour), so a slow
+      start never reads as a blank or frozen window. Plain style, which the
+      policy's style-src allows; no script. React replaces #root's contents
+      at its first render. The colours are theme.css's: --ow-bg, --ow-fg,
+      --ow-fg-secondary and --ow-area-planner, light and dark.
+    -->
+    <style>
+      html { background: #ffffff; }
+      .ow-boot { box-sizing: border-box; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; margin: 0; background: #ffffff; color: #1a1c1f; font: 13px/1.5 'Inter Variable', Inter, system-ui, -apple-system, 'Segoe UI', sans-serif; cursor: progress; user-select: none; }
+      .ow-boot-line { margin: 0; color: #525963; }
+      .ow-boot-dot { fill: #0b6f89; }
+      @media (prefers-color-scheme: dark) {
+        html { background: #1c1f23; }
+        .ow-boot { background: #1c1f23; color: #e6e8eb; }
+        .ow-boot-line { color: #a3a9b3; }
+        .ow-boot-dot { fill: #4fc0dc; }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><div class="ow-boot" role="status" data-boot-placeholder><svg viewBox="45 115 400 280" width="56" height="39.2" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"><path d="M 72 142 C 190 142 232 256 336 256" /><path d="M 72 256 L 336 256" /><path d="M 72 370 C 190 370 232 256 336 256" /></g><circle class="ow-boot-dot" cx="392" cy="256" r="40" /></svg><p class="ow-boot-line">Starting Ordewell…</p></div></div>
     <script type="module" src="./main.tsx"></script>
   </body>
 </html>
