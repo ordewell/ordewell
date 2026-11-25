@@ -7,8 +7,10 @@
  * the runner's listing, defaults, catalog and start read their provider
  * through `withHostCredentials`; nothing spawned is handed them. A host that
  * registers none, the daemon whose keys are its environment, reads that alone.
+ * The reader is shown the environment it lends over, so a credential it holds
+ * only as a fallback can give way to one that environment already has.
  */
-export type HostCredentialReader = () => Readonly<Record<string, string>>;
+export type HostCredentialReader = (env: Readonly<Record<string, string | undefined>>) => Readonly<Record<string, string>>;
 
 let reader: HostCredentialReader | undefined;
 
@@ -22,6 +24,6 @@ export function setHostCredentials(read: HostCredentialReader | undefined): void
  * provider: what the host holds wins, as the host's own planner config reads it.
  */
 export function withHostCredentials<E extends Readonly<Record<string, string | undefined>>>(env: E): E {
-  const held = reader?.();
+  const held = reader?.(env);
   return held && Object.keys(held).length > 0 ? { ...env, ...held } : env;
 }

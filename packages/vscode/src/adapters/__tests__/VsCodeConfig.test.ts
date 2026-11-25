@@ -435,7 +435,7 @@ describe('VsCodeConfig.heldProviderEnv: the keys lent to the built-in runner (AD
   it('lists and enables a provider keyed only in SecretStorage, with the environment left without it', async () => {
     const store = await makeStore({});
     const config = new VsCodeConfig(store);
-    setHostCredentials(() => config.heldProviderEnv());
+    setHostCredentials((env) => config.heldProviderEnv(env));
     const probe = new RunnerInstallation(new RunnerRegistry(), async () => ({ stdout: '' }));
     expect(await probe.isInstalled('anthropic')).toBe(false);
 
