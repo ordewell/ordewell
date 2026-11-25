@@ -383,10 +383,11 @@ export class ApiClient {
     return this.planOf('plans.converseMessageNow', 'Send now failed', { params: { sessionId }, body: { message, surface: this.surface } });
   }
 
-  getRunners(workspace?: string): Promise<RunnersResponse> {
+  getRunners(workspace?: string, options?: { recheck?: string }): Promise<RunnersResponse> {
     // The login verdict is asked about the account the planner will use, so a
     // daemon started elsewhere judges this workspace's `.envrc`, not its cwd's.
-    return this.call('runners.list', 'Failed to fetch runners', { query: { workspace: workspace ?? this.workspace } });
+    // `recheck` is the user's recovery for one runner's sign-in (ADR-0052).
+    return this.call('runners.list', 'Failed to fetch runners', { query: { workspace: workspace ?? this.workspace, ...(options?.recheck ? { recheck: options.recheck } : {}) } });
   }
 
   /** The full provider catalog the daemon has discovered (used by the TUI model picker). */

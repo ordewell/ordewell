@@ -7,7 +7,8 @@ import {
 } from '../PlanManager';
 import {
   getProviderMeta, PROVIDER_DETECT_PRIORITY, PlannerNotReadyError, recordRunnerAuth, recordedRunnerAuth, resetRunnerAuth,
-  type LegacyPlanState, type PlannerBackendId,
+  ModelResolver, RunnerInstallation, RunnerRegistry,
+  type DiscoveredModel, type LegacyPlanState, type PlannerBackendId,
 } from '@ordewell/core';
 import { VsCodeConfig } from '../../adapters/VsCodeConfig';
 import { SecretStore } from '../../adapters/SecretStore';
@@ -192,6 +193,33 @@ describe('recheckSignedOutPlanner', () => {
     await recheckSignedOutPlanner(h.deps);
 
     expect(h.plannerUsability).not.toHaveBeenCalled();
+  });
+});
+
+describe('recheckSignedOutPlanner for an agent with no status command (#46 F3)', () => {
+  afterEach(() => resetRunnerAuth());
+
+  it.each([
+    ['still refuses its session', 'signed-out' as const, 'signed-out'],
+    ['opens a session: signed in elsewhere', [] as DiscoveredModel[], 'signed-in'],
+  ])('asks Cursor by its own handshake when it %s, and the gate reads the answer', async (_what, answer, recorded) => {
+    recordRunnerAuth('cursor-agent', { state: 'signed-out', loginCommand: ['cursor-agent', 'login'] }, '/repo');
+    const registry = new RunnerRegistry();
+    const modelResolver = new ModelResolver(registry, config('cursor-agent', '', ''), { env: async () => ({}), acpClient: vi.fn(async () => answer), workspace: () => '/repo', execImpl: async () => ({ stdout: '' }) });
+    const installation = new RunnerInstallation(registry, async () => ({ stdout: '2026.10.22' }), Date.now, { launch: { platform: 'linux' }, workspace: () => '/repo' });
+    const refreshPlannerState = vi.fn(async () => undefined);
+
+    await recheckSignedOutPlanner({
+      config: config('cursor-agent', '', ''),
+      fsAdapter: { getWorkspaceRoot: () => '/repo' } as unknown as PlanManagerDeps['fsAdapter'],
+      runnerInstallation: installation,
+      modelResolver,
+      refreshPlannerState,
+    });
+
+    expect(recordedRunnerAuth('cursor-agent', '/repo')?.state).toBe(recorded);
+    expect(plannerPreflightError(config('cursor-agent', '', ''), '/repo') === null).toBe(recorded === 'signed-in');
+    expect(refreshPlannerState).toHaveBeenCalledTimes(recorded === 'signed-in' ? 1 : 0);
   });
 });
 

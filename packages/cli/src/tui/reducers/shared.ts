@@ -39,7 +39,7 @@ export type Effect =
   | { type: 'setAllowlist'; runner: string; modelIds: string[] }
   | { type: 'setRunnerEnabled'; runner: string; enabled: boolean }
   /** Hands the terminal to the login command a runner's manifest declared; `label` names it in the notice. */
-  | { type: 'plannerLogin'; command: readonly string[]; label: string }
+  | { type: 'plannerLogin'; command: readonly string[]; label: string; runner: string }
   /** Works out how `/update` would update this copy; answered with `updatePlanned` (ADR-0048). */
   | { type: 'planUpdate' }
   /** Exits the TUI and runs the update on its terminal in its place. */
@@ -117,7 +117,8 @@ export type Effect =
    */
   | { type: 'answerTaskCheckpoint'; sessionId: string; taskId: string; answer: 'approve' | 'reject'; reason?: string; raiseTokens?: number; below?: true }
   /** Startup refreshes silently; only a typed `/refresh` sets `announce`. */
-  | { type: 'refresh'; announce?: boolean; sessionId?: string }
+  /** `recheck`: the runners whose sign-in the user asked to look at again, by an explicit /refresh (ADR-0052). */
+  | { type: 'refresh'; announce?: boolean; sessionId?: string; recheck?: string[] }
   /** The runners alone, as the daemon has them saved. */
   | { type: 'loadRunners' }
   /** The enabled runners and the allowlist, as they are saved now: what flags a task and ticks a picker. */

@@ -1,4 +1,4 @@
-import { ModelDiscovery, clearGeminiCache, type AcpClientImpl, type ExecImpl } from './ModelDiscovery';
+import { ModelDiscovery, clearGeminiCache, type AcpClientImpl, type ExecImpl, type UnlistedReason } from './ModelDiscovery';
 import { ModelCatalog } from './ModelCatalog';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type { RunnerEnv } from '../plugins/types';
@@ -17,6 +17,8 @@ export interface ModelResolverDeps {
   /** The environment runners are launched with, which can move a runner's own files (`CLAUDE_CONFIG_DIR`). Defaults to this process's. */
   env?: () => Promise<RunnerEnv>;
   acpClient?: AcpClientImpl;
+  /** The workspace whose account `env` is: an ACP answer discovery hears is recorded under it as the sign-in verdict (ADR-0052). */
+  workspace?: () => string | undefined;
 }
 
 /** The vendor catalogs, which no runner environment changes. */
@@ -52,7 +54,7 @@ export class ModelResolver {
     private config: IConfig,
     deps: ModelResolverDeps = {}
   ) {
-    this.discovery = new ModelDiscovery(registry, deps.execImpl, deps.fetchImpl, undefined, undefined, undefined, deps.env, deps.acpClient);
+    this.discovery = new ModelDiscovery(registry, deps.execImpl, deps.fetchImpl, undefined, undefined, undefined, deps.env, deps.acpClient, deps.workspace);
     this.fetchImpl = deps.fetchImpl;
     this.execImpl = deps.execImpl;
     this.acpClient = deps.acpClient;
@@ -71,10 +73,10 @@ export class ModelResolver {
    * its first ask: a later ask with the same key gets that view, whatever
    * `env` it passes.
    */
-  withRunnerEnv(key: string, env: () => Promise<RunnerEnv>): ModelResolver {
+  withRunnerEnv(key: string, env: () => Promise<RunnerEnv>, workspace: () => string | undefined = () => key): ModelResolver {
     let view = this.shared.views.get(key);
     if (!view) {
-      view = new ModelResolver(this.registry, this.config, { fetchImpl: this.fetchImpl, execImpl: this.execImpl, acpClient: this.acpClient, env });
+      view = new ModelResolver(this.registry, this.config, { fetchImpl: this.fetchImpl, execImpl: this.execImpl, acpClient: this.acpClient, env, workspace });
       view.shared = this.shared;
       this.shared.views.set(key, view);
     }
@@ -166,12 +168,25 @@ export class ModelResolver {
    * alone cannot fill its list. Empty when no runner said why.
    */
   getRunnerDiscoveryErrors(): Record<string, string> {
-    return Object.fromEntries(Object.keys(this.discovery.whyUnlisted()).map((runner) => {
+    const blocked = Object.entries(this.discovery.whyUnlisted()).filter(([, why]) => why === 'signed-out' || why === 'no-credential');
+    return Object.fromEntries(blocked.map(([runner, why]) => {
+      const refused = why === 'no-credential' ? this.discovery.credentialRefusal(runner) : undefined;
+      if (refused) return [runner, refused];
       const manifest = this.registry.getManifest(runner);
       // Worded as a refused start is, from the one RunnerSignIn every surface
       // reads, so an empty list offers the same ways in (ADR-0052).
       return [runner, manifest ? describeSignIn(runnerSignIn(manifest), TERMINAL_UI_SIGN_IN) : `${runner} is not signed in.`];
     }));
+  }
+
+  /**
+   * Why each runner lists nothing in this resolver's environment, every kind
+   * told apart (#46 F6): the blockers {@link getRunnerDiscoveryErrors} words,
+   * `pending` while discovery runs, `no-answer`, and `no-choice`, an agent
+   * that runs on its own default model. Never triggers discovery.
+   */
+  getRunnerUnlisted(): Record<string, UnlistedReason> {
+    return this.discovery.whyUnlisted();
   }
 
   async refresh(): Promise<ProviderModelLists> {
@@ -182,6 +197,17 @@ export class ModelResolver {
     }
     this.config.setProviderModelLists(lists);
     return lists;
+  }
+
+  /**
+   * Ask one runner for its catalog afresh in this resolver's environment, as
+   * a user's recheck of its sign-in does: its ACP handshake is the cheap
+   * check a status-less agent has, and discovery records what it answers
+   * (ADR-0052). Never called by a periodic refresh.
+   */
+  async rediscoverRunner(runner: RunnerId): Promise<DiscoveredModel[]> {
+    this.discovery.forget(runner);
+    return (await this.modelsForRunners([runner]))[runner] ?? [];
   }
 
   /** Forget every runner catalog, each workspace's included; the vendor catalogs stay. */

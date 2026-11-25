@@ -1398,9 +1398,12 @@ export class DaemonHost {
       return;
     }
 
+    let rechecked = false;
     const outcome = await waitForSignIn({
       ended: terminal.ended,
       signedIn: () => this.runnerSignedIn(runner),
+      recheck: () => { rechecked = true; return this.recheckRunner(runner); },
+      label,
       ...(this.options.pollMs !== undefined ? { pollMs: this.options.pollMs } : {}),
       ...(this.options.loginTimeoutMs !== undefined ? { timeoutMs: this.options.loginTimeoutMs } : {}),
       ...(this.options.sleep !== undefined ? { sleep: this.options.sleep } : {}),
@@ -1412,8 +1415,16 @@ export class DaemonHost {
       this.emit({ type: 'plannerLoginEnded', runner, ok: true });
       return;
     }
+    // A recheck changed what the daemon records, so both roles are redrawn from it.
+    if (rechecked) await this.refreshCatalog();
     this.emit({ type: 'plannerLoginEnded', runner, ok: false, ...(outcome.message ? { message: outcome.message } : {}) });
     if (outcome.message === SIGN_IN_TIMEOUT) this.view.conversation.note('system', SIGN_IN_TIMEOUT);
+  }
+
+  /** The daemon's recheck of one runner's sign-in, the user's recovery after a login that exited cleanly (ADR-0052). */
+  private async recheckRunner(runner: string): Promise<'signed-in' | 'signed-out' | 'unknown' | undefined> {
+    const list = await callDaemon('runners.list', { workspace: this.workspace, recheck: runner });
+    return list.runners.find((entry) => entry.id === runner)?.auth?.state;
   }
 
   /**

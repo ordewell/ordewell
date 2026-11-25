@@ -48,8 +48,12 @@ function dispatchCommand(state: TuiState, parsed: ParsedCommand): Step {
         : step({ ...state, overlay: { kind: 'record', scroll: 0, ...(args[0] ? { all: true } : {}) } });
     case 'quit':
       return step({ ...state, exiting: true }, [{ type: 'exit' }]);
-    case 'refresh':
-      return step(state, [{ type: 'refresh', announce: true, ...(state.sessionId ? { sessionId: state.sessionId } : {}) }]);
+    case 'refresh': {
+      // An explicit /refresh is the user's retry for every agent a refusal
+      // left signed out: a periodic reload keeps the refusal (ADR-0052).
+      const recheck = state.runners.filter((r) => r.auth?.state === 'signed-out').map((r) => r.id);
+      return step(state, [{ type: 'refresh', announce: true, ...(state.sessionId ? { sessionId: state.sessionId } : {}), ...(recheck.length > 0 ? { recheck } : {}) }]);
+    }
 
     case 'run':
       return withSession(state, (sessionId) => startPlan(state, sessionId));
@@ -490,7 +494,7 @@ function login(state: TuiState, args: string[]): Step {
   if (command && command.length > 0) {
     // Offered even when the probe says signed in: an explicit /login may be a
     // re-authentication, and this is the user's request rather than a guess.
-    return step(state, [{ type: 'plannerLogin', command, label: row.name }]);
+    return step(state, [{ type: 'plannerLogin', command, label: row.name, runner: row.id }]);
   }
 
   // The agent's own route, or the key it can be handed: the same ways in the

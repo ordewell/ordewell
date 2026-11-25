@@ -195,11 +195,15 @@ export function signedOutFromFailure(manifest: RunnerManifest, message: string, 
     return undefined;
   }
   if (state !== 'signed-out') return undefined;
-  const signIn = runnerSignIn(manifest);
+  return signedOutAuth(runnerSignIn(manifest));
+}
+
+/** The signed-out verdict for an agent whose ways in are `signIn`, as a refused start or turn records it. */
+export function signedOutAuth(signIn: RunnerSignIn, detail = 'not logged in'): SignedOutAuth {
   return {
-    state,
+    state: 'signed-out',
     ...(signIn.login ? { loginCommand: [...signIn.login] } : {}),
-    detail: 'not logged in',
+    detail,
     signIn,
   };
 }
@@ -215,6 +219,36 @@ function verdictFromExit(spec: RunnerAuthSpec, output: string, code: number): 's
 }
 
 /**
+ * What a recorded verdict rests on (ADR-0052). `status` is the runner's own
+ * status command, or no command at all, which answers `unknown`; `turn` is a
+ * planner turn or a task, including an ACP session the agent refused or
+ * opened as it started; `discovery` is model discovery's own ACP handshake or
+ * credential hook. Only `status` can answer `unknown` over a verdict: a turn's
+ * or a discovery's is evidence, and a status-less agent's probe is none.
+ */
+export type RunnerAuthSource = 'status' | 'turn' | 'discovery';
+
+/** A recorded verdict with where it came from and when that evidence was asked for. */
+export interface RunnerAuthEvidence {
+  auth: RunnerAuth;
+  source: RunnerAuthSource;
+  /** The {@link runnerAuthClock} reading when the check began: a later one outranks it. */
+  asOf: number;
+}
+
+export interface RecordRunnerAuthOptions {
+  /** Defaults to `turn`: every caller but the status probe records what an agent answered in work. */
+  source?: RunnerAuthSource;
+  /**
+   * When the check that produced it began, from {@link runnerAuthClock}. A
+   * probe or discovery that overlapped a newer answer, or a user's recheck,
+   * login or key since, is dropped rather than recorded over it. Defaults to
+   * now, which is right for an answer that is already in.
+   */
+  asOf?: number;
+}
+
+/**
  * The latest verdict per runner and workspace, because a planner readiness
  * check is synchronous and cannot await a probe, and because one daemon can
  * serve several workspaces whose accounts differ (ADR-0016). Follows
@@ -223,7 +257,17 @@ function verdictFromExit(spec: RunnerAuthSpec, output: string, code: number): 's
  * A caller with no workspace — a test, or a host that only ever plans in its
  * own cwd — reads and writes the unscoped entry.
  */
-const recorded = new Map<string, RunnerAuth>();
+const recorded = new Map<string, RunnerAuthEvidence>();
+/** When a user's recheck or login last cleared each key, so an answer asked before it is not recorded after it. */
+const clearedAt = new Map<string, number>();
+/** When a saved key last cleared every signed-out verdict (ADR-0060, R9). */
+let signedOutClearedAt = 0;
+let clock = 0;
+
+/** A monotonic reading to stamp a check with as it begins: what {@link RecordRunnerAuthOptions.asOf} takes. */
+export function runnerAuthClock(): number {
+  return ++clock;
+}
 
 function recordKey(runner: string, workspace?: string): string {
   // Resolved on both sides, since a request may name a relative workspace while
@@ -231,12 +275,49 @@ function recordKey(runner: string, workspace?: string): string {
   return workspace ? `${resolve(workspace)}\u0000${runner}` : runner;
 }
 
-export function recordRunnerAuth(runner: string, auth: RunnerAuth, workspace?: string): void {
-  recorded.set(recordKey(runner, workspace), auth);
+/**
+ * Record `auth` unless the record already holds better evidence: an answer
+ * asked before the one recorded, or before a user cleared it, is stale, and
+ * a status probe's `unknown` never replaces what a turn or discovery said
+ * (#46 F1: refresh and the TTL turned a refused Cursor back into a harmless
+ * unknown, and the agent was offered and spawned again). Only a definitive
+ * newer answer, a saved key, a finished login or an explicit recheck replace
+ * such a verdict. Returns whether it was recorded.
+ */
+export function recordRunnerAuth(runner: string, auth: RunnerAuth, workspace?: string, options: RecordRunnerAuthOptions = {}): boolean {
+  const key = recordKey(runner, workspace);
+  const asOf = options.asOf ?? runnerAuthClock();
+  const source = options.source ?? 'turn';
+  if (asOf < (clearedAt.get(key) ?? 0)) return false;
+  if (auth.state === 'signed-out' && asOf < signedOutClearedAt) return false;
+  const held = recorded.get(key);
+  if (held && asOf < held.asOf) return false;
+  if (held && auth.state === 'unknown' && held.source !== 'status' && held.auth.state !== 'unknown') return false;
+  recorded.set(key, { auth, source, asOf });
+  return true;
 }
 
 export function recordedRunnerAuth(runner: string, workspace?: string): RunnerAuth | undefined {
+  return recorded.get(recordKey(runner, workspace))?.auth;
+}
+
+/** The recorded verdict with its source, for a surface that words an agent's readiness (ADR-0052). */
+export function recordedRunnerEvidence(runner: string, workspace?: string): RunnerAuthEvidence | undefined {
   return recorded.get(recordKey(runner, workspace));
+}
+
+/**
+ * Forget one runner's verdict in one workspace, because its user asked to
+ * look again: a login that finished, or an explicit recheck. What it said
+ * before is no evidence about now, and an answer asked before this is not
+ * recorded after it; the next probe, discovery or turn records its own. A
+ * status-less agent then reads `unknown`, never signed in on a terminal's
+ * exit alone.
+ */
+export function forgetRunnerAuth(runner: string, workspace?: string): void {
+  const key = recordKey(runner, workspace);
+  recorded.delete(key);
+  clearedAt.set(key, runnerAuthClock());
 }
 
 /**
@@ -246,10 +327,13 @@ export function recordedRunnerAuth(runner: string, workspace?: string): RunnerAu
  * its own.
  */
 export function forgetSignedOutRunnerAuth(): void {
-  for (const [key, auth] of recorded) if (auth.state === 'signed-out') recorded.delete(key);
+  signedOutClearedAt = runnerAuthClock();
+  for (const [key, held] of recorded) if (held.auth.state === 'signed-out') recorded.delete(key);
 }
 
 /** For tests: the record is process-wide, so one case's verdict must not decide the next's. */
 export function resetRunnerAuth(): void {
   recorded.clear();
+  clearedAt.clear();
+  signedOutClearedAt = 0;
 }

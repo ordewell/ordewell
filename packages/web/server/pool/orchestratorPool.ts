@@ -67,6 +67,9 @@ import {
   PROVIDER_CREDENTIAL_ENV,
   removesCredential,
   forgetSignedOutRunnerAuth,
+  recheckRunnerSignIn,
+  verifyRunnerSignIn,
+  type RunnerRecheck,
   type PlannerBackendId,
   type PlannerModelCandidate,
   type PlannerSelectionChange,
@@ -123,7 +126,7 @@ export class SessionOpenElsewhereError extends Error {
  * test may hand in only the two probes; the real `RunnerInstallation` always
  * has it, and a refresh then re-probes a CLI installed since the last look.
  */
-type RunnerInstall = Pick<RunnerInstallation, 'filterInstalled' | 'plannerUsability' | 'runnerUsability'> & Partial<Pick<RunnerInstallation, 'refresh'>>;
+type RunnerInstall = Pick<RunnerInstallation, 'filterInstalled' | 'plannerUsability' | 'runnerUsability'> & Partial<Pick<RunnerInstallation, 'refresh' | 'recheck'>>;
 
 export interface OrchestratorPoolDeps {
   /** Inject acquisition boundaries without reading real accounts in host lifecycle tests. */
@@ -233,6 +236,8 @@ export class OrchestratorPool {
     this.suppliedModelResolver = deps.modelResolver !== undefined;
     this.modelResolver = deps.modelResolver ?? new ModelResolver(this.registry, new WebConfig(), {
       env: async () => ({ ...process.env, ...(await workspaceEnvOf(process.cwd())) }),
+      // What its ACP handshake hears is recorded for the account it asked (ADR-0052).
+      workspace: () => process.cwd(),
     });
     this.codexSandbox = deps.codexSandbox
       ?? new CodexSandboxAvailability(this.registry, { spawn: nodeSpawn, fetch: globalThis.fetch }, { cwd: process.cwd(), env: process.env });
@@ -1052,7 +1057,13 @@ export class OrchestratorPool {
    * runner can't be spawned. `workspace` names whose account the auth verdict
    * is about; without it the daemon's cwd stands in.
    */
-  async getInstalledRunners(workspace?: string): Promise<RunnersResponse['runners']> {
+  async getInstalledRunners(workspace?: string, { recheck = [] }: { recheck?: readonly string[] } = {}): Promise<RunnersResponse['runners']> {
+    // The user's own recovery (a finished login, or a recheck asked for) is
+    // asked before the list, so the list it answers already says what came of
+    // it; the list on its own keeps what a turn or discovery recorded. Only a
+    // registered runner is asked, so a request cannot spawn an unknown name.
+    const check = this.signInCheck(workspace);
+    await Promise.all(recheck.filter((runner) => this.registry.getManifest(runner)).map((runner) => recheckRunnerSignIn(runner, check)));
     // The runner list is the one place a user who just fixed their host looks
     // again, so every cached answer is asked afresh: the Codex sandbox, the
     // install verdicts, and the agent detection behind the no-choice defaults.
@@ -1115,9 +1126,23 @@ export class OrchestratorPool {
   private recheckSignedOutPlanner(workspace: string, provider: PlannerBackendId): Promise<void> | null {
     const runner = runnerForProvider(provider);
     if (!runner || recordedRunnerAuth(runner, workspace)?.state !== 'signed-out') return null;
+    // A status-less agent is asked by its own ACP handshake (ADR-0052): a
+    // refresh alone cannot replace its refusal, and it should not.
+    return verifyRunnerSignIn(runner, this.signInCheck(workspace)).then(() => undefined);
+  }
+
+  /** The probe and the catalog that judge `workspace`'s account, for {@link verifyRunnerSignIn} and {@link recheckRunnerSignIn}. */
+  private signInCheck(workspace: string | undefined): RunnerRecheck {
     const installation = this.installationFor(workspace);
-    installation.refresh?.();
-    return installation.plannerUsability(runner).then(() => undefined);
+    return {
+      installation: {
+        refresh: () => installation.refresh?.(),
+        recheck: (runner) => (installation.recheck ? installation.recheck(runner) : installation.runnerUsability(runner)),
+        runnerUsability: (runner) => installation.runnerUsability(runner),
+      },
+      resolver: this.resolverFor(workspace),
+      manifests: this.registry,
+    };
   }
 
   /**
