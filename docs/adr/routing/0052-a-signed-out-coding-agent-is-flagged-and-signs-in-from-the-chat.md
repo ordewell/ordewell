@@ -284,6 +284,18 @@ agent runs, and says how it ended; it opens the key entry for a key-based
 agent, and an agent with neither keeps the words alone. Nothing is sent again:
 the refused message waits in the composer.
 
+A planner turn that failed mid-session because its agent signed out (words the
+manifest declares, read by `explainSignedOut` below, or an ACP agent's
+auth-required answer to `session/prompt`, which arrives as the hint) is not a
+refusal: the turn was admitted and its failure is its reply, kept once in the
+transcript as before and replayed to the planner as before. That reply carries
+the agent's `RunnerSignIn` as data (`ConversationTurn.signIn`, then the
+transcript entry's and the `planner_message`'s `signIn`), and every surface
+draws its failure as the conversation's error, live and on reload, with the
+same Sign in under it; the narration before it stays the planner's. No banner
+repeats it, nothing is resent after a sign-in, and an ordinary reply that only
+talks about signing in carries none, since nothing reads a reply's words for it.
+
 ### When the verdict is stale
 
 A login can change while a host runs, and the gate reads a recording rather than
@@ -558,4 +570,5 @@ art for the TTL and the refresh trigger.
 - 2026-11-25 — a recorded verdict keeps its evidence: a status-less probe's `unknown` no longer erases a turn's or discovery's refusal on refresh or expiry; an ACP start refusal and discovery's handshake are recorded by type; the send recheck asks the handshake, and a finished login or explicit recheck (`runners.list?recheck=`) is the only reset.
 - 2026-11-25 — a refusal that names a signed-out agent offers that agent's Sign in on the Desktop and VS Code chat's error; a refused start reaches daemon clients as `runner_signed_out` with its `signIn`.
 - 2026-11-25 — one choice rule for every picker (`runnerChoice`): ready choices first, blocked ones kept visible with one status and their recovery; a new planner pick, runner switched on or task assignment of a signed-out, keyless or modelless runner is refused, and judged again at the daemon's write (`runner_not_ready`); choices already made are kept.
+- 2026-11-25 — a planner turn its agent ended signed out mid-session keeps its failure once as the conversation's error, carrying that agent's `signIn`, and the Desktop and VS Code chat offer its Sign in there.
 - 2026-11-25 — the Desktop and VS Code pickers read the same choice rule: each row's status and recovery in its capsule, a blocked row refused as a new pick but focusable, the model list told by readiness; VS Code judges its own picks with the daemon's `refuseBlockedPick`, and a refused pick offers that agent's Sign in.

@@ -8,6 +8,7 @@ import type { SupervisionMemorySnapshot } from '../services/LoopGuards';
 import type { SupervisorSnapshot } from '../services/Supervisor';
 import type { TaskLoop } from './Loop';
 import type { ModeRefusal } from '../services/modeRefusal';
+import type { RunnerSignIn } from '../services/signInHint';
 import { legacySkipOrigin, type SkipOrigin } from './SkipOrigin';
 import type { HandoffDigest } from './Handoff';
 import type { DelegatedBudget, TaskScope } from './Delegation';
@@ -748,6 +749,13 @@ export interface ConversationMessage {
    * entries saved before runs were kept, which reload as one message.
    */
   runs?: ReplyRun[];
+  /**
+   * A planner reply that is its runner's failure because its user is signed
+   * out, as the runner's manifest recognized it: that agent and its ways in,
+   * so a surface draws the failure as an error offering that sign-in without
+   * reading its words (ADR-0052). The entry is otherwise the reply it was.
+   */
+  signIn?: RunnerSignIn;
 }
 
 /**
