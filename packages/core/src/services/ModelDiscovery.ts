@@ -642,7 +642,9 @@ export class ModelDiscovery {
     if (!acp || acp.kind === 'no-answer') return;
     const options = { source: 'discovery' as const, asOf };
     if (acp.kind === 'signed-in' || acp.kind === 'no-choice') recordRunnerAuth(manifest.name, { state: 'signed-in' }, workspace, options);
-    else recordRunnerAuth(manifest.name, signedOutAuth(runnerSignIn(manifest), acp.kind === 'no-credential' ? 'no provider key' : undefined), workspace, options);
+    // A hook with no key never asked the agent, so its verdict says what is missing rather than a sign-out.
+    else if (acp.kind === 'no-credential') recordRunnerAuth(manifest.name, signedOutAuth({ ...runnerSignIn(manifest), needsKey: true }, 'no provider key'), workspace, options);
+    else recordRunnerAuth(manifest.name, signedOutAuth(runnerSignIn(manifest)), workspace, options);
   }
 
   private async discoverFromSources(manifest: RunnerManifest, env: RunnerEnv): Promise<{ models: DiscoveredModel[]; cacheable: boolean; acp?: AcpOutcome }> {

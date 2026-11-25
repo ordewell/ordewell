@@ -1,5 +1,5 @@
 import React, { createContext, useContext } from 'react';
-import { signInAction, type RunnerSignIn } from '@ordewell/core/plan-utils';
+import { setsUpKey, signInAction, type RunnerSignIn } from '@ordewell/core/plan-utils';
 import PlannerLoginAction from './PlannerLogin';
 
 /** The pills' own login state and actions, keyed by runner id, which every error's sign-in shares. */
@@ -28,11 +28,25 @@ export default function ErrorSignIn({ signIn }: { signIn: RunnerSignIn }) {
   const action = signInAction(signIn);
   const pending = actions.pending[runner] === true;
   const failure = actions.failure[runner];
-  if (actions.done[runner] === true) return <p className="error-sign-in-outcome" role="status">Signed in to {signIn.label}. Send your message again.</p>;
+  // An agent that only lacks a key Ordewell can hand it was never signed out: its login is a setup.
+  const setsUp = setsUpKey(signIn);
+  if (actions.done[runner] === true) {
+    return <p className="error-sign-in-outcome" role="status">{setsUp ? `${signIn.label} is set up.` : `Signed in to ${signIn.label}.`} Send your message again.</p>;
+  }
   return (
     <>
       {failure !== undefined && <p className="error-sign-in-outcome" role="status">{failure}</p>}
-      {action === 'login' && (
+      {action === 'login' && setsUp && (
+        <PlannerLoginAction
+          className="error-sign-in"
+          label={`Set up ${signIn.label}`}
+          pendingLabel="Setting up…"
+          pending={pending}
+          onLogIn={() => actions.onLogIn(runner)}
+          ariaLabel={pending ? `Setting up ${signIn.label}` : `Set up ${signIn.label} with a provider API key`}
+        />
+      )}
+      {action === 'login' && !setsUp && (
         <PlannerLoginAction
           className="error-sign-in"
           label="Sign in"

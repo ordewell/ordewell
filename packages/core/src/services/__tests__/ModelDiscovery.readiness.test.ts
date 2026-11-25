@@ -92,8 +92,11 @@ describe('ModelDiscovery readiness (#46 F4–F6)', () => {
     expect(client).not.toHaveBeenCalled();
     expect(resolver.getRunnerUnlisted()).toEqual({ cline: 'no-credential' });
     const said = resolver.getRunnerDiscoveryErrors().cline;
-    expect(said).toMatch(/^Cline has no provider key Ordewell can hand it: .*is missing\. Set the key of a provider Cline offers/);
-    expect(recordedRunnerEvidence('cline', '/w')).toMatchObject({ source: 'discovery', auth: { state: 'signed-out', signIn: { runner: 'cline' } } });
+    expect(said).toMatch(/^Cline has no provider key Ordewell can hand it: .*is missing\. Run `cline auth` and choose a provider with its API key \(a Cline or ClinePass account sign-in leaves no key Ordewell can read\)/);
+    // The verdict says the agent lacks a key, not that it refused, so a surface reading it alone words a setup.
+    expect(recordedRunnerEvidence('cline', '/w')).toMatchObject({ source: 'discovery', auth: {
+      state: 'signed-out', detail: 'no provider key', signIn: { runner: 'cline', label: 'Cline', login: ['cline', 'auth'], needsKey: true },
+    } });
   });
 
   it('words only the blockers as discovery errors: an agent default or a pending ask is no error', async () => {

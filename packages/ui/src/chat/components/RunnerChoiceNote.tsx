@@ -13,6 +13,7 @@ function recoveryName(kind: NonNullable<RunnerChoice['recovery']>['kind'], label
   switch (kind) {
     case 'sign-in': return pending ? `Signing in to ${label}` : `Sign in to ${label}`;
     case 'add-key': return `Add a key for ${label}`;
+    case 'set-up': return pending ? `Setting up ${label}` : `Set up ${label} with a provider API key`;
     case 'refresh-models': return `Refresh models for ${label}`;
     case 'retry': return `Retry loading models for ${label}`;
   }
@@ -47,6 +48,7 @@ export default function RunnerChoiceNote({ id, choice, label, title, recovery, c
           label={choice.recovery.label}
           onLogIn={recovery.run}
           pending={pending}
+          {...(choice.recovery.kind === 'set-up' ? { pendingLabel: 'Setting up…' } : {})}
           ariaLabel={recoveryName(choice.recovery.kind, label, pending)}
           title={recoveryName(choice.recovery.kind, label, pending)}
         />
