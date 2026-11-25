@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as os from 'os';
 import * as path from 'path';
 import { promises as nodeFs } from 'fs';
 import {
@@ -12,6 +13,7 @@ import type { ChatViewProvider } from '../providers/ChatViewProvider';
 import { forkConversation, rewindConversation, compactConversation } from '../plan/conversation';
 import { VsCodeConfig } from '../adapters/VsCodeConfig';
 import { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
+import { admitWorkspaceFolder, workspaceFolderRoot } from '../adapters/workspaceFolder';
 import { SecretStore, type ApiProvider } from '../adapters/SecretStore';
 import { configureModelAllowlist } from './configureModelAllowlist';
 import { registerContainers, type ContainersDeps } from './containers';
@@ -361,6 +363,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
   );
   context.subscriptions.push(
     vscode.commands.registerCommand('ordewell.saveSession', async () => {
+      if (!admitWorkspaceFolder()) return;
       const goal = await vscode.window.showInputBox({
         prompt: 'Session name (describes what you built)',
         placeHolder: deps.getCurrentGoal() || 'My session',
@@ -375,6 +378,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
   );
   context.subscriptions.push(
     vscode.commands.registerCommand('ordewell.loadSession', async () => {
+      if (!admitWorkspaceFolder()) return;
       const sessions = listSessions(deps.fsAdapter.getWorkspaceRoot());
       if (sessions.length === 0) {
         vscode.window.showInformationMessage('No previous sessions found.');
@@ -405,6 +409,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
   context.subscriptions.push(
     // Answers whether the session was opened, so a caller does not say it was.
     vscode.commands.registerCommand('ordewell.loadSessionById', async (sessionId: string): Promise<boolean> => {
+      if (!admitWorkspaceFolder()) return false;
       const loaded = loadSession(sessionId, deps.fsAdapter.getWorkspaceRoot());
       if (!loaded) {
         vscode.window.showErrorMessage('Failed to load session.');
@@ -494,7 +499,8 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         ? `ordewell-plan-${deps.getCurrentGoal().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)}.json`
         : 'ordewell-plan.json';
       const uri = await vscode.window.showSaveDialog({
-        defaultUri: vscode.Uri.file(path.join(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd(), defaultName)),
+        // With no folder the dialog opens in the home folder, not the extension host's cwd.
+        defaultUri: vscode.Uri.file(path.join(workspaceFolderRoot() ?? os.homedir(), defaultName)),
         filters: { JSON: ['json'] },
       });
       if (!uri) return;
