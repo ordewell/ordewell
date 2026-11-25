@@ -107,7 +107,9 @@ async function host(secrets: Record<string, string> = {}) {
     throw new Error('not installed');
   });
   const modelResolver = new ModelResolver(registry, config, { env: runnerEnv, workspace: () => ws, acpClient: acpClient as never, execImpl: exec as never });
-  const installation = new RunnerInstallation(registry, exec as never, Date.now, { env: () => workspaceEnvOf(ws), workspace: () => ws, authExec: exec as never });
+  // Judged as POSIX, where the fake `exec` answering is enough: on Windows the
+  // install check also searches the real PATH, which has no `cline`.
+  const installation = new RunnerInstallation(registry, exec as never, Date.now, { env: () => workspaceEnvOf(ws), workspace: () => ws, authExec: exec as never, launch: { platform: 'linux' } });
   const chatProvider = new Proxy({}, { get: (_t, k) => (k === 'then' ? undefined : () => {}) });
   const discovery = new ModelDiscovery({
     vscodeApi: { window: { showWarningMessage: vi.fn() } } as never,

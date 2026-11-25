@@ -214,8 +214,10 @@ describe('loginPlanner', () => {
     await loginPlanner(h.deps, 'cline');
 
     expect(h.terminal.options).toMatchObject({ shellPath: '/Users/me/.local/bin/cline', shellArgs: ['auth'] });
-    // The terminal's own PATH is the one the file was found on.
-    expect(h.terminal.options.env?.PATH).toBe('/opt/homebrew/bin:/Users/me/.local/bin:/usr/local/bin');
+    // The terminal's own PATH is the one the file was found on, under the
+    // host's spelling of the key (`Path` on Windows).
+    const pathKey = process.platform === 'win32' ? 'Path' : 'PATH';
+    expect(h.terminal.options.env?.[pathKey]).toBe('/opt/homebrew/bin:/Users/me/.local/bin:/usr/local/bin');
     expect(h.terminal.sent).toEqual([]);
   });
 
