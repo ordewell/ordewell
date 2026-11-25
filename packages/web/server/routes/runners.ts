@@ -13,7 +13,10 @@ export function runnersRoute(pool: OrchestratorPool) {
     // model are judged for the one that will plan rather than the daemon's cwd.
     try {
       const workspace = c.req.query('workspace');
-      const runners = await pool.getInstalledRunners(workspace);
+      // `recheck=<runner>` is the user's recovery for that runner's sign-in
+      // (a finished login, an explicit recheck), never a periodic list (ADR-0052).
+      const recheck = c.req.query('recheck')?.split(',').filter(Boolean);
+      const runners = await pool.getInstalledRunners(workspace, ...(recheck?.length ? [{ recheck }] : []));
       await pool.discoverPlannerCatalogs(undefined, workspace);
       const state = pool.getRunnerState(workspace);
       return c.json({

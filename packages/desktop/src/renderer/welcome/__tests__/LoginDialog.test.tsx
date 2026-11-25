@@ -64,6 +64,22 @@ describe('the launcher\'s login terminal', () => {
     await seen(/The terminal closed before sign-in finished\./);
   });
 
+  it('asks the daemon to recheck an agent with no status command once its login exits cleanly, and never calls that signed in (ADR-0052)', async () => {
+    const w = world(false);
+    w.daemon.call.mockImplementation(async (_route, params) => ok({
+      runners: [{ id: 'cursor-agent', name: 'Cursor', enabled: true, auth: { state: (params as { recheck?: string } | undefined)?.recheck ? 'unknown' : 'signed-out' } }],
+    }));
+    const onSignedIn = vi.fn();
+    render(<LoginDialog runner="cursor-agent" label="Cursor" platform="darwin" pollMs={5} onClose={vi.fn()} onSignedIn={onSignedIn} />);
+    await vi.waitFor(() => expect(w.events).toHaveLength(1));
+
+    act(() => w.events[0]!({ kind: 'exit', exitCode: 0 }));
+
+    await seen(/The login finished, but Cursor cannot say whether it is signed in\. Send again to try it\./);
+    expect(w.daemon.call).toHaveBeenCalledWith('runners.list', { recheck: 'cursor-agent' });
+    expect(onSignedIn).not.toHaveBeenCalled();
+  });
+
   it('pastes through the bridge, and says why a paste failed while the sign-in waits on', async () => {
     world(false);
     const readText = vi.fn(async (): Promise<ClipboardReadResult> => ({ ok: true, text: 'ABCD-1234' }));

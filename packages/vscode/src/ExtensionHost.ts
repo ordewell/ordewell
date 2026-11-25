@@ -319,6 +319,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
   function runPlannerLogin(runner?: string): Promise<void> {
     return loginPlanner({
       runnerInstallation: services.runnerInstallation,
+      modelResolver: services.modelResolver,
       runnerRegistry: services.runnerRegistry,
       config: services.config,
       workspaceRoot: () => services.fsAdapter.getWorkspaceRoot(),

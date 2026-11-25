@@ -1161,6 +1161,51 @@ describe('DaemonHost sign-in, keys and planner controls', () => {
     expect(daemon.calls('runners.list')).toHaveLength(reads);
   });
 
+  // ADR-0052, #46 F7: Cursor has no status command, so a poll for signed-in
+  // never ends; a login that exits cleanly is the user's recovery, asked of the
+  // daemon once as a recheck, and its answer, not the exit, is the verdict.
+  const cursor = (state: 'signed-out' | 'signed-in' | 'unknown') => ({
+    id: 'cursor-agent', name: 'Cursor', enabled: true,
+    auth: { state, loginCommand: ['cursor-agent', 'login'], signIn: { runner: 'cursor-agent', label: 'Cursor', login: ['cursor-agent', 'login'] } },
+  });
+
+  it.each([
+    ['unknown', { ok: false, message: 'The login finished, but Cursor cannot say whether it is signed in. Send again to try it.' }],
+    ['signed-in', { ok: true }],
+  ] as const)('asks the daemon to recheck a status-less agent once its login exits cleanly: %s', async (answer, ended) => {
+    const daemon = fakeDaemon({
+      'runners.list': (params) => ok({ runners: [cursor((params as { recheck?: string } | undefined)?.recheck ? answer : 'signed-out')], orchestratorModel: '' }),
+      'models.list': MODELS,
+      'settings.get': ok(SETTINGS),
+    });
+    const openLogin = vi.fn(async () => ({ ended: Promise.resolve(0) }));
+    const host = hostWithOptions({ openLogin, pollMs: 60_000 });
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+
+    await act(() => host.handle({ type: 'loginPlanner', runner: 'cursor-agent' }));
+
+    expect(seen).toContainEqual({ type: 'plannerLoginEnded', runner: 'cursor-agent', ...ended });
+    expect(daemon.calls('runners.list').filter(([params]) => (params as { recheck?: string } | undefined)?.recheck === 'cursor-agent')).toHaveLength(1);
+  });
+
+  it('keeps the blocker after a login that was cancelled: no recheck is asked', async () => {
+    const daemon = fakeDaemon({
+      'runners.list': ok({ runners: [cursor('signed-out')], orchestratorModel: '' }),
+      'models.list': MODELS,
+      'settings.get': ok(SETTINGS),
+    });
+    const openLogin = vi.fn(async () => ({ ended: Promise.resolve(130) }));
+    const host = hostWithOptions({ openLogin, pollMs: 60_000 });
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+
+    await act(() => host.handle({ type: 'loginPlanner', runner: 'cursor-agent' }));
+
+    expect(seen).toContainEqual({ type: 'plannerLoginEnded', runner: 'cursor-agent', ok: false, message: 'The terminal closed before sign-in finished.' });
+    expect(daemon.calls('runners.list').some(([params]) => (params as { recheck?: string } | undefined)?.recheck)).toBe(false);
+  });
+
   it('says when the login terminal cannot be opened, still clearing the pending state', async () => {
     fakeDaemon({
       'runners.list': ok({ runners: [codex('signed-out')], orchestratorModel: '' }),
