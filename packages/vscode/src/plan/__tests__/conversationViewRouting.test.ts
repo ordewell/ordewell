@@ -48,6 +48,34 @@ describe('planner events reach the webview through the conversation view', () =>
     ]);
   });
 
+  // ADR-0052: the runner's manifest named the turn's failure a sign-out; the webview offers that agent's sign-in from data.
+  it('draws a turn its runner ended signed out as one error carrying that agent\'s sign-in, and no second error', () => {
+    const signIn = { runner: 'claude-code', label: 'Claude Code', login: ['claude', 'auth', 'login'] };
+    const failed = 'Claude Code is not signed in. Sign in with /login claude-code, or run claude auth login. Then try again.\n\nNot logged in · Please run /login';
+    send(
+      { type: 'planner_turn_started', turnId: 't', prompt: 'add YAML' },
+      { type: 'planner_message', content: failed, timestamp: '', turnId: 't', signIn },
+      { type: 'planner_turn_ended', turnId: 't', outcome: 'message' },
+    );
+
+    expect(screen.blocks()).toEqual([
+      expect.objectContaining({ type: 'message', role: 'user', text: 'add YAML' }),
+      expect.objectContaining({ type: 'message', role: 'error', text: failed, signIn }),
+    ]);
+    expect(screen.posted.filter((m) => m.type === 'showError')).toEqual([]);
+  });
+
+  it('draws an ordinary reply about signing in as the planner\'s', () => {
+    send(
+      { type: 'planner_turn_started', turnId: 't', prompt: 'how do I sign in?' },
+      { type: 'planner_message', content: 'Run claude auth login if you are not logged in.', timestamp: '', turnId: 't' },
+      { type: 'planner_turn_ended', turnId: 't', outcome: 'message' },
+    );
+
+    expect(screen.blocks().at(-1)).toEqual(expect.objectContaining({ role: 'planner', text: 'Run claude auth login if you are not logged in.' }));
+    expect(screen.blocks().at(-1)).not.toHaveProperty('signIn');
+  });
+
   it('announces a task starting in the same words the TUI uses', () => {
     send({ type: 'task_started', taskId: 'x', order: 1, title: 'Add a parser', runner: 'claude-code' });
 
