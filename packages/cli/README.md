@@ -94,7 +94,13 @@ Act, that is after the closing turn the supervisor is woken to, and it keeps
 following if that turn continues the run. It prints the run's supervisor level,
 each action the supervisor takes, and, at a task waiting on a person, the
 command that answers it and who can, and, at a task on hold or a manual task,
-the commands that release it. Below Act nobody answers such a wait unattended,
+the commands that release it. Where the TUI's `/inbox` is the place to answer
+a wait, the line also names the command that answers it without the TUI, if
+one does: `ordewell continue <id> "<message>"` lands the kept work of a task
+git refused to land and resumes one paused on a usage limit, while a landing
+conflict (whose resolver task only the inbox adds) and an ops task that
+changed tracked files name only the retry, complete or skip that releases
+them. Below Act nobody answers such a wait unattended,
 so the run waits until someone does, and nobody does a manual task unattended
 at any level. `ordewell run --unattended` returns instead, with exit status 3,
 once the run waits on a person (a checkpoint, an input, an approval, a task on

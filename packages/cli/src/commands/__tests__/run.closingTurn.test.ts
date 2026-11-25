@@ -189,7 +189,7 @@ describe.each(['watch', 'off'] as const)('ordewell run at %s', (level) => {
     const { out, sentAtReturn, exitCode } = await run(level, [snapshot(level), complete(2, 0), concluded(2, 0)]);
 
     expect(sentAtReturn).toEqual(['run_snapshot', 'execution_complete', 'run_concluded']);
-    expect(out).toContain('· A task waiting on a person (a checkpoint, input or an approval) waits until someone answers it.\n');
+    expect(out).toContain('· A task waiting on a person waits until someone answers it: each such wait is named as it comes, with what answers it.\n');
     expect(out).not.toContain('closing turn');
     expect(exitCode ?? 0).toBe(0);
   });

@@ -367,9 +367,9 @@ const failed: Escalation = {
 /** The line each says as it is listed: what waits, on which task, and what answers it. */
 const OWN_WAITS: [string, Escalation, string][] = [
   ['a landing conflict', conflict, '· Landing conflict: #1 Migrate the schema: Its work could not land: it conflicts with what landed before it: `ordewell tui`, then `/inbox`, answers it, or `ordewell retry 1` or `ordewell skip 1` releases it and what needs it.'],
-  ['a landing git refused', landingFailed, '· Landing refused: #1 Migrate the schema: It passed, but git refused to land its work, which is kept. Fix what git said, then land it: `ordewell tui`, then `/inbox`, answers it, or `ordewell retry 1` or `ordewell skip 1` releases it and what needs it.'],
+  ['a landing git refused', landingFailed, '· Landing refused: #1 Migrate the schema: It passed, but git refused to land its work, which is kept. Fix what git said, then land it: `ordewell tui`, then `/inbox`, answers it, and so does `ordewell continue 1 "<message>"` without it, which lands the kept work and runs nothing again, the message unread; or `ordewell retry 1` or `ordewell skip 1` releases it and what needs it.'],
   ['an ops task that changed tracked files', filesChanged, '· Changed your checkout: #1 Migrate the schema: It changed tracked files in your checkout, and nothing was committed: `ordewell tui`, then `/inbox`, answers it, or `ordewell retry 1`, `ordewell complete 1` or `ordewell skip 1` releases it and what needs it.'],
-  ['a usage limit with no reset time', usageLimit, '· Usage limit: #1 Migrate the schema: Paused on its runner\'s usage limit, with no resume scheduled: `ordewell tui`, then `/inbox`, answers it, or `ordewell skip 1` releases it and what needs it.'],
+  ['a usage limit with no reset time', usageLimit, '· Usage limit: #1 Migrate the schema: Paused on its runner\'s usage limit, with no resume scheduled: `ordewell tui`, then `/inbox`, answers it, and so does `ordewell continue 1 "<message>"` without it, which resumes its saved session with the message; or `ordewell skip 1` releases it and what needs it.'],
 ];
 
 describe('ordewell run --unattended when a task\'s own wait holds the run', () => {
@@ -425,6 +425,20 @@ describe('ordewell run --unattended when a task\'s own wait holds the run', () =
       await follower.done;
       expect(process.exitCode).toBe(RUN_WAITS_EXIT);
     });
+  });
+
+  it('names no continue for a usage limit whose task has no saved session to resume, which core refuses', async () => {
+    const { api, send } = daemon('watch');
+    const follower = await run(api, ['--unattended']);
+
+    // What core lists when the paused task cannot be continued: a retry, not a resume.
+    send(update(waitingOnUser, { ...usageLimit, options: [RETRY_OPTION, SKIP_OPTION] }));
+    await vi.advanceTimersByTimeAsync(5_000);
+    await follower.done;
+
+    const out = written.join('');
+    expect(out).toContain('· Usage limit: #1 Migrate the schema: Paused on its runner\'s usage limit, with no resume scheduled: `ordewell tui`, then `/inbox`, answers it, or `ordewell retry 1` or `ordewell skip 1` releases it and what needs it.');
+    expect(out).not.toContain('ordewell continue');
   });
 
   it.each<SupervisorLevel>(['off', 'watch', 'act'])('keeps following at %s a run held on a usage limit that has a reset time: it resumes by itself', async (level) => {
