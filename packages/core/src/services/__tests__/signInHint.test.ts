@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { describeRunnerSignIn, describeSignIn, describeSignInWays, signInAction, signInOfVerdict } from '../signInHint';
+import { describeLoginStillBlocked, describeRunnerSignIn, describeSignIn, describeSignInWays, signInAction, signInOfVerdict } from '../signInHint';
 import { rewordSignIn, runnerSignIn, signedOutFromFailure } from '../runnerAuth';
 import { HEADLESS_CLI_COMMANDS, TERMINAL_UI_COMMANDS } from '../plannerReadiness';
 import { CURSOR_AGENT_MANIFEST } from '../../plugins/builtin/cursor-agent.manifest';
@@ -93,6 +93,22 @@ describe('the sign-in hint', () => {
     expect(signInOfVerdict('codex', 'Codex', { loginCommand: ['codex', 'login'] })).toEqual({ runner: 'codex', label: 'Codex', login: ['codex', 'login'] });
     expect(signInOfVerdict('codex', 'Codex', { loginCommand: [] })).toEqual({ runner: 'codex', label: 'Codex' });
     expect(signInOfVerdict('codex', 'Codex', undefined)).toBeUndefined();
+  });
+
+  it('re-words a keyless Cline\'s setup for the headless CLI, as it does a sign-out', () => {
+    const said = 'Cline has no provider API key Ordewell can hand it. Set it up with /login cline, or run cline auth, and choose an API provider and enter its key; an account sign-in alone is not enough. Then try again.';
+    expect(rewordSignIn(said, TERMINAL_UI_COMMANDS, HEADLESS_CLI_COMMANDS)).toBe(
+      'Cline has no provider API key Ordewell can hand it. Run cline auth and choose an API provider and enter its key; an account sign-in alone is not enough. Then try again.',
+    );
+  });
+
+  it('words a finished setup that still left no key as Ordewell\'s, and a real sign-out as the agent\'s', () => {
+    const cline = { runner: 'cline', label: 'Cline', login: ['cline', 'auth'] };
+    expect(describeLoginStillBlocked('Cline', { ...cline, needsKey: true }, TERMINAL_UI_COMMANDS)).toBe(
+      'The Cline setup finished, but Ordewell still has no provider API key it can hand Cline. Set it up with /login cline, or run cline auth, and choose an API provider and enter its key; an account sign-in alone is not enough.',
+    );
+    expect(describeLoginStillBlocked('Cline', cline, TERMINAL_UI_COMMANDS)).toBe('Cline still reports not logged in.');
+    expect(describeLoginStillBlocked('Cursor', undefined, TERMINAL_UI_COMMANDS)).toBe('Cursor still reports not logged in.');
   });
 
   it('leaves a message that names no sign-in as it was', () => {

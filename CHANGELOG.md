@@ -95,6 +95,14 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
+- **Cline's "API key needed" offers Set up Cline, and no longer blames Cline.**
+  When Ordewell has no provider key it can hand Cline, every picker, the send
+  refusal and the error banner offer Set up Cline, which runs `cline auth`, and
+  say to choose an API provider and enter its key. Add key now opens only the
+  key entry. In VS Code it used to run Cline's login under that name. A setup
+  that still leaves no key now says Ordewell lacks one, not "Cline still
+  reports not logged in." A Cline account sign-in alone is not enough, and the
+  words say so (ADR-0052, ADR-0060).
 - **The "tools failed on every call" notice is said only when it is true.**
   It ignores a Codex planner's `run_command` whose command ran and exited
   non-zero, and a turn whose calls were refused while the session holds a plan

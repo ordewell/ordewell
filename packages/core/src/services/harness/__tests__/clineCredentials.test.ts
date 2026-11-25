@@ -11,7 +11,7 @@ const KEY = 'sk-or-v1-cline-key-never-shown';
 const OTHER_KEY = 'sk-ant-other-provider-key';
 const ORDEWELL_KEY = 'sk-or-v1-ordewell-own-key-never-shown';
 
-const ROUTES = 'Set the key of a provider Cline offers, such as OpenRouter, in Ordewell with `/key-set`, or sign in with `cline auth` (a Cline or ClinePass account, or a provider\'s key), or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell\'s environment.';
+const ROUTES = 'Run `cline auth` and choose a provider with its API key (a Cline or ClinePass account sign-in leaves no key Ordewell can read), or save the key of a provider Cline offers, such as OpenRouter, with `/key-set` in the terminal or the Desktop app, or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell\'s environment.';
 const NONE = 'Cline has no provider key Ordewell can hand it: Ordewell holds none for a provider Cline offers, and ';
 
 let home: string;
@@ -72,6 +72,16 @@ describe('clineCredentials', () => {
     expect(await read({ CLINE_PROVIDER_SETTINGS_PATH: named })).toMatchObject({ CLINE_API_KEY: KEY });
     rmSync(named);
     expect(await refusal({ CLINE_PROVIDER_SETTINGS_PATH: named })).toBe(`${NONE}\`${named}\` is missing. ${ROUTES}`);
+  });
+
+  it('finds no key after a Cline account sign-in alone, which keeps an OAuth token rather than an API key', async () => {
+    // The entry Cline 3.0.74 saves for an account login (`saveProviderSettings(..., { tokenSource: 'oauth' })`),
+    // read from its shipped source: no live account login was run.
+    store({
+      version: 1, lastUsedProvider: 'cline', modes: {},
+      providers: { cline: { settings: { provider: 'cline', auth: { accessToken: KEY } }, updatedAt: '2026-11-25T10:00:00.000Z', tokenSource: 'oauth' } },
+    });
+    expect(await refusal()).toBe(`${NONE}the provider it last used (cline) has no key in \`${storePath}\`. ${ROUTES}`);
   });
 
   describe('with a provider configured in Ordewell', () => {

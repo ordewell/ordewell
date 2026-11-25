@@ -62,6 +62,10 @@ export interface RunnerSignInView {
   label: string;
   hint: string;
   logIn?: () => void;
+  /** Its login is the setup that stores a key Ordewell reads, not a sign-in (core's `setsUpKey`). */
+  setsUp?: boolean;
+  /** The vendor Ordewell's key entry hands this agent a key for, where it has one. */
+  keyProvider?: string;
 }
 
 interface TaskCardProps {

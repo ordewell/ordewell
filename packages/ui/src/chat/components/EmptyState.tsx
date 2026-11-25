@@ -14,6 +14,8 @@ export interface SignedOutPlannerRow {
   /** The agent's way in, worded by core's one sign-in hint (ADR-0052); absent, the row says only that it is signed out. */
   hint?: string;
   onLogIn?: () => void;
+  /** The login is the agent's setup for a key Ordewell reads, not a sign-in, and is named so. */
+  setsUp?: boolean;
   pending?: boolean;
   failure?: string;
 }
@@ -156,7 +158,9 @@ export default function EmptyState({ onLoadSession, runSettings, signedOut, isol
                   className="planner-login-btn"
                   onLogIn={row.onLogIn}
                   pending={row.pending}
-                  ariaLabel={row.pending ? `Signing in to ${row.label}` : `Log in to ${row.label}`}
+                  {...(row.setsUp
+                    ? { label: 'Set up', pendingLabel: 'Setting up…', ariaLabel: row.pending ? `Setting up ${row.label}` : `Set up ${row.label} with a provider API key` }
+                    : { ariaLabel: row.pending ? `Signing in to ${row.label}` : `Log in to ${row.label}` })}
                 />
               )}
             </div>

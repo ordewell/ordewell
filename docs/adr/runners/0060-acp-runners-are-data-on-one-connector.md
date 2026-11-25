@@ -375,11 +375,14 @@ the judge.
      of the entry it last used. Qwen reads its own settings and sign-in
      itself, so its hook answers nothing here.
   4. **A refusal naming both routes.** Cline's hook refuses the start before
-     anything is spawned, naming the store and the routes: "Set the key of a
-     provider Cline offers, such as OpenRouter, in Ordewell with `/key-set`, or
-     sign in with `cline auth` (a Cline or ClinePass account, or a provider's
-     key), or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell's
-     environment." Qwen learns it is signed out from its own `-32000`, and its
+     anything is spawned, naming the store and the routes: "Run `cline auth`
+     and choose a provider with its API key (a Cline or ClinePass account
+     sign-in leaves no key Ordewell can read), or save the key of a provider
+     Cline offers, such as OpenRouter, with `/key-set` in the terminal or the
+     Desktop app, or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell's
+     environment." An account sign-in keeps an OAuth token (`settings.auth`,
+     `tokenSource: "oauth"` in Cline 3.0.74), not the `apiKey` the hook reads,
+     and VS Code's own key entry is not lent to Cline, so neither is a route. Qwen learns it is signed out from its own `-32000`, and its
      profile's `signInRoute` adds Ordewell's route to the one its manifest
      names, as the terminal words it: "Qwen Code is not signed in. Run /key-set
      and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or
@@ -1347,3 +1350,4 @@ the private directory:
 - 2026-11-10 — R3: the live subagent probe passed for Qwen Code 0.27.1 and Cline 3.0.74 (OpenRouter `deepseek/deepseek-v4.1-flash`); Cline's `spawn_agent` was absent from the model's tools, so the refusal by name was not exercised live.
 - 2026-11-16 — R9: the routes and hints name `/key-set`, the key command's name now; `/key` stays an alias.
 - 2026-11-25 — R9: in VS Code, Cline's hook reads the keys saved in `~/.ordewell/.env`, each with its saved endpoint, for a vendor the spawn's variables lack; no other agent's hook reads them.
+- 2026-11-25 — R9: Cline's refusal names `cline auth` with a provider's key first, says a Cline or ClinePass account sign-in leaves no key it reads, and names `/key-set` only for the terminal and the Desktop app.

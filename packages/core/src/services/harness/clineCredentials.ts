@@ -49,7 +49,9 @@ const CLINE_PROVIDERS: Partial<Record<AiProvider, { id: string; baseUrl: string 
   stepfun: { id: 'stepfun', baseUrl: 'https://api.stepfun.com/v1' },
 };
 
-const ROUTES = 'Set the key of a provider Cline offers, such as OpenRouter, in Ordewell with `/key-set`, or sign in with `cline auth` (a Cline or ClinePass account, or a provider\'s key), or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell\'s environment.';
+// An account sign-in keeps an OAuth token, not a key this hook reads (Cline 3.0.74's
+// `settings.auth`), and VS Code's key entry keeps its keys from Cline, so neither is offered as a route.
+const ROUTES = 'Run `cline auth` and choose a provider with its API key (a Cline or ClinePass account sign-in leaves no key Ordewell can read), or save the key of a provider Cline offers, such as OpenRouter, with `/key-set` in the terminal or the Desktop app, or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell\'s environment.';
 
 /**
  * The hook a Cline profile carries: `CLINE_PROVIDER`, `CLINE_API_KEY` and,

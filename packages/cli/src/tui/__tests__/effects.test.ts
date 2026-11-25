@@ -1249,6 +1249,30 @@ describe('runner login', () => {
     expect(cancelled.api.getRunners).toHaveBeenCalledWith(undefined, undefined);
   });
 
+  it('says Ordewell still has no key for Cline when its setup finished and the recheck still finds none, never that Cline refused', async () => {
+    const clineLogin: Effect = { type: 'plannerLogin', command: ['cline', 'auth'], label: 'Cline', runner: 'cline' };
+    const signIn = { runner: 'cline', label: 'Cline', login: ['cline', 'auth'], needsKey: true as const };
+    const stillNoKey = { runners: [{
+      id: 'cline', name: 'Cline', enabled: true,
+      auth: { state: 'signed-out' as const, loginCommand: ['cline', 'auth'], detail: 'no provider key', signIn },
+      readiness: { kind: 'blocked' as const, why: 'no-credential' as const, signIn },
+    }], orchestratorModel: '' };
+    const finished = harness({ getRunners: vi.fn().mockResolvedValue(stillNoKey) }, { login: vi.fn(async () => ({ ok: true })) });
+
+    await runEffect(clineLogin, finished.deps);
+
+    expect(finished.api.getRunners).toHaveBeenCalledWith(undefined, { recheck: 'cline' });
+    expect(messageOf(finished.actions, 'notice')).toBe(
+      'The Cline setup finished, but Ordewell still has no provider API key it can hand Cline. Set it up with /login cline, or run cline auth, and choose an API provider and enter its key; an account sign-in alone is not enough.',
+    );
+
+    const cancelled = harness({ getRunners: vi.fn().mockResolvedValue(stillNoKey) }, { login: vi.fn(async () => ({ ok: false, message: 'cline exited with status 130.' })) });
+    await runEffect(clineLogin, cancelled.deps);
+    expect(messageOf(cancelled.actions, 'notice')).toBe(
+      'Cline has no provider API key Ordewell can hand it. Set it up with /login cline, or run cline auth, and choose an API provider and enter its key; an account sign-in alone is not enough. cline exited with status 130.',
+    );
+  });
+
   it('fails the effect when the login throws, so the runtime restores the terminal', async () => {
     const h = harness({}, {
       login: vi.fn(async () => {

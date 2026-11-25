@@ -211,7 +211,7 @@ export { DaemonStream, type ConnectedFrame, type DaemonFrame } from './utils/dae
 export { ReconnectBackoff } from './utils/reconnectBackoff';
 export { SessionNotFoundError, NoPlanError, AlreadyExecutingError } from './services/SessionErrors';
 export { LeaseHost, processLeaseHost, SessionHeldError, describeHeld, describeHolder, LEASE_HEARTBEAT_MS, LEASE_STALE_MS, type LeaseHostKind, type LeaseHostOptions, type SessionHeld, type SessionLease, type SessionLeaseRecord } from './services/sessionLease';
-export { describeRunnerSignIn, describeSignIn, describeSignInWays, RunnerCredentialRefusal, RunnerSignedOutError, signInAction, signInOf, signInOfVerdict, TERMINAL_UI_SIGN_IN, HEADLESS_CLI_SIGN_IN, type KeySignInRoute, type RunnerSignIn, type SignInSyntax } from './services/signInHint';
+export { describeLoginStillBlocked, describeRunnerSignIn, describeSignIn, describeSignInLead, describeSignInWays, RunnerCredentialRefusal, RunnerSignedOutError, setsUpKey, signInAction, signInOf, signInOfVerdict, TERMINAL_UI_SIGN_IN, HEADLESS_CLI_SIGN_IN, type KeySignInRoute, type RunnerSignIn, type SignInSyntax } from './services/signInHint';
 export { daemonWaitLine, DETECTING_AGENTS, DETECTING_AGENTS_DETAIL } from './services/startupWait';
 export { AGENT_DEFAULT_MODEL, AGENT_SIGN_IN_NOTE, agentInstallRoutes, describeUnusedPlanningKey, type AgentInstallRoute } from './services/plannerNotices';
 export { plannerNotReady, plannerNotReadyFor, describePlannerNotReady, PlannerNotReadyError, TERMINAL_UI_COMMANDS, CHAT_COMMANDS, HEADLESS_CLI_COMMANDS, type PlannerNotReady, type PlannerCommandSyntax, type PlannerReadinessConfig } from './services/plannerReadiness';

@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type * as vscode from 'vscode';
-import { augmentedPath, describeSignInWays, ExecutableNotFoundError, inProcessProvider, isExecutableResolved, planDirectLaunch, providerRunnerLoginNote, recheckRunnerSignIn, runnerForProvider, TERMINAL_UI_SIGN_IN, withPath, workspaceEnvOf, type INotification, type LaunchDeps, type ModelResolver, type PlannerBackendId, type RunnerInstallation, type RunnerRegistry } from '@ordewell/core';
+import { augmentedPath, describeLoginStillBlocked, describeSignInWays, ExecutableNotFoundError, inProcessProvider, isExecutableResolved, planDirectLaunch, providerRunnerLoginNote, recheckRunnerSignIn, runnerForProvider, TERMINAL_UI_SIGN_IN, withPath, workspaceEnvOf, type INotification, type LaunchDeps, type ModelResolver, type PlannerBackendId, type RunnerAuth, type RunnerInstallation, type RunnerRegistry } from '@ordewell/core';
 import type { HostToWebview } from '@ordewell/ui/protocol';
 
 const POLL_MS = 2_000;
@@ -308,17 +308,18 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
  */
 async function recheckAfterLogin(deps: PlannerLoginDeps, runner: string, label: string): Promise<{ ok: boolean; message?: string }> {
   const installation = deps.runnerInstallation;
-  let state: string | undefined;
+  let auth: RunnerAuth | undefined;
   try {
-    state = (await recheckRunnerSignIn(runner, {
+    auth = (await recheckRunnerSignIn(runner, {
       installation: { refresh: () => installation.refresh(), recheck: (r) => installation.recheck(r), runnerUsability: (r) => installation.runnerUsability(r) },
       ...(deps.modelResolver ? { resolver: deps.modelResolver } : {}),
       manifests: deps.runnerRegistry,
-    })).auth?.state;
+    })).auth;
   } catch (err) {
     deps.log?.(`The ${label} recheck after login failed: ${err instanceof Error ? err.message : String(err)}`);
     return { ok: false, message: PROBE_FAILED_MESSAGE };
   }
+  const state = auth?.state;
   if (state === 'signed-in') return { ok: true };
   // What the recheck recorded changed what both roles show, signed in or not.
   try {
@@ -326,7 +327,8 @@ async function recheckAfterLogin(deps: PlannerLoginDeps, runner: string, label: 
   } catch (err) {
     deps.log?.(`Planner state refresh after the ${label} recheck failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+  // A hook that still found no key never asked the agent, so the words say what Ordewell lacks.
   return state === 'signed-out'
-    ? { ok: false, message: `${label} still reports not logged in.` }
+    ? { ok: false, message: describeLoginStillBlocked(label, auth?.signIn, TERMINAL_UI_SIGN_IN) }
     : { ok: false, message: `The login finished, but ${label} cannot say whether it is signed in. Send again to try it.` };
 }
