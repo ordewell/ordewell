@@ -21,7 +21,7 @@ export default function PlanApprovalNote({ runSettings }: { runSettings?: HostRu
   if (!runSettings.run.autorun) {
     return (
       <div className="plan-approval-note" data-autorun="off">
-        <p className="plan-approval-text">Nothing runs until you approve the plan.</p>
+        <p className="plan-approval-text">Nothing runs until you run the plan.</p>
       </div>
     );
   }

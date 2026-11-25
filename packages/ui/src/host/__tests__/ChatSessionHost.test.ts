@@ -90,7 +90,7 @@ function harness(answer: (text: string, turn: ChatTurn) => TurnOutcome | Promise
   };
   const chat = new ChatSessionHost(conversation, port);
   return {
-    chat, conversation, state, turns, port, executed, asked, refused, events, merged,
+    chat, conversation, state, turns, port, executed, asked, refused, events, merged, posts,
     mergeCalls: () => mergeCalls,
     sent: () => turns.map((t) => [t.text, t.turn.now]),
     held: () => posts.filter((m): m is Extract<HostToWebview, { type: 'heldPrompts' }> => m.type === 'heldPrompts').at(-1)?.prompts ?? [],
@@ -98,6 +98,10 @@ function harness(answer: (text: string, turn: ChatTurn) => TurnOutcome | Promise
     userNotes: () => notes.mock.calls.filter(([role]) => role === 'user').map(([, text]) => text),
   };
 }
+
+/** The user's messages the chat draws. */
+const userBlocks = (conversation: ConversationViewHost): string[] =>
+  conversation.blocks.flatMap((b) => (b.type === 'message' && b.role === 'user' ? [b.text] : []));
 
 describe('ChatSessionHost', () => {
   it('holds a prompt typed while a turn holds the session, and sends one typed after it as the user\'s', async () => {
@@ -116,6 +120,77 @@ describe('ChatSessionHost', () => {
       { text: 'and add tests', turn: { now: false } },
     ]);
     expect(h.userNotes()).toEqual(['ship it', 'and add tests']);
+  });
+
+  // Refused before any turn started (planner_not_ready), nothing was sent:
+  // the message is not left drawn as the user's, and nothing has to be typed again.
+  it('takes a message refused before its turn back off the chat and gives it to the composer', async () => {
+    const h = harness(() => ({ ok: false, code: 'planner_not_ready' }));
+
+    await h.chat.send('Add a greeting module', true);
+
+    expect(h.unsent()).toEqual(['Add a greeting module']);
+    expect(userBlocks(h.conversation)).toEqual([]);
+  });
+
+  it('gives back what was held behind a refused message with it, and sends none of it into the same refusal', async () => {
+    const h = harness((text) => {
+      if (text === 'Add a greeting module') h.chat.hold('in Python');
+      return { ok: false, code: 'planner_not_ready' };
+    });
+
+    await h.chat.send('Add a greeting module', true);
+
+    expect(h.sent()).toEqual([['Add a greeting module', false]]);
+    expect(h.unsent()).toEqual(['Add a greeting module\nin Python']);
+    expect(h.held()).toEqual([]);
+    expect(userBlocks(h.conversation)).toEqual([]);
+  });
+
+  it('leaves a message whose turn started and then failed where it was drawn', async () => {
+    const h = harness(() => ({ ok: false }));
+
+    await h.chat.send('Add a greeting module', true);
+
+    expect(h.unsent()).toEqual([]);
+    expect(userBlocks(h.conversation)).toEqual(['Add a greeting module']);
+  });
+
+  it('sends a failed message again on Try Again, and its turn takes over the line and skill load drawn for it', async () => {
+    const skill = { invokedBy: 'user' as const, name: 'tdd', source: 'global' as const, path: '~/tdd/SKILL.md' };
+    let n = 0;
+    // Each turn opens with its message, as the session announces it; the first fails.
+    const h = harness((text) => {
+      const turnId = `t${++n}`;
+      h.conversation.receive({ type: 'planner_turn_started', turnId, prompt: text, skills: [skill] });
+      h.conversation.receive({ type: 'planner_turn_ended', turnId, outcome: n === 1 ? 'error' : 'message' });
+      return n === 1 ? { ok: false } : { ok: true };
+    });
+
+    await h.chat.send('/tdd add a login page', true);
+    await h.chat.sendAgain('/tdd add a login page');
+
+    expect(h.sent()).toEqual([['/tdd add a login page', false], ['/tdd add a login page', false]]);
+    expect(userBlocks(h.conversation)).toEqual(['/tdd add a login page']);
+    expect(h.conversation.blocks.filter((b) => b.type === 'skill_load')).toHaveLength(1);
+  });
+
+  // The held message's turn is a new one, as the user's own send is: the failed
+  // turn's Try Again is over, and pressed now it would draw that message twice.
+  it('tells the chat what was held went on its own, after the failed turn ahead of it and before its own turn', async () => {
+    const h = harness((text) => {
+      if (text === 'first') {
+        h.chat.hold('one');
+        return { ok: false };
+      }
+      expect(h.posts.filter((m) => m.type === 'heldPromptsSent')).toHaveLength(1);
+      return { ok: true };
+    });
+
+    await h.chat.send('first', true);
+    expect(h.posts.filter((m) => m.type === 'heldPromptsSent')).toHaveLength(1);
+
+    expect(h.sent()).toEqual([['first', false], ['one', false]]);
   });
 
   it('answers a button\'s message at once, neither held nor shown as the user\'s', async () => {

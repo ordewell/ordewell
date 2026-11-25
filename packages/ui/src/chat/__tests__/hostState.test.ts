@@ -95,6 +95,20 @@ describe('reduceHost gates', () => {
   });
 });
 
+describe('reduceHost when the host sends what was held', () => {
+  // Pressed after the held message's turn started, Try Again would draw the
+  // failed message a second time, and save it twice for a first turn.
+  it('ends the failed turn\'s error and the message Try Again would send again', () => {
+    const failed = reduceHost(INITIAL_HOST_STATE, msg({ type: 'showError', error: 'planner down', resend: 'Add a greeting module' }));
+    expect(failed.errorResend).toBe('Add a greeting module');
+
+    const next = reduceHost(failed, msg({ type: 'heldPromptsSent' }));
+
+    expect(next.error).toBe('');
+    expect(next.errorResend).toBeUndefined();
+  });
+});
+
 describe('reduceHost after the watchdog', () => {
   const busy = { ...INITIAL_HOST_STATE, isResearchActive: true };
   const alive = msg({ type: 'plannerTurnAlive' });

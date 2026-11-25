@@ -61,6 +61,7 @@ import { RUN_SETTINGS_DEFAULTS, runSettingsOf, type GlobalRunSettings, type User
 import { SkillsService } from './SkillsService';
 import { resolveSkillInvocation, type SkillInvocation } from './skillInvocation';
 import { plannedSkillLookup, type SkillCatalogLookup } from './taskSkills';
+import { claimTrailerDisclosure, TRAILER_DISCLOSURE } from './TrailerDisclosure';
 import { surfacePlan, type RunActivity, type RunMergeView, type RunView, type SessionBroadcaster, type SessionMessage, type SessionNotice } from './SessionMessage';
 import { EMPTY_RUN, reduceRun } from './runView';
 import { SessionEventRelay } from './SessionEventRelay';
@@ -570,6 +571,8 @@ export function createSession(deps: SessionDeps): Session {
     settings: deps.settings,
     // Read through the Session, which holds the plan; the catalog is built first.
     planRunners: (): RunnerId[] => session.planState?.runners ?? [],
+    // Read at each call, so an agent the runner list finds signed in again is offered again (ADR-0052).
+    withheld: (runner) => (recordedRunnerAuth(runner, deps.workspaceRoot())?.state === 'signed-out' ? 'signed out' : undefined),
     liveRunner: (taskId) => orchestrator.getAttempt(taskId) !== undefined,
   });
 
@@ -793,7 +796,7 @@ export class Session {
     skills: () => this.workspaceSkills().listSkills(),
     turnId: () => this.conversation.currentTurnId,
     recordSkillLoad: (skill) => this.conversation.recordPlannerSkill(skill),
-    liveCatalog: () => this.liveCatalog(),
+    liveCatalog: (runners) => this.liveCatalog(runners),
     checkPlan: async (tasks) => {
       // Discovered first: a model is resolved against what the runner was found to offer.
       await this.liveCatalog();
@@ -1519,11 +1522,15 @@ export class Session {
    * rather than thrown: a Stop that took must not answer as refused.
    */
   private recordExecution(record: ExecutionRecord, text: string): void {
+    // The user's own act on the run answers a reply that waits on them (ADR-0053), and may move nothing else the list reads:
+    // with no such reply there is nothing for it to clear, and no update is owed.
+    const answers = record.actor === 'user' && this.plannerWaits().plannerWaits !== undefined;
     this.supervision.executed(record);
     this.mutatePlan(() => {
       this.conversation.recordExecution(record, text);
       return true;
     }, () => this.broadcast({ type: 'execution_action', record, text }), 'after');
+    if (answers) this.events.waitsMayHaveChanged(this.plan);
   }
 
   /** Whether the user approved this task to run; see {@link ApprovalRecord.isApproved}. */
@@ -1853,6 +1860,8 @@ export class Session {
           return true;
         });
         this.broadcast({ type: 'isolation_merge', result, trigger });
+        // No confirmation was asked of an automatic merge, so the trailer is disclosed beside it (ADR-0030).
+        if (result.outcome === 'merged' && claimTrailerDisclosure({ trailerOn: this.plannedWithTrailer() })) this.notice('info', TRAILER_DISCLOSURE);
         this.announceClosed();
         if (result.outcome !== 'merged') this.supervision.observe({ kind: 'auto_merge_stopped', ...(taskId === undefined ? {} : { taskId }), detail: mergeStopped(result) });
       },
@@ -2053,8 +2062,8 @@ export class Session {
   }
 
   /** What a planner may assign right now; see {@link SessionCatalog.live}. */
-  liveCatalog(): Promise<TaskQueryCatalog> {
-    return this.catalog.live();
+  liveCatalog(runners?: readonly RunnerId[]): Promise<TaskQueryCatalog> {
+    return this.catalog.live(runners);
   }
 
   get planState(): LegacyPlanState | null { return this.plan; }
@@ -2176,14 +2185,14 @@ export class Session {
   }
 
   /**
-   * The runners a first turn may plan for. None requested means every enabled
+   * The runners a first turn may plan for. None requested means every offered
    * one, read here, after the planner gate: until the installed-agent probe
    * answers, the enabled default is a stale guess a request must not freeze.
    */
   private chosenRunners(requested: RunnerId[] | undefined): RunnerId[] {
-    const enabled = this.catalog.enabledRunners();
-    const chosen = requested ? requested.filter((r) => enabled.includes(r)) : enabled;
-    if (chosen.length === 0) throw new Error(noRunnerEnabled(enabled));
+    const offered = this.catalog.offeredRunners();
+    const chosen = requested ? requested.filter((r) => offered.includes(r)) : offered;
+    if (chosen.length === 0) throw new Error(noRunnerEnabled(offered, this.catalog.withheld().map((w) => w.reason)));
     return chosen;
   }
 
@@ -2271,6 +2280,8 @@ export class Session {
     const pending: PendingOpening = { held: [] };
     this.opening = pending;
     let opened: Promise<{ landed: LegacyPlanState; effects: TurnEffects }>;
+    let draft: LegacyPlanState | null = null;
+    const sent = this.resolveSkillInvocation(goal);
     try {
       // Wrapped: what this waits on is the opening's admission, not the opening.
       ({ opened } = await this.gate.admit('goal', options?.signal, () => {
@@ -2281,8 +2292,11 @@ export class Session {
         this.beginFreshPlanForTurn();
 
         const now = new Date().toISOString();
-        this.plan = { tasks: [], generatedAt: now, status: 'draft', runners: chosenRunners, lastUpdated: now };
-        return { opened: this.openTurn(() => this.conversation.start(this.resolveSkillInvocation(goal), () => this.conversationOpening(chosenRunners), options?.signal)) };
+        draft = { tasks: [], generatedAt: now, status: 'draft', runners: chosenRunners, lastUpdated: now };
+        this.plan = draft;
+        // Admitted, the goal is sent: saved now, so every surface lists the session while its first turn runs (ADR-0029).
+        this.turns.opened({ source: 'user', ...sent });
+        return { opened: this.openTurn(() => this.conversation.start(sent, () => this.conversationOpening(chosenRunners), options?.signal, () => this.turns.openingTaken())) };
       }));
     } catch (err) {
       // What was sent behind an opening that never opened shares its end: a
@@ -2301,17 +2315,38 @@ export class Session {
       if (this.orchestrator.startsPending) await this.saves.control(() => this.orchestrator.tick());
       return landed;
     } catch (err) {
-      if (err instanceof PlannerContextPausedError && this.plan) {
-        this.turns.waitOnPause({ source: 'user', ...this.resolveSkillInvocation(goal) });
-        return this.plan;
+      // A newer goal or another session replaced this one's plan: what this opening sent is not that plan's.
+      const plan = this.plan;
+      if (!plan || plan !== draft || this.opening !== pending) throw err;
+      if (err instanceof PlannerContextPausedError) {
+        this.turns.waitOnPause();
+        return plan;
       }
-      if (!(err instanceof PlannerUsageLimitError) || !this.plan) throw err;
-      // A goal its own submit_plan already answered is not sent again to be planned twice (ADR-0022 P2).
-      if (!err.answered) this.turns.waitOnLimit({ source: 'user', ...this.resolveSkillInvocation(goal) });
-      return this.plan;
+      if (err instanceof PlannerUsageLimitError) {
+        this.turns.waitOnLimit(err.answered === true);
+        return plan;
+      }
+      this.keepUnansweredOpening(err);
+      throw err;
     } finally {
       if (this.opening === pending) this.opening = null;
     }
+  }
+
+  /**
+   * The opening failed, or was stopped, after its goal was admitted: the
+   * session it was saved in stays, its goal the first message and the
+   * failure after it, for the user to read and answer (a reply replays the
+   * goal), on every surface and on reload.
+   */
+  private keepUnansweredOpening(err: unknown): void {
+    const goal = this.turns.openingEnded();
+    if (!goal) return;
+    const failure = err instanceof PlannerTurnStoppedError ? undefined : (err instanceof Error ? err.message : String(err)) || 'The planner\'s first turn failed.';
+    this.mutatePlan(() => {
+      this.conversation.recordUnansweredOpening({ text: goal.text, skills: goal.skills ?? [] }, goal.timestamp, failure);
+      return true;
+    });
   }
 
   /**
@@ -2535,6 +2570,7 @@ export class Session {
       readLimit: this.readLimit,
       approval: this.approvalPolicy,
       notice: (level, message) => this.notice(level, message),
+      holdsPlan: () => this.store.planTasks.length > 0,
       // No turn's stream: the agent spent it after the turn ended, so it is the session's.
       onUsage: (record) => this.events.progress({ type: 'usage', record }),
       plannerTools: {
@@ -3267,12 +3303,17 @@ export class Session {
 /**
  * The refusal of a goal with no enabled runner to plan for, with the way on:
  * the runners that are enabled when the request named others, else where to
- * turn one on or how to get one. Every surface shows it as it is.
+ * turn one on or how to get one. An enabled agent left out for its sign-in
+ * is named with why, and signing it in is a way on (ADR-0052). Every surface
+ * shows it as it is.
  */
-function noRunnerEnabled(enabled: readonly RunnerId[]): string {
-  const lead = 'None of the requested runners are enabled.';
+function noRunnerEnabled(enabled: readonly RunnerId[], withheld: readonly string[] = []): string {
+  const lead = withheld.length > 0
+    ? `None of the requested runners can be planned for. ${withheld.join('; ')}.`
+    : 'None of the requested runners are enabled.';
   const switchOn = 'under Runners (/runners in the terminal UI)';
   if (enabled.length === 0) {
+    if (withheld.length > 0) return `${lead} Sign in to one and send the goal again, or turn on another ${switchOn}.`;
     return `${lead} Turn one on ${switchOn}, or install a coding agent such as Claude Code or Codex and run /refresh.`;
   }
   const names = enabled.map((id) => RUNNER_LABELS[id] ?? id);

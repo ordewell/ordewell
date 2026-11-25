@@ -9,7 +9,7 @@ export default defineConfig({
     // Main and the pure renderer modules run in node; anything that renders gets a DOM.
     environment: 'node',
     environmentMatchGlobs: [['src/**/*.test.tsx', 'jsdom']],
-    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'e2e/**/*.test.ts'],
     setupFiles: [...sharedTest.setupFiles, 'src/renderer/test/setup.ts'],
     coverage: {
       provider: 'v8',

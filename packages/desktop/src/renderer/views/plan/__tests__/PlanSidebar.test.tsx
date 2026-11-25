@@ -40,7 +40,7 @@ describe('Sessions', () => {
     expect(await screen.findByRole('button', { name: /Ship the parser.*Running/ })).toBeInTheDocument();
   });
 
-  it('reads the open session\'s live run, Running n/m, where its saved plan still says Approved', async () => {
+  it('reads the open session\'s live run, Running n/m, where its saved plan still says approved', async () => {
     const daemon = fakeDaemon({
       'sessions.load': () => ok({ ok: true, plan: surfacePlan(TASKS, 'approved'), goal: 'Ship the parser' }),
       // The saved plan's status, which stays approved for as long as its run lasts.
@@ -50,7 +50,7 @@ describe('Sessions', () => {
     hosts.push(host);
     await act(() => host.open('s1'));
     render(<Sessions host={host} />);
-    expect(await screen.findByRole('button', { name: /Ship the parser.*Approved/ })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /Ship the parser.*Started · / })).toBeInTheDocument();
 
     await act(async () => {
       daemon.push('s1', { type: 'connected', sessionId: 's1' }, {
@@ -62,6 +62,64 @@ describe('Sessions', () => {
       });
     });
     expect(await screen.findByRole('button', { name: /Ship the parser.*Running 0\/1/ })).toBeInTheDocument();
+  });
+
+  // First-run review round 2, F5: the daemon lists a run whose tasks all ended as completed.
+  it('reads Settled for the open session once its run has finished', async () => {
+    let status = 'approved';
+    const daemon = fakeDaemon({
+      'sessions.load': () => ok({ ok: true, plan: surfacePlan(TASKS, 'approved'), goal: 'Ship the parser' }),
+      'sessions.list': () => ok([{ id: 's1', goal: 'Ship the parser', status, taskCount: 1, updatedAt: '2026-11-03T09:00:00.000Z' }]),
+    });
+    const host = new DaemonHost('/work/acme');
+    hosts.push(host);
+    await act(() => host.open('s1'));
+    render(<Sessions host={host} />);
+    const snapshot = (taskStatus: 'in_progress' | 'completed', running: boolean, seq: number) => ({
+      type: 'run_snapshot' as const, sessionId: 's1', stream: 'd1', seq,
+      view: {
+        tasks: [runTask({ id: 't1', order: 1, title: 'Parse the config', status: taskStatus })], runMerge: null, handoff: null, mergeResult: null,
+        activity: { starting: false, running, scheduled: running, resumable: false, advancesOnItsOwn: running },
+      },
+    });
+    await act(async () => { daemon.push('s1', { type: 'connected', sessionId: 's1' }, snapshot('in_progress', true, 0)); });
+    expect(await screen.findByRole('button', { name: /Ship the parser.*Running 0\/1/ })).toBeInTheDocument();
+
+    status = 'completed';
+    await act(async () => { daemon.push('s1', snapshot('completed', false, 1)); });
+
+    expect(await screen.findByRole('button', { name: /Ship the parser.*Settled · 1 task/ })).toBeInTheDocument();
+  });
+
+  // First-run review round 2, F6: a first turn that failed or was stopped keeps its session, with nothing drafted.
+  it('reads No plan yet, not Draft, for a kept session the planner drafted nothing in', async () => {
+    fakeDaemon({ 'sessions.list': () => ok([{ id: 's2', goal: 'Ship the parser', status: 'draft', taskCount: 0, updatedAt: '2026-11-03T09:00:00.000Z' }]) });
+    const host = new DaemonHost('/work/acme');
+    hosts.push(host);
+    render(<Sessions host={host} />);
+
+    const row = await screen.findByRole('button', { name: /Ship the parser/ });
+    expect(row).toHaveAccessibleName(expect.stringMatching(/No plan yet · 0 tasks/));
+    expect(row).not.toHaveAccessibleName(expect.stringMatching(/Draft/));
+  });
+
+  it('reads Planning, not Draft, for the open session while the planner works on its first message', async () => {
+    let sessionId = '';
+    const daemon = fakeDaemon({
+      // The daemon admits the goal and holds the turn: it lists the session as a draft with no tasks.
+      'plans.converseStart': (params) => new Promise(() => {
+        sessionId = (params as { sessionId: string }).sessionId;
+        daemon.push(sessionId, { type: 'planner_turn_started', turnId: 'turn-1', prompt: 'Ship the parser', startedAt: new Date().toISOString(), sessionId, stream: 'd1', seq: 1 });
+      }),
+      'sessions.list': () => ok(sessionId ? [{ id: sessionId, goal: 'Ship the parser', status: 'draft', taskCount: 0, updatedAt: '2026-11-03T09:00:00.000Z' }] : []),
+    });
+    const host = new DaemonHost('/work/acme');
+    hosts.push(host);
+    render(<Sessions host={host} />);
+
+    void host.handle({ type: 'sendMessage', text: 'Ship the parser', typed: true });
+
+    expect(await screen.findByRole('button', { name: /Ship the parser.*Planning · 0 tasks/ })).toBeInTheDocument();
   });
 
   it('says when nothing has been planned yet', async () => {
@@ -154,6 +212,10 @@ describe('sessionStatus', () => {
     expect(sessionStatus('completed')).toEqual({ status: 'passed', word: 'Settled' });
     expect(sessionStatus('running')).toEqual({ status: 'running', word: 'Running' });
     expect(sessionStatus('paused')).toEqual({ status: 'not-started', word: 'Paused' });
+  });
+
+  it('calls a plan that was run Started, never Approved: no plan-level approve is shown (one verb)', () => {
+    expect(sessionStatus('approved')).toEqual({ status: 'not-started', word: 'Started' });
   });
 });
 

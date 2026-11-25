@@ -1,4 +1,4 @@
-import { changeNames, readTaskDiff, type TaskDiffRead, type TaskDiffResult } from './taskDiffRead';
+import { changeNames, landedChange, readTaskDiff, type TaskDiffRead, type TaskDiffResult } from './taskDiffRead';
 import { randomBytes } from 'crypto';
 import { spawnSync } from 'child_process';
 import * as fs from 'fs';
@@ -40,7 +40,7 @@ import type {
   TreeSnapshot,
 } from '../interfaces/IWorktreeIsolation';
 import type { Task } from '../models/Task';
-import type { HandoffCommit } from '../models/Handoff';
+import type { HandoffChange, HandoffCommit } from '../models/Handoff';
 import { shellQuoted } from '../utils/shell';
 import { augmentedPath } from '../utils/shellPath';
 import { ensureStateDirIgnored, STATE_DIR } from '../utils/fsHelpers';
@@ -1525,6 +1525,12 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       }
     }
 
+    // Counted as it lands, while git can still say what this landing brought; a count git cannot give is none, never a guess.
+    const changes = new Map<string, HandoffChange>();
+    for (const [repo, tip] of landedTips) {
+      const change = await landedChange(this.gitInvoker, repo.root, tip).catch(() => undefined);
+      if (change) changes.set(repo.path, change);
+    }
     // A run that started without the record never gets one (recordCarried), so git is not asked for it.
     const carried = startedOlder(run) ? [] : await this.carriedIn(run, record, landedTips);
     const tookIn = await this.tookIn(run, record);
@@ -1539,6 +1545,11 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     delete record.conflictRepo;
     delete record.conflictFiles;
     delete record.landingError;
+    for (const [repoPath, entry] of Object.entries(record.repos)) {
+      const change = changes.get(repoPath);
+      if (change) entry.change = change;
+      else delete entry.change;
+    }
     // The work is on the integration branches already; a stuck cleanup must
     // not turn that into a failure. `pruneOrphans` sweeps up whatever it leaves.
     await this.admin(stateRootOf(run), () => this.removeTask(run, record, { dropRecord: false })).catch(() => undefined);

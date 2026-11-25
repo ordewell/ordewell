@@ -257,20 +257,20 @@ describe('the command seam: an unapproved plan or task never starts', () => {
       await env.run({ command: 'retry_task', task: 't1', from: 'fresh' }),
     ];
 
-    for (const result of results) expect(result).toMatchObject({ ok: false, outcome: 'refused', message: expect.stringMatching(/not approved/) });
-    expect(results[0].message).toBe(`The user has not approved this plan yet: they approve it themselves (${ANYWHERE.approvePlan}). Ask them to.`);
+    for (const result of results) expect(result).toMatchObject({ ok: false, outcome: 'refused', message: expect.stringMatching(/has not run this plan yet|has not approved task/) });
+    expect(results[0].message).toBe(`The user has not run this plan yet, and they run it themselves (${ANYWHERE.runPlan}). Ask them to.`);
     expect(env.spawn).not.toHaveBeenCalled();
     expect(env.cards()).toHaveLength(0);
   });
 
-  it('refuses a task added after the user approved the plan, until the user starts it themselves', async () => {
+  it('refuses a task added after the user ran the plan, until the user starts it themselves', async () => {
     const env = setup();
     env.session.loadPlan(plan([task('t1', 1), task('t2', 2)], { approvedTasks: ['t1'] }), 'goal', testWorkspace, { persist: false });
 
     expect((await env.run({ command: 'run_task', task: 't2' })).message)
-      .toBe('Task #2 "Task t2" was added after the user approved the plan, so it is not approved to run. Ask the user to start it, or to execute the plan, which approves it.');
+      .toBe('Task #2 "Task t2" was added after the user ran the plan, so it waits for them. Ask the user to start it, or to run the plan again.');
     expect((await env.run({ command: 'run_plan' })).message)
-      .toBe('Task #2 "Task t2" was added after the user approved the plan, so it is not approved to run. Ask the user to execute the plan themselves, which approves it.');
+      .toBe('Task #2 "Task t2" was added after the user ran the plan, so it waits for them. Ask the user to run the plan again themselves.');
     expect(env.spawn).not.toHaveBeenCalled();
 
     await env.session.execute({ command: 'force_start', task: 't2' }, { kind: 'user' });
@@ -883,7 +883,7 @@ describe('the command seam: a supervisor at Act', () => {
     const env = await guarded();
     env.session.loadPlan(plan([task('t1', 1), task('t9', 2)], { approvedTasks: ['t1'] }), 'goal', testWorkspace, { persist: false });
 
-    expect(await env.run({ command: 'run_task', task: 't9' }, ACT)).toMatchObject({ ok: false, message: expect.stringMatching(/added after the user approved the plan/) });
+    expect(await env.run({ command: 'run_task', task: 't9' }, ACT)).toMatchObject({ ok: false, message: expect.stringMatching(/added after the user ran the plan/) });
     expect(env.spawned('t9')).toHaveLength(0);
   });
 });
@@ -1064,21 +1064,21 @@ describe('the command seam: tasks started one by one with run_task', () => {
 
     const outcome = await env.run({ command: 'run_plan' });
 
-    expect(outcome).toEqual({ ok: true, message: 'The plan is running: task #1 "Task t1" is already running, and each approved task starts as its dependencies finish.' });
+    expect(outcome).toEqual({ ok: true, message: 'The plan is running: task #1 "Task t1" is already running, and each task in the run starts as its dependencies finish.' });
     expect(env.session.status).toBe('running');
     expect(env.spawned('t1')).toHaveLength(1);
     env.latest('t1').reportComplete({ status: 'done', summary: 'did t1' });
     await vi.waitFor(() => expect(env.spawned('t2')).toHaveLength(1));
   });
 
-  it('joins approving nothing: a task added after the user approved the plan stays theirs to approve, and the answer says so', async () => {
+  it('joins approving nothing: a task added after the user ran the plan stays theirs to approve, and the answer says so', async () => {
     const env = setup();
     env.session.loadPlan(plan([task('t1', 1), task('t2', 2, { dependencies: ['t1'] }), task('t3', 3, { title: 'Add divide' })], { approvedTasks: ['t1', 't2'] }), 'goal', testWorkspace, { persist: false });
     await env.run({ command: 'run_task', task: 't1' });
 
     const outcome = await env.run({ command: 'run_plan' });
 
-    expect(outcome).toEqual({ ok: true, message: 'The plan is running: task #1 "Task t1" is already running, and each approved task starts as its dependencies finish. Task #3 "Add divide" was added after the user approved the plan, so it waits until they start it or execute the plan.' });
+    expect(outcome).toEqual({ ok: true, message: 'The plan is running: task #1 "Task t1" is already running, and each task in the run starts as its dependencies finish. Task #3 "Add divide" was added after the user ran the plan, so it waits until they start it or run the plan again.' });
     expect(env.session.planState!.approvedTasks).toEqual(['t1', 't2']);
     env.latest('t1').reportComplete({ status: 'done', summary: 'did t1' });
     await vi.waitFor(() => expect(env.spawned('t2')).toHaveLength(1));
@@ -1092,7 +1092,7 @@ describe('the command seam: tasks started one by one with run_task', () => {
 
     const outcome = await env.run({ command: 'run_plan' });
 
-    expect(outcome).toEqual({ ok: false, outcome: 'refused', message: `The user has not approved this plan yet: they approve it themselves (${ANYWHERE.approvePlan}). Ask them to. Tasks started with run_task are not a scheduled run, so their dependents start only once the user executes the plan.` });
+    expect(outcome).toEqual({ ok: false, outcome: 'refused', message: `The user has not run this plan yet, and they run it themselves (${ANYWHERE.runPlan}). Ask them to. Tasks started with run_task are not a scheduled run, so their dependents start only once the user runs the plan.` });
     expect(env.session.status).not.toBe('running');
   });
 });
@@ -1210,7 +1210,7 @@ describe('the command seam\'s extension points', () => {
     const { commands } = seam({ host: { autonomous: () => false }, orchestrator: { getAttempt: attempts(false) }, approvals: { planApproved: false, isApproved: () => false } });
 
     expect((await commands.run({ command: 'run_task', task: 't1' }, PLANNER)).message)
-      .toBe('The user has not approved task #1 "Task t1": they approve the plan themselves (/approve), or a task by starting it (/force-start <id>). Ask them to.');
+      .toBe('The user has not run this plan yet, so task #1 "Task t1" does not start: they start it by running the plan themselves (/run), or by starting the task (/force-start <id>). Ask them to.');
   });
 
   /** Parts whose plan takes the script task `run_script` drafts, which then runs until its wait ends. */
@@ -1348,7 +1348,7 @@ describe('the command seam\'s extension points', () => {
   it('still refuses an unapproved task the plan holds to the Act supervisor', async () => {
     const { commands, host } = seam({ orchestrator: IDLE, approvals: { isApproved: () => false } });
 
-    expect(await commands.run({ command: 'run_task', task: 't1' }, { kind: 'supervisor', level: 'act' })).toMatchObject({ ok: false, outcome: 'refused', message: expect.stringContaining('not approved to run') });
+    expect(await commands.run({ command: 'run_task', task: 't1' }, { kind: 'supervisor', level: 'act' })).toMatchObject({ ok: false, outcome: 'refused', message: expect.stringContaining('so it waits for them') });
     expect(host.startTask).not.toHaveBeenCalled();
   });
 
@@ -1441,7 +1441,7 @@ describe('the command seam\'s extension points', () => {
     const { commands } = seam({ host: { autonomous: () => false }, orchestrator: IDLE, approvals: { isApproved: () => false } }, { consent: { request } });
 
     expect(await commands.run({ command: 'run_task', task: 't1' }, { kind: 'supervisor', level: 'act' })).toEqual({
-      ok: false, outcome: 'refused', message: 'Task #1 "Task t1" was added after the user approved the plan, so it is not approved to run. Ask the user to start it, or to execute the plan, which approves it.',
+      ok: false, outcome: 'refused', message: 'Task #1 "Task t1" was added after the user ran the plan, so it waits for them. Ask the user to start it, or to run the plan again.',
     });
     expect(request).not.toHaveBeenCalled();
   });
@@ -1452,7 +1452,7 @@ describe('the command seam\'s extension points', () => {
     const { commands, host } = seam({ host: { tasks: () => edited }, orchestrator: IDLE, approvals: { isApproved: (id) => id === 't1' } });
 
     expect(await commands.run({ command: 'run_plan' }, PLANNER)).toEqual({
-      ok: false, outcome: 'refused', message: 'Task #2 "Add divide" was added after the user approved the plan, so it is not approved to run. Ask the user to execute the plan themselves, which approves it.',
+      ok: false, outcome: 'refused', message: 'Task #2 "Add divide" was added after the user ran the plan, so it waits for them. Ask the user to run the plan again themselves.',
     });
     expect(host.runPlan).not.toHaveBeenCalled();
   });

@@ -31,8 +31,8 @@ describe.skipIf(!hasGit)('WorktreeIsolation end-of-run handoff', () => {
     const { root, iso, run } = await finishedRun();
     const handoff = await iso.handoff(run);
     const landed = [
-      { taskId: 'task-1', order: 1, title: 'Add alpha' },
-      { taskId: 'task-2', order: 2, title: 'Add beta' },
+      { taskId: 'task-1', order: 1, title: 'Add alpha', change: { files: 1, added: 1, removed: 0, binary: 0 } },
+      { taskId: 'task-2', order: 2, title: 'Add beta', change: { files: 1, added: 1, removed: 0, binary: 0 } },
     ];
     expect(handoff).toEqual({
       repos: [{ path: '.', integrationBranch: `ordewell/${run.id}/integration`, baseRef: git(root, 'rev-parse', 'HEAD'), baseBranch: 'main', landed }],

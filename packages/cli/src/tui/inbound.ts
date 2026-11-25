@@ -239,7 +239,7 @@ class TuiStream extends DaemonStream<TuiRead> {
     if (this.burst === null) return;
     const message = this.burst;
     this.burst = null;
-    this.dispatch({ type: 'sessionMessage', message, sessionId: this.sessionId });
+    this.dispatch({ type: 'sessionMessage', message, sessionId: this.sessionId, at: new Date().toISOString() });
   }
 
   protected loaded(read: TuiRead): StreamStamp | undefined {
@@ -304,7 +304,7 @@ class TuiStream extends DaemonStream<TuiRead> {
   private showReply(message: Extract<SessionMessage, { type: 'planner_message' }>): void {
     this.shown.add(replyKey(message.content, message.timestamp));
     this.shownTexts.add(message.content);
-    this.dispatch({ type: 'sessionMessage', message, sessionId: this.sessionId });
+    this.dispatch({ type: 'sessionMessage', message, sessionId: this.sessionId, at: new Date().toISOString() });
   }
 
   private conversation(event: ConversationMessage): void {
@@ -312,7 +312,7 @@ class TuiStream extends DaemonStream<TuiRead> {
       if (!this.pending.take(replyKey(event.content, event.timestamp))) this.showReply(event);
       return;
     }
-    this.dispatch({ type: 'sessionMessage', message: event, sessionId: this.sessionId });
+    this.dispatch({ type: 'sessionMessage', message: event, sessionId: this.sessionId, at: new Date().toISOString() });
     if (event.type !== 'plan_generated') return;
     // Every plan a turn lands, one this surface did not send included (a
     // supervisor's edit, an input replayed after a reload), and whichever

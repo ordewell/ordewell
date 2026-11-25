@@ -110,6 +110,6 @@ describe('the daemon keeps the user\'s plan approval across a run\'s end, a stop
     pool.adoptSavedSession(id, workspace);
 
     expect(await pool.session(id, undefined).execute({ command: 'run_plan' }, PLANNER))
-      .toMatchObject({ ok: false, message: expect.stringMatching(/has not approved this plan/) });
+      .toMatchObject({ ok: false, message: expect.stringMatching(/has not run this plan yet/) });
   });
 });

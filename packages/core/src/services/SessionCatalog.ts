@@ -9,8 +9,18 @@ import type { AssignmentScope } from './AssignmentScope';
 import { runnerForProvider } from './ProviderRegistry';
 import { withinLimits, type MandateLimits } from './Mandate';
 import type { DiscoveredModel, RunnerId } from '../models/Task';
+import { RUNNER_LABELS } from './runnerCatalog';
 
 type ModelsByRunner = Partial<Record<RunnerId, DiscoveredModel[]>>;
+
+/**
+ * How long a planner's read, or planning's start, waits on model discovery
+ * before answering with what is known (ADR-0022 L4). A discovery still
+ * running goes on, and what it finds is kept for the next read: one CLI that
+ * hangs while listing its models costs minutes (`opencode` runs three
+ * commands, each retried once at 45s), longer than a planner's turn can wait.
+ */
+export const DISCOVERY_WAIT_MS = 10_000;
 
 export interface SessionCatalogDeps {
   config: Pick<IConfig, 'enabledRunners' | 'autonomousMode' | 'aiProvider'>;
@@ -24,6 +34,13 @@ export interface SessionCatalogDeps {
   settings: () => { enabledRunners?: RunnerId[]; modelAllowlist?: Record<string, string[]> };
   /** The runners of the plan being edited; empty while the session has none. */
   planRunners: () => RunnerId[];
+  /**
+   * Why an enabled runner is not offered to a planner right now, read at each
+   * call: an agent known to be signed out ('signed out'), which is offered
+   * again by itself once its check reads signed in (ADR-0052). Undefined
+   * offers it. The user's settings keep it enabled either way.
+   */
+  withheld?: (runner: RunnerId) => string | undefined;
   /** Whether a task's runner is up: an attempt claimed, running, quiet or waiting on someone. */
   liveRunner?: (taskId: string) => boolean;
 }
@@ -40,6 +57,10 @@ export interface SessionCatalogDeps {
  */
 export class SessionCatalog {
   private discovered: ModelsByRunner = {};
+  /** Each runner's discovery still running, so a later read joins it rather than asking the resolver again. */
+  private pending = new Map<RunnerId, Promise<DiscoveredModel[]>>();
+  /** Bumped by {@link reset}: a discovery begun for the last goal lands nothing in the next one's catalog. */
+  private generation = 0;
 
   constructor(private readonly deps: SessionCatalogDeps) {}
 
@@ -60,9 +81,29 @@ export class SessionCatalog {
     return this.assignable().runners;
   }
 
-  /** The runners `writer` may put a task on now ({@link assignableRunners}); undefined means any. */
+  /** The enabled runners a planner is offered now: those not {@link withheld}. */
+  offeredRunners(): RunnerId[] {
+    return this.enabledRunners().filter((runner) => this.deps.withheld?.(runner) === undefined);
+  }
+
+  /**
+   * The enabled runners a planner is not offered now, each with the line it is
+   * told why, so it neither assigns one nor asks the user to enable it.
+   */
+  withheld(): { runner: RunnerId; reason: string }[] {
+    return this.enabledRunners().flatMap((runner) => {
+      const why = this.deps.withheld?.(runner);
+      return why === undefined ? [] : [{ runner, reason: `${RUNNER_LABELS[runner] ?? runner}: ${why}, not offered until signed in` }];
+    });
+  }
+
+  /**
+   * The runners `writer` may put a task on now ({@link assignableRunners});
+   * undefined means any. A planner, the supervisor included, is held to the
+   * offered ones; the user's own edit is not.
+   */
   runnersFor(writer: AssignmentWriter): RunnerId[] | undefined {
-    return assignableRunners(writer, this.enabledRunners());
+    return assignableRunners(writer, this.offeredRunners());
   }
 
   /**
@@ -74,7 +115,12 @@ export class SessionCatalog {
     return this.assignable().allowlist;
   }
 
-  /** The enabled runners and allowlist together, for whoever compares an assignment with them. */
+  /**
+   * The enabled runners and allowlist together, for whoever compares an
+   * assignment with them. The user's enabled runners, not the offered ones: a
+   * task on a signed-out agent is not switched off, and fails at its start
+   * with the sign-in hint.
+   */
   scope(): AssignmentScope {
     return { enabledRunners: this.enabledRunners(), allowlist: this.allowlist(), models: this.models() };
   }
@@ -103,9 +149,28 @@ export class SessionCatalog {
 
   /** Discover the runners' models, spawning their CLIs where the resolver has none cached, and remember them. */
   async discover(runners: RunnerId[]): Promise<ModelsByRunner> {
-    const found = await this.deps.modelResolver.modelsForRunners(runners);
-    this.discovered = { ...this.discovered, ...found };
-    return found;
+    const found = await Promise.all([...new Set(runners)].map(async (runner) => [runner, await this.discoverOne(runner)] as const));
+    return Object.fromEntries(found);
+  }
+
+  /**
+   * One runner's discovery, remembered as it lands. Apart from the others:
+   * one CLI that hangs while listing its models must not keep what every
+   * other runner was found to offer out of the catalog.
+   */
+  private discoverOne(runner: RunnerId): Promise<DiscoveredModel[]> {
+    const running = this.pending.get(runner);
+    if (running) return running;
+    const generation = this.generation;
+    const started = this.deps.modelResolver.modelsForRunners([runner])
+      .then((found) => {
+        // Merged, never replaced: a runner the answer leaves out keeps what was learned before.
+        if (generation === this.generation) this.discovered = { ...this.discovered, ...found };
+        return found[runner] ?? [];
+      }, () => [])
+      .finally(() => { if (this.pending.get(runner) === started) this.pending.delete(runner); });
+    this.pending.set(runner, started);
+    return started;
   }
 
   /**
@@ -120,6 +185,8 @@ export class SessionCatalog {
   /** Session boundaries are hard: nothing discovered for one goal informs the next. */
   reset(): void {
     this.discovered = {};
+    this.pending.clear();
+    this.generation++;
   }
 
   modes(runners: RunnerId[]): Record<RunnerId, RunnerModeInfo[]> {
@@ -127,22 +194,41 @@ export class SessionCatalog {
   }
 
   /**
-   * What a planner may assign right now: every enabled runner, its modes, and
-   * its allowlisted models. Discovers a runner's models the first time it is
-   * asked for.
+   * What a planner may assign right now: every offered runner, its modes, and
+   * its allowlisted models. Discovers the models of `runners` (every offered
+   * one unless named) where the resolver has none cached; a read that needs
+   * one runner's models, or none, waits on no other runner's CLI.
    */
-  async live(): Promise<TaskQueryCatalog> {
-    await this.discover(this.enabledRunners());
+  async live(runners: readonly RunnerId[] = this.offeredRunners()): Promise<TaskQueryCatalog> {
+    await this.discoverWithin(runners);
     return this.current();
   }
 
   /**
+   * Discover `runners` for at most {@link DISCOVERY_WAIT_MS}. A runner whose
+   * models are not found by then is answered as one discovery found nothing
+   * for, which an assignment accepts as written and the runner validates last.
+   */
+  private async discoverWithin(runners: readonly RunnerId[]): Promise<void> {
+    if (runners.length === 0) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const waited = new Promise<void>((resolve) => { timer = setTimeout(resolve, DISCOVERY_WAIT_MS); });
+    await Promise.race([this.discover([...runners]), waited]);
+    clearTimeout(timer);
+  }
+
+  /**
    * What {@link live} answers, from what is cached and without discovering:
-   * the enabled runners, however the plan was started. The per-turn block
+   * the offered runners, however the plan was started, and why any enabled
+   * one is not. The per-turn block
    * reads this, so it can never offer a different set than `list_runners`.
    */
   current(): TaskQueryCatalog {
-    return this.queryCatalog(this.runnersFor('plan') ?? []);
+    const withheld = this.withheld();
+    const catalog = this.queryCatalog(this.runnersFor('plan') ?? []);
+    // An empty list a planner reads as "no models" may be one still being listed.
+    const discovering = catalog.runners.filter((runner) => this.pending.has(runner) && !catalog.models[runner]?.length);
+    return { ...catalog, ...(withheld.length > 0 ? { withheld } : {}), ...(discovering.length > 0 ? { discovering } : {}) };
   }
 
   queryCatalog(runners: RunnerId[]): TaskQueryCatalog {
@@ -197,12 +283,18 @@ export class SessionCatalog {
     // The planning agent's own catalog too, though it is not offered: it is
     // the evidence its model is judged by, and OpenCode's ids share an
     // OpenRouter slug's shape, so a cold one would let a model left from an
-    // old setup reach the agent when it is not also a task runner.
+    // old setup reach the agent when it is not also a task runner. So it is
+    // waited on whole, and the task runners only for the discovery wait (ADR-0022 L4).
     const planner = runnerForProvider(this.deps.config.aiProvider);
-    const [modelsByRunner] = await Promise.all([
-      this.discover(runners),
+    await Promise.all([
+      this.discoverWithin(runners),
       planner && !runners.includes(planner) ? this.deps.modelResolver.modelsForRunners([planner]) : undefined,
+      planner && runners.includes(planner) ? this.discoverOne(planner) : undefined,
     ]);
+    const modelsByRunner: ModelsByRunner = Object.fromEntries(runners.flatMap((runner) => {
+      const models = this.discovered[runner];
+      return models ? [[runner, models]] : [];
+    }));
     return {
       modelsByRunner,
       filteredModels: filterModelsForPrompt(modelsByRunner, this.allowlist()),

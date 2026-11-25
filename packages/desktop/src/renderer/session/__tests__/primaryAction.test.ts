@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SurfacePlan } from '@ordewell/core';
 import { INITIAL_HOST_STATE, type HostState } from '@ordewell/ui';
-import { primaryAction, runActions } from '../primaryAction';
+import { RUN_ACTION_LABEL, primaryAction, runActions } from '../primaryAction';
 import { surfacePlan, surfaceTask } from './fakeDaemon';
 
 const TASKS = [
@@ -21,8 +21,9 @@ describe('the session\'s run actions', () => {
     expect(primaryAction(runActions(INITIAL_HOST_STATE))).toBeUndefined();
   });
 
-  it('asks for approval of a draft before anything runs', () => {
-    expect([...runActions(stateOf('draft'))]).toEqual(['approve']);
+  it('offers Run for a draft, the one control that approves and starts it', () => {
+    expect([...runActions(stateOf('draft'))]).toEqual(['run']);
+    expect(RUN_ACTION_LABEL[primaryAction(runActions(stateOf('draft')))!]).toBe('Run');
   });
 
   it('offers Run while an approved plan has work left, and nothing once all of it is done', () => {
@@ -43,8 +44,7 @@ describe('the session\'s run actions', () => {
     expect(primaryAction(runActions(allDone))).toBe('merge');
   });
 
-  it('ranks Approve plan, then Run, then Stop, then Merge all', () => {
-    expect(primaryAction(new Set(['merge', 'stop', 'run', 'approve']))).toBe('approve');
+  it('ranks Run, then Stop, then Merge all', () => {
     expect(primaryAction(new Set(['merge', 'stop', 'run']))).toBe('run');
     expect(primaryAction(new Set(['merge', 'stop']))).toBe('stop');
     expect(primaryAction(new Set(['merge']))).toBe('merge');

@@ -83,7 +83,7 @@ it on, since the seam refuses it otherwise
 | `by-hand` | A user task nothing else holds | Mark complete | `mark_complete` |
 | `merge-all` | Landed work, nothing moving and no gate listed | Merge all | `merge_all` |
 | `blocked-run` | A run a dirty checkout turned away | Stash and continue, Run without isolation | `Session.continueWithStash`, `continueWithoutIsolation` |
-| `planner` | Below Act, the planner's latest reply answers wake-ups alone ([ADR-0029](0029-the-supervisor.md)), and nothing is left to follow it: no run open or advancing, no planner turn, queued input, owed wake-up or resend; never a subplanner's | None: the user answers by writing to the planner, which ends it | the conversation |
+| `planner` | Below Act, the planner's latest reply answers wake-ups alone ([ADR-0029](0029-the-supervisor.md)), none of them the end-of-run wake-up alone (its reply is the wrap-up and asks nothing), and nothing is left to follow it: no run advancing, no planner turn, queued input, owed wake-up or resend, and no act of the user's on the run since (an `execution` entry of theirs: merge, run, retry, skip); a run left open by a failure still lists it, beside the failed task; never a subplanner's | None: the user answers by writing to the planner or by acting on the run, which ends it | the conversation |
 
 A task whose attempt ended, listed as `failed`, `out-of-rounds`, `conflict`,
 `files-changed`, or a `checkpoint` or `input` with no runner left, offers no Retry
@@ -527,4 +527,5 @@ reader takes it (`workspaceEnv.test.ts`, `VsCodeConfig.test.ts`).
 - 2026-11-14 — a planner reply to a wake-up below Act that leaves nothing to run is listed as `planner`, answered in the conversation (ADR-0029).
 - 2026-11-17 — `ordewell run` names a task on hold with the commands that release it, and `--unattended` returns with exit status 3 on a wait nobody unattended answers, leaving the run as it is.
 - 2026-11-24 — `ordewell run` names a manual task, and `--unattended` returns on one, or on another wait that alone keeps a task from starting, once the run waits on the user.
+- 2026-11-24 — the planner's reply to the end-of-run wake-up alone is no wait, a reply to a failure's still is, and the user's own act on the run clears it as a message does.
 - 2026-11-24 — `--unattended` returns on a landing conflict, a landing git refused, an ops task that changed tracked files and a usage limit with no reset time, and the CLI classes every escalation kind in one table.

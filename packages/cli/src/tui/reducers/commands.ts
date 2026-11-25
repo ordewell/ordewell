@@ -53,10 +53,6 @@ function dispatchCommand(state: TuiState, parsed: ParsedCommand): Step {
 
     case 'run':
       return withSession(state, (sessionId) => startPlan(state, sessionId));
-    case 'approve':
-      return withSession(state, (sessionId) =>
-        startPlan({ ...state, planApproved: true }, sessionId),
-      );
     case 'stop':
       // A planner turn first, as Esc does: a turn sent mid-run is the newer
       // thing the user started, and the run outlives it for a second /stop.
@@ -263,8 +259,9 @@ export function newSession(state: TuiState): Step {
   // task updates keep landing on whatever id matches in the fresh state below.
   const closeEffects: Effect[] = state.sessionId ? [{ type: 'closeSession', sessionId: state.sessionId }] : [];
   // Prompts belong to the session that raised them; the old planner is gone
-  // and its pending requests deny on their own timeout.
-  return step(leaveSession(state), closeEffects);
+  // and its pending requests deny on their own timeout. The welcome it opens
+  // onto names the commit runs fork from, which a merge may have moved.
+  return step(leaveSession(state), [...closeEffects, { type: 'loadIsolationPreview' }]);
 }
 
 function setPlanner(state: TuiState, args: string[]): Step {

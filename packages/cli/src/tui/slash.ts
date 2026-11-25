@@ -25,8 +25,7 @@ export interface SlashCommand {
 export const SLASH_COMMANDS: SlashCommand[] = [
   // Planning. There is deliberately no `/plan`: typing the goal *is* the way to
   // start planning, and an alias for it only shadowed `/planner` on completion.
-  { name: 'approve', usage: '/approve', description: 'Approve the drafted plan', category: 'planning' },
-  { name: 'run', usage: '/run', description: 'Execute the approved plan', category: 'planning' },
+  { name: 'run', usage: '/run', description: 'Run the plan: a drafted one starts, and a running one takes in the tasks that wait for approval', category: 'planning' },
   { name: 'decisions', usage: '/decisions [all]', description: "Read the planner's decision record: what it decided, your constraints, what it rejected and what is open (all: superseded entries too)", category: 'planning' },
   { name: 'stop', usage: '/stop', description: 'Stop the planner or the running execution, whichever is active', category: 'planning' },
   { name: 'resend', usage: '/resend cancel', description: "Keep what waits on the planner's usage limit from being sent at the reset: it goes with your next message", category: 'planning' },
@@ -96,6 +95,11 @@ export interface CommandAlias {
   description: string;
   /** The alias is an old name kept for a release or two: using it works and says to use the target. */
   deprecated?: true;
+  /**
+   * Listed in no help and no menu: the old name is one a user should no longer
+   * meet, though typing it still works and says what it is now.
+   */
+  hidden?: true;
 }
 
 export const COMMAND_ALIASES: CommandAlias[] = [
@@ -108,13 +112,16 @@ export const COMMAND_ALIASES: CommandAlias[] = [
   { name: 'handoff', target: 'merge', description: 'Deprecated: use /merge', deprecated: true },
   // The key command was /key until it took the one word the other surfaces use; `/key set <provider>` still runs.
   { name: 'key', target: 'key-set', description: 'Deprecated: use /key-set', deprecated: true },
+  // Starting a drafted plan has one verb, run: running it is what approves it (ADR-0035), and two commands read as two gates.
+  { name: 'approve', target: 'run', description: 'Deprecated: use /run', deprecated: true, hidden: true },
 ];
 
 /** What a deprecated spelling says when it is used; null for a current command or an alias that is a plain synonym. */
 export function renamedNotice(name: string): string | null {
   const key = name.replace(/^\//, '').toLowerCase();
   const alias = COMMAND_ALIASES.find((a) => a.name === key && a.deprecated);
-  return alias ? `renamed: use /${alias.target}` : null;
+  if (!alias) return null;
+  return alias.hidden ? `\`/${alias.name}\` is now \`/${alias.target}\`.` : `renamed: use /${alias.target}`;
 }
 
 /**
@@ -128,14 +135,18 @@ export function slashCommandTable(): SlashCommand[] {
   for (const command of SLASH_COMMANDS) {
     table.push(command);
     for (const alias of COMMAND_ALIASES) {
-      if (alias.target !== command.name) continue;
+      if (alias.target !== command.name || alias.hidden) continue;
       table.push({ name: alias.name, usage: `/${alias.name}`, description: alias.description, category: command.category });
     }
   }
   return table;
 }
 
-const BY_NAME = new Map(slashCommandTable().map((c) => [c.name, c]));
+const BY_NAME = new Map<string, SlashCommand>([
+  ...slashCommandTable().map((c): [string, SlashCommand] => [c.name, c]),
+  // A hidden alias still runs, and a skill still may not take its name.
+  ...COMMAND_ALIASES.filter((a) => a.hidden).map((a): [string, SlashCommand] => [a.name, { name: a.name, usage: `/${a.name}`, description: a.description, category: SLASH_COMMANDS.find((c) => c.name === a.target)?.category ?? 'system' }]),
+]);
 
 /** The canonical command a name finally runs as: an alias resolves to its target, everything else is itself. */
 export function canonicalCommandName(name: string): string {

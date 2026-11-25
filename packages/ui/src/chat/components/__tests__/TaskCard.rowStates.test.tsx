@@ -238,12 +238,12 @@ describe('a task card, pinned before its rules move to core', () => {
     expect(badge()?.textContent).toBe('Blocked by #2.1');
   });
 
-  it('badges a task added after the plan was approved as waiting for the user, with an Approve button that force starts it (ADR-0035)', () => {
+  it('badges a task added after the plan was run as waiting for the user, with an Approve button that force starts it (ADR-0035)', () => {
     const started: string[] = [];
     render(<TaskCard task={makeTask()} models={[]} isExecuting run={{ waitsForApproval: true }} onForceStart={(id) => started.push(id)} />);
     const badge = document.querySelector('.task-isolation-badge.approval');
     expect(badge?.textContent).toBe('Waits for your approval');
-    expect(badge?.getAttribute('title')).toBe('Added after you approved the plan, so it does not start on its own. Approve it, or Approve all, and it starts once its dependencies finish.');
+    expect(badge?.getAttribute('title')).toBe('Added after you ran the plan, so it does not start on its own. Approve it, or Approve all, and it starts once its dependencies finish.');
 
     fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
 

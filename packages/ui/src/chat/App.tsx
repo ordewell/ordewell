@@ -24,7 +24,7 @@ import CheckpointPanel from './components/CheckpointPanel';
 import RunSettingsBlock from './components/RunSettingsBlock';
 import type { RunnerSignInView } from './components/TaskCard';
 import type { TaskDraft } from './components/NewTaskCard';
-import type { ChildPlanEntry, ChildPlanView, CompactionBlock, GlobalRunSettings, RunSettings, Task, TaskModelAssignment, RunnerId, RunnerAuth, SurfaceTask, DiscoveredModel, AiProvider } from '@ordewell/core';
+import type { ChildPlanEntry, ChildPlanView, CompactionBlock, DisplayBlock, GlobalRunSettings, RunSettings, Task, TaskModelAssignment, RunnerId, RunnerAuth, SurfaceTask, DiscoveredModel, AiProvider } from '@ordewell/core';
 import { accountLimitsOf, AGENT_DEFAULT_MODEL, compactionText, DETECTING_AGENTS, DETECTING_AGENTS_DETAIL, describeRunnerSignIn, describeUnusedPlanningKey, keyTipContext, signInAction, signInOfVerdict, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_SIGN_IN, type ComposerTipContext, type RunnerSignIn } from '@ordewell/core/plan-utils';
 import { DelegationOfferedContext, useDelegationOffered } from './delegationOffered';
 import { planSummaryLabel, nextDock, withRunStatus } from './planDock';
@@ -42,6 +42,13 @@ import { ModelDiscoveryContext } from './modelLoading';
 const STOP_ARM_MS = 2_000;
 
 type Updatable<T> = T | ((prev: T) => T);
+
+/** The conversation without its last line when that line says the shown error again: the error card says it once. */
+function withoutRepeatOf(blocks: DisplayBlock[], error: string): DisplayBlock[] {
+  const last = blocks.at(-1);
+  const repeats = last?.type === 'message' && (last.role === 'error' || last.role === 'system') && last.text.trim() === error.trim();
+  return repeats ? blocks.slice(0, -1) : blocks;
+}
 
 /** The dock's word on the supervisor, when there is one to speak of. */
 /**
@@ -150,6 +157,7 @@ export default function App({ layout = 'chat', selection, goal }: {
   const setDockHeight = useCallback((v: number | undefined) => dispatch({ type: 'patchDockHeight', height: v }), []);
   const setDockExpanded = useCallback((v: Updatable<boolean>) => dispatch({ type: 'patchDockExpanded', expanded: v }), []);
   const blocks = useMemo(() => patchedBlocks(conversation), [conversation]);
+  const shownBlocks = useMemo(() => (error ? withoutRepeatOf(blocks, error) : blocks), [blocks, error]);
   useEffect(() => {
     if (delegationOffered && plan?.tasks.some((task) => task.type === 'delegated')) bridge.post({ type: 'refreshChildren' });
   }, [delegationOffered, plan]);
@@ -480,10 +488,15 @@ export default function App({ layout = 'chat', selection, goal }: {
 
   // No planner was ready: its way out (an install, a sign-in) happens outside
   // the window, so trying again means looking again, not only closing the box.
+  // A turn that failed is tried again by sending its message again, which
+  // the conversation shows already.
   const handleTryAgain = useCallback(() => {
     if (host.errorCode === 'planner_not_ready') bridge.post({ type: 'refreshModels' });
     setError('');
-  }, [host.errorCode, setError]);
+    if (host.errorResend === undefined) return;
+    dispatch({ type: 'turnRequested' });
+    bridge.post({ type: 'sendMessage', text: host.errorResend, runners, typed: true, again: true });
+  }, [host.errorCode, host.errorResend, setError, runners]);
 
   const handleOpenLink = useCallback((url: string) => {
     bridge.post({ type: 'openLink', url });
@@ -1157,7 +1170,7 @@ export default function App({ layout = 'chat', selection, goal }: {
       <div className="plan-list" ref={planListRef}>
         {plan && plan.tasks.length > 0
           ? renderPlanBody()
-          : <p className="plan-list-empty">No plan yet. Describe a goal to the planner.</p>}
+          : <p className="plan-list-empty">{plannerBusy ? 'The planner is drafting the plan.' : 'No plan yet. Describe a goal to the planner.'}</p>}
       </div>
       </OpenPatchContext.Provider>
       </DelegationOfferedContext.Provider>
@@ -1468,6 +1481,14 @@ export default function App({ layout = 'chat', selection, goal }: {
           />
         )}
 
+        <ConversationBlocks
+          key={host.conversationEpoch}
+          blocks={shownBlocks}
+          onShowPlan={handleShowPlan}
+          onResolveApproval={handleResolveApproval}
+        />
+
+        {/* After the message it belongs to, which is what the user reads first. */}
         {error && (
           <div className="error-state">
             <div className="error-icon">!</div>
@@ -1475,13 +1496,6 @@ export default function App({ layout = 'chat', selection, goal }: {
             <button onClick={handleTryAgain}>Try Again</button>
           </div>
         )}
-
-        <ConversationBlocks
-          key={host.conversationEpoch}
-          blocks={blocks}
-          onShowPlan={handleShowPlan}
-          onResolveApproval={handleResolveApproval}
-        />
 
         {/* The desktop's planner tab answers a draft where it is read (W3); VS
             Code's sidebar answers it in the plan dock below. */}

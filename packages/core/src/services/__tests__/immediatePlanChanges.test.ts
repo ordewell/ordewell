@@ -196,7 +196,7 @@ describe('an edit committed while tasks run', () => {
     expect(env.session.planState!.approvedTasks ?? []).not.toContain(docs.id);
     const start = await env.planner.tools().runTask!({ task: 'docs' }, ctx);
     expect(start.isError).toBe(true);
-    expect(body(start).reason).toMatch(/added after the user approved the plan/);
+    expect(body(start).reason).toMatch(/added after the user ran the plan/);
 
     env.planner.calls[0].finish(prose('Added a docs task.'));
     await settled();

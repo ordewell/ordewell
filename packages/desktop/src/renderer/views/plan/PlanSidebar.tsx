@@ -14,7 +14,7 @@ import { useSessionList } from './useSessionList';
 const SESSION_STATUS: Readonly<Record<string, { status: StatusId; word: string }>> = {
   planning: { status: 'not-started', word: 'Planning' },
   draft: { status: 'not-started', word: 'Draft' },
-  approved: { status: 'not-started', word: 'Approved' },
+  approved: { status: 'not-started', word: 'Started' },
   running: { status: 'running', word: 'Running' },
   completed: { status: 'passed', word: 'Settled' },
   settled: { status: 'passed', word: 'Settled' },
@@ -42,6 +42,15 @@ export function relativeTime(iso: string, now = Date.now()): string {
   return 'now';
 }
 
+/**
+ * A row's saved status. A draft with no task is a session kept from a first
+ * turn that failed or was stopped: nothing was drafted, so it is not a Draft.
+ */
+function listedStatus(session: SessionRow): { status: StatusId; word: string } {
+  if (session.status === 'draft' && session.taskCount === 0) return { status: 'not-started', word: 'No plan yet' };
+  return sessionStatus(session.status);
+}
+
 /** A row's run as the daemon lists it, for a session not open here or open read-only: its pool's word, or its holder's (ADR-0049). */
 function listedRun(session: SessionRow): { status: StatusId; word: string } | undefined {
   if (!session.run) return undefined;
@@ -57,13 +66,16 @@ export function Sessions({ host }: { host: DaemonHost }): JSX.Element {
   // A read-only view draws its holder's saved file and hears none of its run, so its row is the list's to say, as any other's.
   const ownId = readOnly ? undefined : sessionId;
   const planStatus = state.plan?.status;
-  // The saved plan says Approved for as long as its run lasts, so the open session's row reads its live run instead.
+  // The saved plan says approved (Started) for as long as its run lasts, so the open session's row reads its live run instead.
   const progress = state.isExecuting || state.activity.advancesOnItsOwn ? planProgress(host) : undefined;
-  const live = progress ? { status: 'running' as const, word: `Running ${progress.done}/${progress.total}` } : undefined;
-  // Read again when the session changes, the planner names a new one's goal, or
-  // the open plan moves on (approved, running, done): each is a row this list
+  // The daemon lists a goal it admitted as a draft at once: until the planner drafts a task, its turn is the row's news.
+  const planning = !progress && state.isResearchActive && !state.plan?.tasks.length ? sessionStatus('planning') : undefined;
+  const live = progress ? { status: 'running' as const, word: `Running ${progress.done}/${progress.total}` } : planning;
+  // Read again when the session changes, the planner names a new one's goal,
+  // the open plan moves on (approved, running, done), or its run stops being
+  // live, which leaves the saved status as it was: each is a row this list
   // lacks or shows stale. Every other row's run is the list's own word.
-  const sessions = useSessionList(host.workspace, connected, ownId, JSON.stringify([sessionId, goal, planStatus]));
+  const sessions = useSessionList(host.workspace, connected, ownId, JSON.stringify([sessionId, goal, planStatus, progress !== undefined]));
 
   // The Reconnecting bar speaks for the daemon (W15): this list keeps what it last read, dimmed and inert, and claims no wait of its own.
   if (!connected && !Array.isArray(sessions)) return <p className="frame-empty">Sessions show here once the daemon is back.</p>;
@@ -73,7 +85,7 @@ export function Sessions({ host }: { host: DaemonHost }): JSX.Element {
   return (
     <ul className="sessions" aria-disabled={connected ? undefined : 'true'}>
       {sessions.map((session) => {
-        const { status, word } = (session.id === ownId ? live : listedRun(session)) || sessionStatus(session.status);
+        const { status, word } = (session.id === ownId ? live : listedRun(session)) || listedStatus(session);
         const when = session.updatedAt ? relativeTime(session.updatedAt) : '';
         return (
           <li key={session.id}>

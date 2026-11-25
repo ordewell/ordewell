@@ -20,11 +20,14 @@ export function clientSurface(value: unknown): ClientSurface | undefined {
   return CLIENT_SURFACES.find((surface) => surface === value);
 }
 
-/** Every action only the user takes, which a planner may suggest but never perform. */
+/**
+ * Every action only the user takes, which a planner may suggest but never
+ * perform. Starting a drafted plan has one verb, run: running it is what
+ * approves it (ADR-0035), so no surface names a plan-level approve.
+ */
 export const USER_ACTIONS = [
   'merge',
   'answerCheckpoint',
-  'approvePlan',
   'runPlan',
   'skipTask',
   'forceStart',
@@ -35,7 +38,6 @@ export const USER_ACTIONS = [
   'forceSend',
   'takeBackQueued',
   'cancelResume',
-  'approveReview',
   'compact',
 ] as const;
 
@@ -47,7 +49,6 @@ export type SurfaceControls = Readonly<Record<UserAction, string>>;
 const ACTION_LABEL: Readonly<Record<UserAction, string>> = {
   merge: 'Merge the run\'s landed work',
   answerCheckpoint: 'Approve or reject a checkpoint',
-  approvePlan: 'Approve the plan',
   runPlan: 'Run the plan',
   skipTask: 'Skip a task',
   forceStart: 'Force start a task',
@@ -58,7 +59,6 @@ const ACTION_LABEL: Readonly<Record<UserAction, string>> = {
   forceSend: 'Force send a queued message',
   takeBackQueued: 'Take back a queued message',
   cancelResume: 'Cancel a scheduled resume',
-  approveReview: 'Approve the review',
   compact: 'Compact your conversation',
 };
 
@@ -82,7 +82,6 @@ const SURFACE_NAME: Readonly<Record<Surface, string>> = {
 const TUI: SurfaceControls = {
   merge: '/merge',
   answerCheckpoint: '/checkpoint <id> approve, or /checkpoint <id> reject <reason>',
-  approvePlan: '/approve',
   runPlan: '/run',
   skipTask: '/skip <id>',
   forceStart: '/force-start <id>',
@@ -93,7 +92,6 @@ const TUI: SurfaceControls = {
   forceSend: 'ctrl-s in the task\'s view (/open <id>)',
   takeBackQueued: 'ctrl-r on the queued message in the task\'s view (/open <id>)',
   cancelResume: 'the c key on the task in the plan',
-  approveReview: '/approve',
   compact: '/compact',
 };
 
@@ -102,7 +100,6 @@ const TUI: SurfaceControls = {
 const CLI: SurfaceControls = {
   merge: 'ordewell merge',
   answerCheckpoint: 'ordewell checkpoint <id> approve, or ordewell checkpoint <id> reject <reason>',
-  approvePlan: 'ordewell run, which approves the plan as it executes it',
   runPlan: 'ordewell run',
   skipTask: 'ordewell skip <id>',
   forceStart: 'ordewell force-start <id>',
@@ -113,7 +110,6 @@ const CLI: SurfaceControls = {
   forceSend: 'no command; ctrl-s in the terminal UI (ordewell tui), in the task\'s view (/open <id>)',
   takeBackQueued: 'no command; ctrl-r on the queued message in the terminal UI (ordewell tui), in the task\'s view (/open <id>)',
   cancelResume: 'no command; the c key on the task in the terminal UI\'s plan (ordewell tui)',
-  approveReview: 'ordewell approve',
   compact: 'ordewell compact',
 };
 
@@ -130,7 +126,6 @@ const VSCODE: SurfaceControls = {
   ...SHARED_CARDS,
   // The handoff card's button reads Merge for one repository (packages/ui HandoffCard).
   merge: 'the Merge button on the run\'s handoff card (Merge all when the run spans several repositories)',
-  approvePlan: 'the Execute Plan button, or the Ordewell: Approve Plan command',
   runPlan: 'the Execute Plan button',
   skipTask: 'the task card\'s Skip button',
   forceStart: 'the task card\'s Start button, or its Approve button when it waits for approval',
@@ -139,13 +134,11 @@ const VSCODE: SurfaceControls = {
   revertTask: 'the task card\'s Revert button',
   interrupt: 'the Interrupt button in the task\'s log, or Esc twice',
   cancelResume: 'the task card\'s Don\'t Resume button',
-  approveReview: 'the Execute Plan button, or the Ordewell: Approve Plan command',
 };
 
 const DESKTOP: SurfaceControls = {
   ...SHARED_CARDS,
   merge: 'Review & Merge all in the title bar, or Merge all… in the Changes sidebar',
-  approvePlan: 'the Approve plan button in the title bar',
   runPlan: 'the Run button in the title bar',
   skipTask: 'the task tab\'s Skip button',
   forceStart: 'the task tab\'s Start now button',
@@ -154,7 +147,6 @@ const DESKTOP: SurfaceControls = {
   revertTask: 'the task tab\'s Revert… button',
   interrupt: 'the Interrupt button in the task tab, or Esc twice',
   cancelResume: 'the task tab\'s Don\'t resume button',
-  approveReview: 'the Approve plan button in the title bar',
 };
 
 /** A host that does not say what it is gets every surface's name for the action, so the user finds theirs. */

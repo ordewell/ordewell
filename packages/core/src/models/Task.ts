@@ -861,27 +861,61 @@ export function isUserMessage(entry: Pick<ConversationMessage, 'role' | 'kind'>)
 }
 
 /**
+ * Whether the transcript is only an opening that went unanswered (its goal,
+ * its skills' loads and the failure after it) and `message` is that goal: sent
+ * again (the desktop's Try Again), it is answered where it stands, neither
+ * written nor drawn a second time.
+ */
+export function repeatsUnansweredOpening(
+  transcript: readonly Pick<ConversationMessage, 'role' | 'kind' | 'content'>[],
+  message: { readonly text: string; readonly skills?: readonly unknown[] },
+): boolean {
+  const [goal, ...rest] = transcript.filter((entry) => entry.kind !== 'error');
+  return goal !== undefined && isUserMessage(goal) && goal.content === message.text
+    && rest.length === (message.skills?.length ?? 0) && rest.every((entry) => entry.kind === 'skill_load');
+}
+
+/**
+ * Whether a wake-up digest only says the run finished with everything done,
+ * or skipped by the user: its reply is the wrap-up, which asks nothing
+ * (ADR-0053). One that also names a failure, a block or any other attention
+ * is not: its reply may ask what comes next. Read from the digest's lines
+ * ahead of its since-last list, as {@link wakeUpDigest} writes them.
+ */
+export function isWrapUpWakeUp(content: string): boolean {
+  const lines = content.split('\n').slice(1);
+  const attention = lines.slice(0, lines.findIndex((line) => !line.startsWith('- ')) === -1 ? lines.length : lines.findIndex((line) => !line.startsWith('- ')));
+  return attention.length === 1 && /^- the run finished: \d+ of \d+ tasks completed(, \d+ skipped)?(;|$)/.test(attention[0]);
+}
+
+/**
  * The timestamp of the planner's latest reply when it answers wake-ups alone
- * (ADR-0029): no message of the user's came with them or since, and no wake-up
- * is still unanswered. Host notices, calls at the seam, skill loads,
+ * (ADR-0029): no message of the user's came with them or since, no wake-up
+ * is still unanswered, and the user has not acted on the run since (an
+ * `execution` entry of theirs: merge, run, retry, skip). A reply to the
+ * end-of-run wake-up alone is the run's wrap-up and waits on no one
+ * ({@link isWrapUpWakeUp}). Host notices, calls at the seam, skill loads,
  * compactions and failed turns are no reply and no input, so they are passed over.
  */
 export function wakeUpReply(history: readonly ConversationMessage[]): string | undefined {
   let reply: ConversationMessage | undefined;
   let woke = false;
+  let wrapUp = true;
   for (let i = history.length - 1; i >= 0; i--) {
     const entry = history[i];
     if (isUserMessage(entry)) return undefined;
+    if (entry.kind === 'execution' && entry.execution?.actor === 'user' && entry.execution.outcome === 'done' && !woke) return undefined;
     if (entry.kind === 'wake_up') {
       if (!reply) return undefined;
       woke = true;
+      wrapUp &&= isWrapUpWakeUp(entry.content);
     } else if (entry.role === 'assistant' && (entry.kind === undefined || entry.kind === 'supervisor' || entry.kind === 'plan_generated')) {
       // A turn may say something and commit a plan: past its inputs is the turn before.
       if (woke) break;
       reply ??= entry;
     }
   }
-  return woke ? reply?.timestamp : undefined;
+  return woke && !wrapUp ? reply?.timestamp : undefined;
 }
 
 /** A follow-up an older build queued behind a run's batch boundary; read only to carry it over as a {@link PendingPlanTurn}. */

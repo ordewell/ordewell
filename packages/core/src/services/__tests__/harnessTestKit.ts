@@ -2,6 +2,8 @@ import { EventEmitter } from 'events';
 import { readFileSync, statSync } from 'fs';
 import { basename, isAbsolute, join } from 'path';
 import type { ChildProcess } from 'child_process';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { AgentAdapterFactory, AgentEvent, AgentProcessDeps, SpawnFn, TaskModeAgentAdapter } from '../harness/AgentAdapter';
 import { ClaudeCodeAdapter } from '../harness/ClaudeCodeAdapter';
 import { CONNECTORS, createTaskAdapter } from '../harness/connectors';
@@ -418,6 +420,52 @@ export function fakeMcpServer(): FakeMcpServer {
     revoke: (token: string) => { revoked.push(token); },
   };
   return server as unknown as FakeMcpServer;
+}
+
+/** What codex-cli 0.171.0 reports for a call to `server`'s `tool` that ran past its `tool_timeout_sec`. */
+export function codexToolTimeoutError(tool: string, seconds: number, server = 'ordewell'): string {
+  return `tool call error: tool call failed for \`${server}/${tool}\`\n\nCaused by:\n    timed out awaiting tools/call after ${seconds}s`;
+}
+
+/**
+ * A Codex planner turn whose every call to Ordewell's tools runs past Codex's
+ * own tool deadline, as a scripted reply to `turn/start`. For each of `tools`,
+ * by name with its arguments, it announces an `mcpToolCall` item, calls the tool over real HTTP MCP at the
+ * URL and with the header its thread config named (read from `env()`, the
+ * spawn's environment, as Codex reads it), gives up after `deadlineMs` as
+ * Codex's fixed deadline does (the SDK client cancels the call on the
+ * server), and completes the item failed in Codex's words and shape. Then it ends the
+ * turn on `reply`. Hand it a real {@link OrdewellMcpServer}: a fake one does
+ * not listen.
+ */
+export function codexPastToolDeadline(env: () => NodeJS.ProcessEnv, opts: { tools: Record<string, Record<string, unknown>>; deadlineMs: number; reply: string; deadlineSeconds?: number }): ScriptedReply {
+  const line = (value: unknown) => `${JSON.stringify({ jsonrpc: '2.0', ...(value as object) })}\n`;
+  return (_written, proc) => {
+    const threadStart = proc.written.map((chunk) => JSON.parse(chunk) as { method?: string; params?: { config?: { mcp_servers?: Record<string, { url: string; env_http_headers: Record<string, string> }> } } })
+      .find((msg) => msg.method === 'thread/start');
+    const server = threadStart?.params?.config?.mcp_servers?.ordewell;
+    if (!server) throw new Error('the planner thread was given no ordewell server');
+    const headers = Object.fromEntries(Object.entries(server.env_http_headers).map(([header, variable]) => [header, env()[variable] ?? '']));
+    const at = { threadId: 'thr-codex-1', turnId: 'turn-1' };
+    proc.emitStdout(line({ method: 'turn/started', params: at }));
+    void (async () => {
+      const client = new Client({ name: 'codex-mcp-client', version: '0.171.0' });
+      await client.connect(new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers } }));
+      for (const [i, [tool, args]] of Object.entries(opts.tools).entries()) {
+        const id = `call_${i + 1}`;
+        proc.emitStdout(line({ method: 'item/started', params: { ...at, item: { id, type: 'mcpToolCall', server: 'ordewell', tool, status: 'inProgress', arguments: args } } }));
+        // codex-cli 0.171.0's own shapes: a reply marked isError is the result of a failed call, a deadline an error object with none.
+        const ended = await client.callTool({ name: tool, arguments: args }, undefined, { timeout: opts.deadlineMs }).then(
+          (result) => ({ status: result.isError ? 'failed' : 'completed', result: { content: result.content, structuredContent: null, _meta: null }, error: null }),
+          () => ({ status: 'failed', result: null, error: { message: codexToolTimeoutError(tool, opts.deadlineSeconds ?? 300) } }),
+        );
+        proc.emitStdout(line({ method: 'item/completed', params: { ...at, item: { id, type: 'mcpToolCall', server: 'ordewell', tool, arguments: args, ...ended } } }));
+      }
+      await client.close();
+      proc.emitStdout(line({ method: 'item/completed', params: { ...at, item: { id: 'msg_1', type: 'agentMessage', text: opts.reply } } }));
+      proc.emitStdout(line({ method: 'turn/completed', params: { threadId: 'thr-codex-1', turn: { id: 'turn-1', status: 'completed', items: [] } } }));
+    })();
+  };
 }
 
 /**

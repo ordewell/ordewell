@@ -123,6 +123,8 @@ export type WebviewToHost =
       runners?: RunnerId[];
       /** The user typed it, so the conversation shows it as theirs; a button's message is not echoed. */
       typed?: boolean;
+      /** Try Again's: the message of a turn that failed, sent as it was, and shown already. */
+      again?: boolean;
     }
   | { type: 'sendSystemCommand'; command: SystemCommand; taskId?: string; requestId?: number }
   | { type: 'editTask'; taskId: string; edit: TaskEdit }
@@ -282,8 +284,17 @@ export type HostToWebview =
   | { type: 'heldPrompts'; prompts: PromptHold }
   /** Queued text the host gave back, to go above whatever is in the input. */
   | { type: 'promptUnsent'; text: string }
-  /** `code` names an error whose way out is detecting again: no planner was ready for the goal. */
-  | { type: 'showError'; error: string; code?: 'planner_not_ready' }
+  /**
+   * The host sent what was held as the next turn's message, as the user's own
+   * send would: what the turn before it failed with, and its Try Again, are over.
+   */
+  | { type: 'heldPromptsSent' }
+  /**
+   * `code` names an error whose way out is detecting again: no planner was
+   * ready for the goal. `resend` is the message whose planner turn failed, which
+   * Try Again sends again.
+   */
+  | { type: 'showError'; error: string; code?: 'planner_not_ready'; resend?: string }
   | { type: 'setModels'; models: DiscoveredModel[] }
   | { type: 'setRunners'; runners: RunnerMeta[] }
   /**

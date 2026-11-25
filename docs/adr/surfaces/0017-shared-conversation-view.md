@@ -198,7 +198,12 @@ the same word.)
   gives everything held back to the composer instead. A Send now that is
   refused or fails gives what it took back to the composer too; one whose turn
   was stopped by another, or discarded because its session was left, does
-  not, since there is nothing left to answer it. Core's `sendNowGivesBack`
+  not, since there is nothing left to answer it. A message refused before any
+  turn started (the planner not ready) was never sent: it is taken off the
+  chat and given back to the composer with what was held behind it, above
+  anything typed since, on every surface, and none of it is sent into the same
+  refusal; a turn that started and then failed keeps its message where it was
+  drawn. Core's `sendNowGivesBack`
   is that one rule, read by the TUI's reducer and by ui's `ChatSessionHost`,
   which runs the hold, Send now and release for both chat views over their
   own session (the in-process Session, or the daemon). The same host answers
@@ -319,3 +324,4 @@ the same word.)
 - 2026-11-13 — Q2: one give-back rule for Send now on every surface (core's `sendNowGivesBack`) and one `ChatSessionHost` in ui for both chat views; the TUI no longer gives back a forced send whose turn was discarded, as the desktop already did.
 - 2026-11-13 — Q2: the plan cards' system commands and Mark complete / Mark not done, Revert and Force start are `ChatSessionHost`'s too, one copy for VS Code and the desktop app; a refusal is said by the surface, and a failed command no longer skips the release on the desktop.
 - 2026-11-13 — Q2: Merge all, its opening question and the questions it is held for (unpassed checks, beside a running ops task) are `ChatSessionHost`'s too, through ui's `MergeAll`; VS Code and the desktop app answer only the merge call. A hold repeated after its yes now throws the seam's words on both, where the desktop rethrew the daemon's refusal and VS Code fell through to its failed-outcome error.
+- 2026-11-24 — Q2: a message refused before any turn started (`planner_not_ready`) leaves the chat and goes back to the composer, with what was held behind it, in the TUI, the desktop app and VS Code. Seen live: a goal refused because the planner was signed out was gone from the composer, and the up arrow brought back `/planner`.

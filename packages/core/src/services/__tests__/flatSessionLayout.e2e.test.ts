@@ -91,7 +91,7 @@ describe('a flat session on disk', () => {
       '.ordewell/sessions/session-feedface/tasks/t1/1.jsonl',
       '.ordewell/worktrees/run00001/1-write-a/',
     ]);
-    expect(readFileSync(join(root, '.ordewell/.gitignore'), 'utf8')).toBe('*\n!.gitignore\n!skills/\n!skills/**\n');
+    expect(readFileSync(join(root, '.ordewell/.gitignore'), 'utf8')).toBe('*\n!skills/\n!skills/**\n');
     expect(session.taskLogLocation).toEqual({ baseDir: root, sessionId: 'session-feedface' });
 
     finish();

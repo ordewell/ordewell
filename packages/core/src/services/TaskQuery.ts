@@ -209,6 +209,10 @@ export interface TaskQueryCatalog {
   models: Partial<Record<RunnerId, DiscoveredModel[]>>;
   modes: Record<RunnerId, RunnerModeInfo[]>;
   autonomousDefault: boolean;
+  /** Enabled runners not offered now, each with the line the planner is told why (ADR-0052). */
+  withheld?: { runner: RunnerId; reason: string }[];
+  /** Offered runners whose models are still being discovered, with none known yet. */
+  discovering?: RunnerId[];
 }
 
 /**

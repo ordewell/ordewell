@@ -499,8 +499,9 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   ([arXiv 2609.25396](https://arxiv.org/abs/2609.25396)). So one cheap line is worth having, and no more.
 - **Enforced scopes, or a lock tool.** Rejected: isolation makes a miss cheap, so a refusal would stop work
   to save a conflict.
-- **A wait tool.** Rejected: a tool call times out by default at 60 seconds on Codex and 30 on OpenCode, and
-  a blocked runner keeps a process and a slot.
+- **A wait tool.** Rejected: a tool call times out by default at 300 seconds on Codex, a fixed deadline no
+  progress resets ([ADR-0022](../runners/0022-ordewell-mcp-server.md) T5), and 30 on OpenCode, and a blocked
+  runner keeps a process and a slot.
 - **MCP Tasks.** Rejected. Of the three harnesses only Claude Code has a mark in the client matrix, and Codex
   and OpenCode have no row. Ordewell already owns the task lifecycle.
 - **A global board, or one every task reads.** Rejected: it brings back the cost it replaces.
@@ -555,3 +556,4 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 - 2026-11-22 — R4: the catch-up leaves out a hold a call left (Stop, revert, mark not done), which is `run_held`'s.
 - 2026-11-22 — R4: a call that starts a task again ends the catch-up's leaving out of its hold, so a hold its failed start leaves is caught up.
 - 2026-11-23 — R5: a wake-up carries Ordewell's one-line account of what the last wake-up turn executed, within the cap.
+- 2026-11-24 — the wait tool's rejection states Codex's tool deadline as 0.171.0's source has it, 300s (ADR-0022 T5).

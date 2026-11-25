@@ -417,7 +417,7 @@ async function followRun(
       pausedAtGate = paused;
     }
     if (event.type === 'review_needed') {
-      console.log('\nPlan needs your sign-off: run `ordewell approve` to continue.');
+      console.log('\nPlan needs your sign-off: `ordewell run` to continue.');
     }
     if (event.type === 'execution_complete') {
       const summary = event.summary;

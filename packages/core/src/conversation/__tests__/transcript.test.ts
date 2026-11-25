@@ -156,6 +156,33 @@ describe('fromTranscript', () => {
     ]);
   });
 
+  it('draws the goal of an unanswered opening sent again once, as the line its pending input and its turn take over', () => {
+    const skill = { invokedBy: 'user' as const, name: 'tdd', source: 'global' as const, path: '~/tdd/SKILL.md' };
+    const opening: ConversationMessage[] = [
+      { role: 'user', content: '/tdd add a login page', timestamp: '2026-10-11T10:00:00Z' },
+      { role: 'user', content: '/tdd skill loaded', timestamp: '2026-10-11T10:00:00Z', kind: 'skill_load', skill: { ...skill, content: 'HIDDEN' } },
+      { role: 'assistant', content: 'The planner failed.', timestamp: '2026-10-11T10:00:05Z', kind: 'error' },
+    ];
+    const pending = [{ id: 'p1', source: 'user' as const, text: '/tdd add a login page', timestamp: '2026-10-11T10:01:00Z', skills: [skill] }];
+    const lines = (view: ReturnType<typeof fromTranscript>) => view.blocks.map((b) => b.type === 'message' ? `${b.role}: ${b.text}` : b.type);
+
+    let live = fromTranscript(opening, [], undefined, pending);
+    expect(lines(live)).toEqual(['user: /tdd add a login page', 'skill_load', 'error: The planner failed.']);
+
+    const landed: ConversationMessage[] = [...opening, { role: 'assistant', content: 'Planned.', timestamp: '2026-10-11T10:01:05Z' }];
+    live = reduceConversation(live, { type: 'planner_turn_started', turnId: 't2', prompt: '/tdd add a login page', skills: [skill] });
+    live = reduceConversation(live, { type: 'planner_message', turnId: 't2', content: 'Planned.', timestamp: '2026-10-11T10:01:05Z' });
+    live = reduceConversation(live, planSnapshot(landed));
+    live = reduceConversation(live, { type: 'planner_turn_ended', turnId: 't2', outcome: 'message' });
+    expect(lines(live)).toEqual(['user: /tdd add a login page', 'skill_load', 'error: The planner failed.', 'planner: Planned.']);
+    expect(live.pendingInputs ?? []).toEqual([]);
+
+    // A goal the planner answered is a new message when sent again.
+    expect(lines(fromTranscript(landed, [], undefined, pending))).toEqual([
+      'user: /tdd add a login page', 'skill_load', 'error: The planner failed.', 'planner: Planned.', 'user: /tdd add a login page', 'skill_load',
+    ]);
+  });
+
   it('keeps a spawn call no subagent record claims as an ordinary row, as sessions saved before subagents were logged have it', () => {
     const history: ConversationMessage[] = [
       { role: 'user', content: 'survey', timestamp: '2026-09-27T10:00:00.000Z' },

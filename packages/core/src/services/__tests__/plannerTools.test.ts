@@ -1807,6 +1807,48 @@ const handlerOver = (read: PlannerToolsHost['read'], tasks: Task[] = [], readHan
 
 const answering: PlannerToolsHost['read'] = async (_signature, answer) => ({ status: 'answered', value: await answer(), landNow: false });
 
+describe('a runner not offered, as the planner reads it (ADR-0052)', () => {
+  const context = { signal: new AbortController().signal };
+  const withheld = [{ runner: 'codex', reason: 'Codex: signed out, not offered until signed in' }];
+  const handler = plannerToolHandler({
+    skills: () => [],
+    turnId: () => 'turn-1',
+    recordSkillLoad: () => false,
+    liveCatalog: async () => ({ runners: ['claude-code'], models: {}, modes: {}, autonomousDefault: true, withheld }),
+    checkPlan: async () => ({ ok: false as const, errors: [{ taskId: 'a', field: 'assignedRunner', message: 'Runner "codex" is not one of: claude-code' }], runners: ['claude-code'] }),
+    submitPlan: async () => ({ ok: true as const, summary: [], tasks: [] }),
+    editPlan: async () => ({ ok: true as const, summary: [], tasks: [] }),
+    tasks: () => [],
+    read: answering,
+    liveOutput: () => null,
+    lastAttempt: () => null,
+    taskLogAttempts: () => [],
+    taskLog: () => [],
+    taskDiff: async () => ({ available: false, reason: 'not available', cause: 'no-record' }),
+    runCommand: async () => ({ success: true, output: '', truncated: false }),
+    fetchUrl: async () => ({ success: true, output: '', truncated: false }),
+    webSearch: async () => undefined,
+    execute: async () => ({ ok: true, message: '' }),
+  });
+
+  it('lists it apart from the runners, with why', async () => {
+    const reply = JSON.parse((await handler.listRunners!({}, context)).text) as { runners: { id: string }[]; notOffered: unknown };
+    expect(reply.runners.map((r) => r.id)).toEqual(['claude-code']);
+    expect(reply.notOffered).toEqual(['Codex: signed out, not offered until signed in']);
+  });
+
+  it('refuses its models with why', async () => {
+    const reply = await handler.listModels!({ runner: 'codex' }, context);
+    expect(reply).toEqual({ isError: true, text: 'Runner "codex" is not offered: Codex: signed out, not offered until signed in. Offered runners: claude-code.' });
+  });
+
+  it('refuses a plan that assigns it, with why', async () => {
+    const reply = JSON.parse((await handler.submitPlan!({ tasks: [] } as unknown as SubmitPlanArgs, context)).text) as { enabledRunners: string[]; notOffered: string[] };
+    expect(reply.enabledRunners).toEqual(['claude-code']);
+    expect(reply.notOffered).toEqual(['Codex: signed out, not offered until signed in']);
+  });
+});
+
 describe('task_query on a long read', () => {
   const context = { signal: new AbortController().signal };
   const plan = (count: number) => Array.from({ length: count }, (_, i) => createTask({ id: `t${i + 1}`, order: i + 1, title: `Task ${i + 1}`, prompt: `${i + 1}:${'x'.repeat(6_000)}` }));

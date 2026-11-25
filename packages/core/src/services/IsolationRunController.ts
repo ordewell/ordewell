@@ -1,6 +1,6 @@
 import { TASK_DIFF_NO_RECORD, TASK_DIFF_NO_RUN, TASK_DIFF_SHARED, taskDiffUnavailable, type TaskDiffRead, type TaskDiffResult } from './taskDiffRead';
 import type { Task } from '../models/Task';
-import type { HandoffCommit } from '../models/Handoff';
+import { totalChange, type HandoffChange, type HandoffCommit } from '../models/Handoff';
 import type { IConfig } from '../interfaces/IConfig';
 import type { INotification } from '../interfaces/INotification';
 import type {
@@ -432,6 +432,11 @@ export class IsolationRunController {
   /** The conflict repairs the task has had. */
   repairsOf(taskId: string): number {
     return this.run?.tasks[taskId]?.repairs ?? 0;
+  }
+
+  /** What the task's latest landing brought, as git counted it then; undefined where it has none. */
+  landedChangeOf(taskId: string): HandoffChange | undefined {
+    return totalChange(Object.values(this.run?.tasks[taskId]?.repos ?? {}).map((entry) => entry.change));
   }
 
   /** The files the task's last repair resolved. */

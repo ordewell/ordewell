@@ -77,6 +77,11 @@ describe('what a conversation block says', () => {
       .toEqual(['no findings', 'patch: 2 files, +9 -1', 'Tried it.']);
   });
 
+  it('says what a done task changed, Ordewell\'s count, before the runner\'s own words', () => {
+    expect(handoffPeekParts({ summary: 'Only added lines.', findingCount: 0, severity: null, change: '1 file, +1 -1', commit: { subject: 'Document --shout' } }))
+      .toEqual(['no findings', '1 file, +1 -1', 'Commit: Document --shout', 'Only added lines.']);
+  });
+
   it('takes the summary\'s first non-blank line, never a leading blank one', () => {
     expect(handoffPeekParts({ summary: '\n\n  Keep it scoped.  \nMore context.', findingCount: 0, severity: null }))
       .toEqual(['no findings', 'Keep it scoped.']);

@@ -118,7 +118,7 @@ export async function runEffect(effect: Effect, deps: EffectDeps): Promise<void>
     await perform(performed, deps);
   } catch (err) {
     if (!isConnectionRefused(err)) {
-      fail(failedFrom(err));
+      fail({ ...failedFrom(err), ...unsentBy(effect, err) });
       return;
     }
 
@@ -194,6 +194,35 @@ function explain(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/**
+ * Whether the daemon still holds the session an opening that failed was for:
+ * it does once the goal was admitted and the first turn started. A refusal
+ * before that (planner_not_ready) never leaves one, and a session the daemon
+ * cannot be asked about is let go, as before.
+ */
+async function daemonKeeps(deps: EffectDeps, sessionId: string, err: unknown): Promise<boolean> {
+  if (err instanceof DaemonRefusal && err.code === 'planner_not_ready') return false;
+  try {
+    await deps.api.getSession(sessionId, deps.workspace);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The user's message a refusal before any planner turn started (409
+ * planner_not_ready) kept from being sent: nothing reached the planner, so the
+ * composer gets it back. A turn that started and then failed was sent, and
+ * keeps its place in the transcript.
+ */
+function unsentBy(effect: Effect, err: unknown): { unsent?: string } {
+  if (!(err instanceof DaemonRefusal) || err.code !== 'planner_not_ready') return {};
+  if (effect.type === 'startConversation') return { unsent: effect.goal };
+  if (effect.type === 'sendMessage') return { unsent: effect.message };
+  return {};
+}
+
 /** The failure a rejected call becomes, carrying the daemon's reason when it gave one. */
 function failedFrom(err: unknown): Extract<Action, { type: 'failed' }> {
   const code = err instanceof DaemonRefusal ? err.code : undefined;
@@ -252,11 +281,18 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
           sessionLink(deps, sessionId).close();
           throw err;
         }
-        // What reaches here is a refusal the daemon answered, or a request that
-        // never went out for another reason (a lost reply is settled inside
-        // `converse`, the session kept). Neither leaves a conversation a reply
-        // could continue, so the id is let go: keeping it would 404 every
-        // following message.
+        // A first turn that started and then failed was sent: the daemon saved
+        // the session as it admitted the goal and keeps it, goal and failure,
+        // for the next message to continue.
+        if (await daemonKeeps(deps, sessionId, err)) {
+          await reloadSettings(deps, sessionId);
+          throw err;
+        }
+        // What reaches here is a refusal before any turn (the planner not
+        // ready, no runner enabled), or a request that never went out for
+        // another reason (a lost reply is settled inside `converse`, the
+        // session kept). Neither leaves a conversation a reply could continue,
+        // so the id is let go: keeping it would 404 every following message.
         sessionLink(deps, sessionId).close();
         dispatch({ type: 'sessionCleared', sessionId });
         // The welcome is not any session: its run settings are the file's again (ADR-0030).
@@ -852,8 +888,9 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
         dispatch({ type: 'notice', message: merged.message });
         return;
       }
+      // A merge that landed is told once, by the daemon's notice of it, which every surface draws; the reply's words are for a failure.
       const { ok, message } = mergeOutcome(merged, effect.branch, effect.group === true, effect.repaired ?? []);
-      dispatch({ type: ok ? 'notice' : 'failed', message });
+      if (!ok) dispatch({ type: 'failed', message });
       return;
     }
 

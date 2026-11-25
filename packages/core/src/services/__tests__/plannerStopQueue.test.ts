@@ -138,7 +138,8 @@ describe('the user\'s Stop of planner work', () => {
 
     const followUp = env.session.continueConversation('Use Postgres');
     await flushMicrotasks();
-    expect(env.session.planState?.pendingTurns?.map((t) => t.text)).toEqual(['Use Postgres']);
+    // The goal waits too, saved as it was sent, until its opening lands it.
+    expect(env.session.planState?.pendingTurns?.map((t) => t.text)).toEqual(['Build inventory', 'Use Postgres']);
 
     expect(env.session.abortPlannerTurn()).toBe(true);
     await expect(followUp).rejects.toBeInstanceOf(PlannerTurnStoppedError);

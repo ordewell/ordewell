@@ -615,7 +615,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
 
             {handoff && (
               <TaskFold label="Handoff" className="task-fold-handoff"
-                preview={[firstLine(handoff.summary), handoffFindingsText(handoff.findingCount)].filter(Boolean).join(' · ')}>
+                preview={[row.handoff?.change, firstLine(handoff.summary), handoffFindingsText(handoff.findingCount)].filter(Boolean).join(' · ')}>
                 <TaskHandoff handoff={handoff} taskName={(id) => taskRefOf(siblings ?? [], id)}
                   onReadFull={onOpenLog && chatAvailable ? () => onOpenLog(task.id) : undefined} />
               </TaskFold>
@@ -883,7 +883,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
         {/* The scheduler leaves it for the user (ADR-0035): it must read as waiting on them, not as next in line. */}
         {row.waitsForApproval && (
           <span className="task-isolation-badge approval"
-            title="Added after you approved the plan, so it does not start on its own. Approve it, or Approve all, and it starts once its dependencies finish.">
+            title="Added after you ran the plan, so it does not start on its own. Approve it, or Approve all, and it starts once its dependencies finish.">
             {row.waitsForApproval}
           </span>
         )}

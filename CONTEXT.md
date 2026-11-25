@@ -430,6 +430,13 @@ or `unknown`). The planner-turn calls carry no idle timeout for that reason; the
 user's Stop is their bound. A reply that arrived but cannot be used or shown (a
 200 with no plan, a plan the surface cannot fold) is not a lost reply: it is
 `answered`, keeps the session, and surfaces as its own error.
+A message *refused before any turn started* (409 `planner_not_ready`: the
+planner cannot plan) was never sent: a refused first message leaves no
+session, and every surface takes the message off the chat and gives its text
+back to the composer, ahead of anything typed since (the TUI's
+`giveBackUnsent`, ui's `ConversationViewHost.unsent`). A later message refused
+so keeps its session. A turn admitted and then failed was sent, and keeps its
+place.
 *Avoid:* "planning abort" or "generating" for it — both named a surface's copy
 of this state, and the copies drifted; *Avoid:* confusing it with **Turn**, the
 streamed span a surface draws under one `turnId`: every user turn is a planner
@@ -1695,7 +1702,10 @@ never a transcript. A handoff is not a *Report* (the report is its long form,
 stored and never pushed), and not a *Verdict*: the verdict is what
 `VerdictEngine` derives from the completion call's status, and a finding's
 severity is advice to a reader that reaches it nowhere. A task saved without
-one is rendered from `outputSummary.report`.
+one is rendered from `outputSummary.report`. A landed task's handoff also
+carries its `change`: the files and the lines added and removed its landing
+brought, which Ordewell counts from git and the author never states, shown as
+`1 file, +1 -1` wherever the task shows as done.
 *Avoid:* a bare "handoff" where the *Isolation handoff* (the end of an isolated
 run, for the user to merge) could be meant; "result" or "output" for it;
 "summary" for the whole (the summary is its first field).
@@ -2041,7 +2051,9 @@ out of rounds, or, in an open run, a task that nothing but a person holds back
 (its *Merge gate*, a hold, its approval, nothing to run, a user task), or a
 reverted task in any run; and of the run itself, landed work with nothing left
 to move it, a *Blocked run*, and, below Act, a planner reply to a *Wake-up turn*
-that nothing will follow, which the user answers by writing to the planner.
+that nothing will follow, which the user answers by writing to the planner or
+by acting on the run (a merge, run, retry or skip). The reply to the end-of-run
+wake-up alone is the wrap-up and asks nothing, so it is none.
 It carries an id that names the wait and not just its attempt, which can wait
 many times, so a later wait is another escalation; the task it belongs to, which
 links to the
@@ -4069,8 +4081,9 @@ Execute while a supervisor's `merge_all` still merges is the user's.
 
 **Autorun** — the **Run setting** that starts a plan when the reply that
 submits it ends, approved as if the user had pressed Execute; off by default, set in
-`/settings` (or `ordewell autorun` headless; ADR-0030). The planner skips the outline gate but still asks
-clarifying questions. It fires on a submission only — never on a session's load
+`/settings` (or `ordewell autorun` headless; ADR-0030). Either way the planner submits the plan with its
+outline in one reply and still asks clarifying questions; with autorun off the plan stays a draft until the
+user runs it, which is their one gate. It fires on a submission only — never on a session's load
 or on the switch being turned on while a plan waits — and starts ops tasks too.
 Work already live, a task the planner started with `run_task` in that reply,
 joins it as one scheduled run in Full; in Guarded it does not, and a notice says why, as it
@@ -4156,7 +4169,12 @@ has, so one refused op refuses its batch. A whole plan is refused while a task
 runs, and the planner is asked for task edits. Inputs wait on the plan
 (`pendingTurns`), saved as they arrive and dropped in the save that lands their
 turn's outcome, so a reload keeps exactly what no turn answered for the next
-input without opening a turn; a turn that fails drops the user's inputs but leaves a wake-up batch for the next turn. A
+input without opening a turn; a turn that fails drops the user's inputs but leaves a wake-up batch for the next turn.
+The conversation's opening goal waits there too from the moment the planner
+gate admits it (`PlanTurns.opened`), the opening's own to land and never the
+queue's, so a session is saved, and listed, while its first turn runs; an
+opening that fails or is stopped keeps the goal in the transcript, with the
+failure after it, for the next message to answer. A
 load also carries over the mid-run edits older builds queued
 (`queuedMessages`).
 *Avoid:* "pending plan edit" or "queued edit" for it — nothing waits for a
@@ -4334,14 +4352,16 @@ remains, because it is the only non-interactive way in.
 
 **Surface controls** (`SURFACE_CONTROLS`, `services/surfaceControls.ts`;
 ADR-0030) — how each surface takes each action only the user takes (merge,
-answer a checkpoint, approve or run the plan, skip, force start, mark, revert,
-interrupt, the queued-message controls, cancel a resume, approve the review,
-compact): one row each for the TUI, VS Code, the desktop app and an unknown
+answer a checkpoint, run the plan, skip, force start, mark, revert,
+interrupt, the queued-message controls, cancel a resume, compact): one row each for the TUI, VS Code, the desktop app and an unknown
 surface, which names every surface's. The TUI's are slash commands and keys
 (`/merge`). The surface is read from the live **Session lease**'s host
 (`surfaceOf`). The planner hears its row in the **SURFACE AND SETTINGS** block of
 its **Planner briefing**, and a refusal that tells it what the user does names
-the action and that row's control.
+the action and that row's control. Starting a drafted plan is run on every
+surface, since running it is what approves it: no row, help, menu or palette
+names a plan-level approve, and `/approve` and `ordewell approve` are unlisted
+aliases of run.
 *Avoid:* "buttons" for the actions — the TUI has none; name the action, and the
 control only as the surface's row words it.
 
@@ -4544,7 +4564,10 @@ unparseable answer or a reader that cannot judge one: only the runner can say it
 user is logged out. `unknown` never blocks and is never flagged, because an
 older or offline CLI, a custom provider with its own key and a changed output
 shape must not cost work that will succeed. `signed-out` rides beside *usable*,
-never inside it: the agent stays listed and choosable, is flagged, and a planner
+never inside it: the agent stays listed, enabled and choosable, is flagged, is
+not offered to a planner as a runner (left out of `list_runners`, `list_models`
+and what a plan may assign, with the reason `Codex: signed out, not offered
+until signed in`) until its check reads signed in, and a planner
 turn is refused before it is sent with the *login command* the manifest declares;
 the TUI's `/login` (or `/login <runner>`) and VS Code's Log in run that command
 in a real terminal and then ask again, and naming another agent signs it in

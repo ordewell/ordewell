@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import type { DiscoveredModel } from '../../models/Task';
 import type { LegacyPlanState } from '../../models/Task';
 import { makeSession, testWorkspace } from './sessionTestKit';
+import { recordRunnerAuth, resetRunnerAuth } from '../runnerAuth';
 
 function models(...ids: string[]): DiscoveredModel[] {
   return ids.map((modelId) => ({ modelId, modelLabel: modelId, variants: [] }));
@@ -92,6 +93,34 @@ describe('catalog block — always-on, allowlist-filtered', () => {
     const outgoing = String(continueConversation.mock.calls[0][0]);
     expect(outgoing).toMatch(/^codex: gpt-5$/m);
     expect(outgoing).not.toMatch(/^opencode:/m);
+  });
+
+  it('leaves a signed-out runner out and says why, until it signs in (ADR-0052)', async () => {
+    const continueConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'ok', researchLog: [] });
+    const session = makeSession({
+      aiService: { continueConversation, hasActiveConversation: () => true },
+      settings: () => ({ enabledRunners: ['claude-code', 'codex'] }),
+      modelResolver: {
+        modelsForRunners: vi.fn().mockResolvedValue({}),
+        getCachedRunnerModels: (runner: string) => (runner === 'codex' ? models('gpt-5') : []),
+      },
+    });
+    session.loadPlan(emptyPlan(['claude-code']), 'goal', testWorkspace, { persist: false });
+    recordRunnerAuth('codex', { state: 'signed-out' }, testWorkspace);
+    try {
+      await session.continueConversation('go on');
+      const outgoing = String(continueConversation.mock.calls[0][0]);
+      expect(outgoing).not.toMatch(/^codex: gpt-5$/m);
+      expect(outgoing).toContain('<not_offered>Codex: signed out, not offered until signed in</not_offered>');
+
+      recordRunnerAuth('codex', { state: 'signed-in' }, testWorkspace);
+      await session.continueConversation('and now');
+      const next = String(continueConversation.mock.calls[1][0]);
+      expect(next).toMatch(/^codex: gpt-5$/m);
+      expect(next).not.toContain('<not_offered>');
+    } finally {
+      resetRunnerAuth();
+    }
   });
 
   it('caps the per-runner model list and states how many more exist', async () => {

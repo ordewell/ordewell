@@ -78,6 +78,8 @@ export interface HandoffPeekSubject {
   severity: FindingSeverity | null;
   /** The patch its attempt saved (ADR-0050), when it saved one. */
   patch?: { peek: string } | null;
+  /** What a done task's work changed as it landed, Ordewell's count from git: "1 file, +1 -1". */
+  change?: string | null;
 }
 
 /**
@@ -90,7 +92,8 @@ function firstNonBlankLine(text: string): string {
 
 /**
  * A handoff's compact row, as the parts a surface joins after its own lead
- * ("handed over"): the finding count and worst severity, then the commit
+ * ("handed over"): the finding count and worst severity, what its landing
+ * changed as git counts it, then the commit
  * subject before the summary, since that is what a reviewer reads first.
  */
 export function handoffPeekParts(handoff: HandoffPeekSubject): string[] {
@@ -99,7 +102,7 @@ export function handoffPeekParts(handoff: HandoffPeekSubject): string[] {
   const severity = handoff.severity ? [severityLabel(handoff.severity)] : [];
   const commit = handoff.commit ? [`Commit: ${handoff.commit.subject.trim()}`] : [];
   const summary = firstNonBlankLine(handoff.summary);
-  return [handoffFindingsText(handoff.findingCount), ...severity, ...(handoff.patch ? [handoff.patch.peek] : []), ...commit, ...(summary ? [summary] : [])];
+  return [handoffFindingsText(handoff.findingCount), ...severity, ...(handoff.change ? [handoff.change] : []), ...(handoff.patch ? [handoff.patch.peek] : []), ...commit, ...(summary ? [summary] : [])];
 }
 
 // What a compaction that is not plainly done says instead (ADR-0017): each
