@@ -3,6 +3,7 @@ import { homedir as osHomedir } from 'os';
 import { isAbsolute, join } from 'path';
 import type { AiProvider } from '../../interfaces/IConfig';
 import type { RunnerCredentials } from '../../plugins/types';
+import { sharedProviderCredentials, type HostCredentialReader } from '../hostCredentials';
 import { ordewellProvider } from './ordewellProvider';
 import { RunnerCredentialRefusal } from '../signInHint';
 
@@ -19,6 +20,8 @@ import { RunnerCredentialRefusal } from '../signInHint';
 
 export interface ClineCredentialDeps {
   homedir?: () => string;
+  /** The shared store's keys the spawn's variables lack; the host's registered reader by default. */
+  shared?: HostCredentialReader;
 }
 
 /** A store is a few providers' settings; anything this big is not one. */
@@ -55,11 +58,14 @@ const ROUTES = 'Set the key of a provider Cline offers, such as OpenRouter, in O
  */
 export function clineCredentials(deps: ClineCredentialDeps = {}): RunnerCredentials {
   const homedir = deps.homedir ?? osHomedir;
+  const shared = deps.shared ?? sharedProviderCredentials;
   return async ({ env }) => {
     // The user's own route: Cline already starts under their variables, and the store is not Ordewell's to read then.
     if (env.CLINE_API_KEY) return null;
     // A key configured in Ordewell is the person's choice for every agent, so it comes before Cline's own store.
-    const own = ordewellProvider(env, (vendor, baseUrl) => CLINE_PROVIDERS[vendor]?.baseUrl === baseUrl);
+    // One saved in the shared store a host keeps out of its environment is read as if there, as the daemon
+    // reads it: for a vendor the variables lack, pinned to its saved endpoint, so none of theirs moves it.
+    const own = ordewellProvider({ ...env, ...shared(env) }, (vendor, baseUrl) => CLINE_PROVIDERS[vendor]?.baseUrl === baseUrl);
     const provider = own && CLINE_PROVIDERS[own.vendor];
     if (own && provider) {
       const model = env.CLINE_MODEL ? undefined : own.model;

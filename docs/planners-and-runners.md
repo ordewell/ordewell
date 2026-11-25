@@ -378,7 +378,9 @@ too. A key in VS Code's secret storage or settings is never put in the extension
 environment: the built-in runner on its provider runs on it, and a coding agent does not
 generally get it. Ordewell
 hands applicable saved keys to Qwen Code, Cline and Gemini CLI for their starts
-and model discovery. Claude Code and Codex can
+and model discovery. In VS Code, Cline is also handed a key from `~/.ordewell/.env`,
+with the endpoint saved beside it, for a provider it offers at that address; Qwen Code
+and Gemini CLI there read the environment only. Claude Code and Codex can
 also sign in with `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`, so such a key saved for
 the Anthropic or OpenAI planner can change which account they use.
 
