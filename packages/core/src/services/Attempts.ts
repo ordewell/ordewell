@@ -15,7 +15,7 @@ import type { PlanStore } from './PlanStore';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type { IsolationDecision, IsolationRunController } from './IsolationRunController';
 import type { Landing, LandingOutcome } from './Landing';
-import { configHoldReason, TaskStartConfig } from './taskStartConfig';
+import { configHoldReason, TaskStartConfig, type StartConfigFound } from './taskStartConfig';
 import { taskRefOf } from './TaskRefs';
 import { classifyRunnerStop, PROVIDER_RETRY_DELAYS_MS, stopsRunner, type AttemptEnd, type TurnFailure } from './runnerExit';
 import type { ResearchTasks } from './ResearchTasks';
@@ -56,8 +56,8 @@ import { compactionStartOf } from './compactionStart';
 import { modeRefusalOf, modeRefusedReason } from './modeRefusal';
 
 class TaskStartConfigError extends Error {
-  constructor(paths: string[], inChildPlan: boolean) {
-    super(configHoldReason(paths, inChildPlan));
+  constructor(found: StartConfigFound, inChildPlan: boolean) {
+    super(configHoldReason(found, inChildPlan));
   }
 }
 
@@ -890,7 +890,7 @@ export class Attempts {
       if (kind.kind === 'delegated') await this.deps.discardChild?.(task);
       if (kind.kind === 'repair' && checksConfig(kind, attempt.script)) {
         const paths = await this.startConfig.check(runs, task.id, { epoch: runs.epoch, root: this.deps.workspaceRoot(), cwd: null, worktree: true });
-        if (paths.length) throw new TaskStartConfigError(paths, runs.inChildPlan);
+        if (paths.length) throw new TaskStartConfigError(this.startConfig.found(paths), runs.inChildPlan);
       }
       const intent = attemptWorkspace(kind);
       if (intent.kind === 'worktree' && !attempt.isolationDecision) throw new Error('No isolation decision was taken for this attempt.');
@@ -908,7 +908,7 @@ export class Attempts {
       attempt.worktree = worktree;
       if (kind.kind !== 'repair' && checksConfig(kind, attempt.script)) {
         const paths = await this.startConfig.check(runs, task.id, { epoch: runs.epoch, root: this.deps.workspaceRoot(), cwd, worktree });
-        if (paths.length) throw new TaskStartConfigError(paths, runs.inChildPlan);
+        if (paths.length) throw new TaskStartConfigError(this.startConfig.found(paths), runs.inChildPlan);
       }
       if (checksTree(kind)) attempt.snapshot = await runs.snapshotWorkspace();
       if (this.live.get(task.id) !== attempt) return await this.leaveEnded(task, attempt);

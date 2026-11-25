@@ -241,6 +241,43 @@ describe('a Continue (ADR-0055 D17)', () => {
     parent.destroy();
   });
 
+  it('does what the hold says of a child plan it keeps: a Continue is held again with it, a fresh start discards it and is held once more, and the next start begins a new run (the review of 8edf6409, F2)', async () => {
+    const runner = fakeRunner({ a: ['a.txt'], b: ['b.txt'], cfg: ['.claude/settings.json'] }, { held: ['b'] });
+    const cfg = createTask({ id: 'cfg', order: 2, title: 'Add a hook', prompt: 'add the hook' });
+    const { parent } = tree([SUBMIT([childTask('a', 1), childTask('b', 2, ['a'])]), NOTHING, DONE], { runner, tasks: [delegated(), cfg] });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(runner.spawned).toContain('b'), { timeout: 20_000 });
+    await vi.waitFor(() => expect(statusOf(parent, 'cfg')).toBe('completed'), { timeout: 20_000 });
+    const child = childIdOf(parent, 'd')!;
+    parent.stopExecution();
+    await parent.stopSubtree();
+    await vi.waitFor(() => expect(parent.planState?.isolation?.run.tasks.d.status).toBe('kept'));
+    const run = parent.planState?.isolation?.run.id;
+    expect(await parent.execute({ command: 'merge_all' }, { kind: 'user' })).toMatchObject({ ok: true });
+    const holdOfD = () => parent.runSnapshot().tasks.find((t) => t.id === 'd')?.holdReason;
+    const startHeld = async (command: Parameters<typeof parent.execute>[0]) => {
+      expect(await parent.execute(command, { kind: 'user' })).toMatchObject({ ok: true });
+      await vi.waitFor(() => expect(holdOfD()).toContain('.claude/settings.json'), { timeout: 20_000 });
+    };
+    const CONTINUE_D = { command: 'retry_task', task: 'd', from: 'session', message: 'go on' } as const;
+
+    await startHeld(CONTINUE_D);
+    expect(holdOfD()).toContain('Where this task holds such work of its own, a Continue keeps it, and the run with it, so it is held again there; a fresh start (Start now, Retry or Run) discards that work and is held once more, and your next start then begins the new run');
+    parent.stopExecution();
+    await startHeld(CONTINUE_D);
+    expect({ run: parent.planState?.isolation?.run.id, child: childIdOf(parent, 'd') }).toEqual({ run, child });
+
+    parent.stopExecution();
+    await startHeld({ command: 'run_task', task: 'd' });
+    expect(parent.planState?.isolation?.run.id).toBe(run);
+    expect(childIdOf(parent, 'd')).not.toBe(child);
+
+    parent.stopExecution();
+    expect(await parent.execute({ command: 'run_task', task: 'd' }, { kind: 'user' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(parent.planState?.isolation?.run.id).not.toBe(run), { timeout: 20_000 });
+    parent.destroy();
+  });
+
   it('leaves the tree\'s pool and its approval feed when the child it built could not load its plan', async () => {
     const runner = fakeRunner({ a: ['a.txt'] }, { held: ['a'] });
     const errors = vi.fn();

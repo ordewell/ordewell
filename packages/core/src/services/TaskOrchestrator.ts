@@ -2492,7 +2492,7 @@ export class TaskOrchestrator {
     const asked = now?.taskId === taskId;
     await this.whileAdmitted(async (admission) => {
       const replay = () => this.resumeTask(taskId, now);
-      // Only the task a person's Resume now names is their start: the rest are swept along.
+      // The task a person's Resume now names is their start; the rest are swept along.
       const person = asked && origin === 'person';
       let opened = await this.openFor(taskId, origin, replay, person);
       // One asked for now answers its caller as {@link openForAdmitted} does,

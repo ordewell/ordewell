@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanUp, hasGit, heldPlan, HOOK, ok, PLANNER, refExists, startsAgain, SUPERVISOR, USER } from './heldConfigKit';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import { cleanUp, hasGit, heldPlan, HOOK, ok, PLANNER, refExists, startsAgain, SUPERVISOR, USER, type HeldTask } from './heldConfigKit';
 
 /**
  * The second and third reviews' reproductions, on real git (ADR-0028,
@@ -8,6 +10,9 @@ import { cleanUp, hasGit, heldPlan, HOOK, ok, PLANNER, refExists, startsAgain, S
  * only by a person's own start of a task in a worktree, judged at the start
  * that activates the run (C1, C1', F1), a release is per run (C2), and it
  * follows from what the hold says, a run that reverted a task included (F2).
+ * The review of 8edf6409 found the hold said so of configuration in the
+ * checkout and in what a worktree links from it too, which this change
+ * leaves as it was (O, W), and left out the held task's own work (OWN).
  */
 
 afterEach(cleanUp);
@@ -267,5 +272,77 @@ describe.skipIf(!hasGit)('F2: a run that reverted a task is replaced as the hold
 
     expect({ run: held.runId(), t2: held.hookFor('t2') }).toEqual({ run: 'run2', t2: [true] });
     expect(refExists(held.root, 'ordewell/run1/integration')).toBe(false);
+  });
+});
+
+/**
+ * Held for configuration with no base commit (ADR-0028): `checkout`, t1's
+ * hook merged into the user's checkout holds t3, an ops task after it;
+ * `linked`, t1 writes the hook through the `.claude` its worktree links from
+ * the checkout, and holds t2, after it.
+ */
+async function heldWithoutBase(where: 'checkout' | 'linked') {
+  const tasks: HeldTask[] = [{ id: 't1', title: 'Add a hook', hook: true }];
+  const held = heldPlan(where === 'checkout'
+    ? [...tasks, { id: 't3', title: 'Run the hook', dependencies: ['t1'], ops: true }]
+    : [...tasks, { id: 't2', title: 'Check the hook', dependencies: ['t1'] }]);
+  const { root, session } = held;
+  if (where === 'linked') {
+    // Ignored, with a file in it, so every worktree links the checkout's own `.claude`.
+    mkdirSync(join(root, '.claude'));
+    writeFileSync(join(root, '.claude', 'notes.md'), 'ignored\n');
+    writeFileSync(join(root, '.git', 'info', 'exclude'), '.claude/\n');
+  }
+  await ok(session, { command: 'run_plan' }, USER);
+  const id = where === 'checkout' ? 't3' : 't2';
+  if (where === 'checkout') {
+    await vi.waitFor(() => expect(held.records().t1).toBe('merged'), { timeout: 20_000 });
+    await ok(session, { command: 'merge_all' }, USER);
+  }
+  await vi.waitFor(() => expect(held.holdOf(id)).toContain(HOOK), { timeout: 20_000 });
+  // Through the link, or by the merge, into the checkout.
+  expect(held.inCheckout(HOOK)).not.toBeNull();
+  if (where === 'linked') expect(held.fileOn('ordewell/run1/integration', HOOK)).toBeNull();
+  return { held, id };
+}
+
+describe.skipIf(!hasGit)('O, W: a start held for configuration in the checkout, or linked from it, says what it always said, and what it says starts it', () => {
+  it.each(['checkout', 'linked'] as const)('%s: held as before this change, and started once the user stops the run and starts it', async (where) => {
+    const { held, id } = await heldWithoutBase(where);
+    expect(held.holdOf(id)).toBe(`repository configuration "${HOOK}" differs from where this run started; remove it to continue, or start a new run once your branch holds it`);
+
+    await ok(held.session, { command: 'stop_run' }, USER);
+    await startsAgain(held, id, () => ok(held.session, { command: 'run_task', task: id }, USER));
+
+    expect(held.hookFor(id)).toEqual([true]);
+  });
+});
+
+describe.skipIf(!hasGit)('OWN: the held task\'s own work that never landed keeps the run, as the hold says', () => {
+  it('a Continue keeps it and is held again there; a fresh start discards it and is held once more; the next start begins a new run', async () => {
+    const held = heldPlan([{ id: 't0', title: 'Add a hook', hook: true }, { id: 't1', title: 'Write t1' }], { holdOnce: ['t1'] });
+    const { session } = held;
+    await ok(session, { command: 'run_plan' }, USER);
+    await vi.waitFor(() => expect(held.records().t0).toBe('merged'), { timeout: 20_000 });
+    await vi.waitFor(() => expect(held.spawns('t1')).toBe(1), { timeout: 20_000 });
+    const partial = join(held.lastCwd('t1'), 'partial.txt');
+    writeFileSync(partial, 'partial\n');
+    await ok(session, { command: 'stop_run' }, USER);
+    await ok(session, { command: 'merge_all' }, USER);
+
+    for (let round = 0; round < 3; round += 1) {
+      if (round > 0) await ok(session, { command: 'stop_run' }, USER);
+      await startsAgain(held, 't1', () => ok(session, CONTINUE, USER));
+      expect({ run: held.runId(), records: held.records(), spawns: held.spawns('t1'), partial: existsSync(partial) }).toEqual({ run: 'run1', records: { t0: 'merged', t1: 'active' }, spawns: 1, partial: true });
+    }
+    expect(held.holdOf('t1')).toContain('provided nothing of this run is left: no task running, and no work that never landed, this task\'s own included, no kept attempt and no delegated task\'s child plan. Where this task holds such work of its own, a Continue keeps it, and the run with it, so it is held again there; a fresh start (Start now, Retry or Run) discards that work and is held once more, and your next start then begins the new run');
+
+    await ok(session, { command: 'stop_run' }, USER);
+    await startsAgain(held, 't1', () => ok(session, { command: 'retry_task', task: 't1', from: 'fresh' }, USER));
+    expect({ run: held.runId(), spawns: held.spawns('t1'), partial: existsSync(partial) }).toEqual({ run: 'run1', spawns: 1, partial: false });
+
+    await ok(session, { command: 'stop_run' }, USER);
+    await startsAgain(held, 't1', () => ok(session, { command: 'run_task', task: 't1' }, USER));
+    expect({ run: held.runId(), t1: held.hookFor('t1') }).toEqual({ run: 'run2', t1: [false, true] });
   });
 });

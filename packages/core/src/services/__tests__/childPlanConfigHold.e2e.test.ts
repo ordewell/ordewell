@@ -1,8 +1,7 @@
 /*
  * A child plan's task held for configuration a sibling landed (ADR-0028,
- * ADR-0055 D20), on real repositories: every start there is its subplanner's,
- * so nothing gets past the hold, and the hold says what can be done instead,
- * which a person can ask the subplanner for. Doing what it says starts the task.
+ * ADR-0055 D20), on real repositories: the hold says what its subplanner can
+ * do there, which a person can ask it for. Doing what it says starts the task.
  */
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
@@ -73,8 +72,8 @@ describe.skipIf(!hasGit)('a child plan\'s task held for configuration its siblin
     const holdOfB = () => child.view().run.tasks.find((t) => t.id === 'b')?.holdReason ?? '';
     await vi.waitFor(() => expect(holdOfB()).toContain(HOOK), WAIT);
 
-    // What the person reads there: nothing gets past it in a child plan, and what they can ask the subplanner for.
-    expect(holdOfB()).toContain('no start in a child plan gets past that');
+    // What the person reads there: what they can ask the subplanner for, and no claim that a start of anyone's gets past it or not.
+    expect(holdOfB()).toBe(`repository configuration "${HOOK}" differs from where this run started. The subplanner can make this task read-only, which loads no project configuration, and start it, or take it out of the plan and say why in its report; a person can ask it to with a message`);
     expect(holdOfB()).toContain('The subplanner can make this task read-only');
     expect(holdOfB()).toContain('a person can ask it to with a message');
     expect(holdOfB()).not.toContain('start this task yourself');

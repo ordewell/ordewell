@@ -354,7 +354,7 @@ export class IsolationRunController {
 
   get isOpen(): boolean { return this.mode !== null; }
 
-  /** This is a child plan's run (ADR-0055 D11), where every start is its subplanner's. */
+  /** This is a child plan's run (ADR-0055 D11), whose tasks its subplanner starts (D20). */
   get inChildPlan(): boolean { return this.stateRoot !== undefined; }
 
   /** How many runs have opened: what tells one run's launches from the next one's. */
@@ -1141,8 +1141,8 @@ export class IsolationRunController {
    * that never landed, or one a start held at launch left, keeps the whole
    * run, worktrees and branches. A held start's worktree may hold nothing,
    * but cleared up, its run would give any start a new one from HEAD, which
-   * only a person's own start of a task in a worktree may take (ADR-0028,
-   * {@link spentRun}).
+   * {@link spentRun} leaves to a person's own start of a task in a worktree
+   * (ADR-0028).
    */
   private async clearMerged(run: IsolationRun): Promise<void> {
     // A plan loaded, or a start opened, while the merge went decides about this run itself.
@@ -1335,13 +1335,14 @@ export class IsolationRunController {
    * holds anything ({@link leavesNothing}), and git finds every repository's
    * integration tip in the user's branch, which records alone cannot say: a
    * retry drops a landed task's record, and its landing stays on the branch.
-   * Asked only by a person's own start as it decides the run: continued, the
-   * run keeps a base the user's branch has moved past, and a start held for
-   * configuration one of its tasks landed is held again at every start. A new
-   * run from a branch that holds the configuration, which a person starts, is
-   * how they consent to it (ADR-0028), so the next run is minted from HEAD, as
-   * after a reload (ADR-0013), and no start in it is held for that
-   * configuration. Any other start continues the run, and the hold stands. A
+   * Asked by a person's own start as it decides the run, and by no other:
+   * continued, the run keeps a base the user's branch has moved past, and a
+   * start held for configuration one of its tasks landed is held again at
+   * each start. A new run from a branch that holds the configuration, which a
+   * person starts, is how they consent to it (ADR-0028), so the next run is
+   * minted from HEAD, as after a reload (ADR-0013), and its base holds that
+   * configuration. A start that does not ask continues a run that can be
+   * continued, where the hold stands. A
    * run that reverted a task is spent the same way: its reverts are on the
    * integration branch git finds in HEAD, and the record of a later attempt
    * the revert left is a kept one, which keeps the run (ADR-0054). One whose

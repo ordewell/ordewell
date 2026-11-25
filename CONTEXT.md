@@ -2637,12 +2637,16 @@ held start has replaced the landed task's record — a resumed plan's dependents
 need their predecessors' work, which a fresh branch from the checked-out commit
 does not have — unless git finds all of it, its reverts included, in the user's
 branch, nothing else is left in the run (no task live, no worktree holding work
-that never landed, none seating a child), and the start that decides the next
-run is a person's own of a task in a worktree: that run then mints its own from HEAD, as a Stop leaves no
-close to clear the old one up, and no task of it is held for configuration the
-old run landed. Any other start continues the old run, a model's or the
-scheduler's, or a person's of an ops, read-only or script task, so a start held
-for configuration stays held there. A record with nothing landed
+that never landed, the held task's own included, none kept and none seating a
+child), and the start that decides the next run is a person's own of a task in
+a worktree: that run then mints its own from HEAD, as a Stop leaves no close to
+clear the old one up, and its base holds the configuration the old run landed.
+The planner's, the supervisor's and autorun's starts, a queued dependent's, and
+a person's of an ops, read-only or script task continue the old run, so a start
+held for configuration its base lacks is held again there. A hold for
+configuration in the checkout, or linked from it, is the run's first look at
+it, which the next run anyone opens after a Stop takes again (ADR-0028). A
+record with nothing landed
 is discarded whole when the next run mints its own. One with landed work that
 cannot be continued (it ran from another workspace path) loses its worktrees, and its integration branch in each repo
 whose HEAD already contains it; it keeps the others. A run closes

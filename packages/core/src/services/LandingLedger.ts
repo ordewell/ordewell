@@ -24,8 +24,8 @@ export const hasReverted = (run: IsolationRun): boolean => run.reverted === true
 /**
  * Whether the ledger names a merge on the run's branch, a record of its task
  * left or not: a retry, a Continue or a start after Mark not done replaces a
- * landed task's record, and its merges stay on the branch. Only a revert lets
- * one go, and that marks the run {@link hasReverted}.
+ * landed task's record, and its merges stay on the branch. A revert, which
+ * lets one go, marks the run {@link hasReverted}.
  */
 export const hasLedgeredLanding = (run: IsolationRun): boolean => Object.keys(run.landings ?? {}).length > 0 || Object.keys(run.carried ?? {}).length > 0;
 

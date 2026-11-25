@@ -148,7 +148,7 @@ export function checksConfig(kind: AttemptKind, script: boolean): boolean {
  * on the configuration a run from their branch holds (ADR-0028): one in a
  * worktree whose launch {@link checksConfig}. An ops task's decides nothing,
  * and a script's or a read-only task's would load none, so none of those
- * replaces a run or grants anything to a later start.
+ * replaces a run.
  */
 export function consentsToConfig(kind: AttemptKind, script: boolean): boolean {
   return decidesIsolation(kind) && checksConfig(kind, script);

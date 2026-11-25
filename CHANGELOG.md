@@ -10,23 +10,27 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
-- **A task held because an earlier task changed agent configuration starts
-  again once your branch holds everything its run landed and you start it
-  yourself.** After the run's work was merged (by Merge all or by hand) and the
-  run stopped, starting the held task again kept the old run and held it again
-  every time, until the session was reloaded. Your own Run, Start now, Retry or
-  Continue of a task that works in a worktree now begins a new run from your
-  branch, provided git finds everything the old run landed in it, its reverts
-  included (a squash or a rebase leaves it out), and nothing else is left in
-  the run: no task running, and no worktree holding work that never landed, a
-  kept attempt or a delegated task's child plan. No task of that new run is
-  held for the configuration, whoever starts it. Any other start still
-  continues the old run, where the task stays on hold: one the planner, the
-  supervisor, a subplanner or autorun makes, one Ordewell makes by itself, and
-  your own start of an ops, read-only or script task. Taking that
-  configuration on is yours to decide. The hold now says so, and in a child
-  plan, where only its subplanner starts tasks, it says what can be done there
-  instead.
+- **A task held for configuration an earlier task landed, which its run's base
+  lacks, starts again once your branch holds everything the run landed and you
+  start it yourself.** After the run's work was merged (by Merge all or by
+  hand) and the run stopped, starting the held task again kept the old run and
+  held it again every time, until the session was reloaded. Your own Run, Start
+  now, Retry or Continue of a task that works in a worktree now begins a new
+  run from your branch, provided git finds everything the old run landed in
+  it, its reverts included (a squash or a rebase leaves it out), and nothing
+  else is left in the run: no task running, no worktree holding work that
+  never landed, the held task's own included, no kept attempt and no delegated
+  task's child plan. A Continue of the held task keeps its own such work, and
+  is held again; a fresh start of it discards that work and is held once
+  more, and your next start begins the new run. That run starts from your
+  branch, which holds the configuration. The planner's, the supervisor's and
+  autorun's starts, a dependent's that Ordewell drains from its queue, and
+  your own start of an ops, read-only or script task continue the old run,
+  where the task is held again. The hold now says so, and in a child plan it
+  says what its subplanner can do instead. A hold for configuration in your checkout, which an ops task works
+  in and a worktree links its `.claude` and `.opencode` from, is as it was:
+  the next run anyone starts after a Stop looks at the checkout afresh, and
+  the hold says, as before, to remove the configuration or start a new run.
 - **A run is kept when a held start replaced the only record of what it
   landed.** Once the start of a task that had landed was held (a Continue, or
   a start after Mark not done), the next start by anyone began a new run from
@@ -34,13 +38,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   supervisor or the planner then ran the task with configuration no person had
   let in; where it did not, the task started without its own earlier work, and
   the old run's integration branch was left with nothing naming it. Such a run
-  now goes on, as any run with landed work does, and the start is held again
-  there until git finds the run's work in your branch and you start the task
-  yourself.
+  now goes on, and the start is held again there; the entry above says what
+  begins a new one.
 - **The supervisor is no longer told to skip a task on hold,** which its
-  `skip_task` refuses. It is told to retry the task, or to tell you, since only
-  you can skip it; of a task held for configuration, it is told that only you
-  can release it.
+  `skip_task` refuses. It is told to retry the task, or to tell you, who can
+  skip it; of a task held for configuration, it is told to leave the hold to
+  you.
 - **A start made while Merge all was clearing up a finished run is no longer
   lost.** The clear-up forgot the plan's run once git had finished, even when a
   start had opened a new one meanwhile, which left that run's branches with no

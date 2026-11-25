@@ -61,37 +61,52 @@ everything below applies per repo of the group.
   left in it: no task live, no record but landed ones and attempts left
   `active` whose branch and worktree git finds empty, as a start held at
   launch leaves one, none that seats a child or keeps branches a conflict's
-  fall-back left, and no landing cut short. A run that reverted a task is
-  spent the same way: its reverts are on the tip git finds, and the later
-  attempt a revert leaves is kept, which keeps the run. Records alone never
-  say a run is spent, nor that it is not: a retry drops a landed task's
-  record, and its landing stays on the branch. A detached HEAD, an
-  integration branch gone, a tip only a review or another branch holds, a
-  squash merge or a rebase, or git unable to say, keeps the run. A spent run
-  is replaced only by the start that decides the next run, and only if that
-  start is a person's own of a task that works
-  in a worktree and whose launch the configuration check reads: their Run,
-  Start now, retry or Continue of a change or delegated task. It mints the run
-  from HEAD, and the old run goes as a replaced run does. Continued, the old
+  fall-back left, and no landing cut short. The held task's own work counts:
+  a Continue keeps it, and with it the run; a fresh start discards it and is
+  held once more, and the next start finds the run spent. A run that reverted
+  a task is spent the same way: its reverts are on the tip git finds, and the
+  later attempt a revert leaves is kept, which keeps the run. Records alone
+  do not say a run is spent: a retry drops a landed task's record, and its
+  landing stays on the branch. A detached HEAD, an integration branch gone,
+  a tip only a review or another branch holds, a squash merge or a rebase,
+  or git unable to say, keeps the run. Of the starts that decide a run, a
+  spent run is replaced by a person's own of a task that works in a worktree
+  and whose launch the configuration check reads (their Run, Start now,
+  retry or Continue of a change or delegated task), and it mints the run
+  from HEAD, the old run going as a replaced run does. Continued, the old
   run's base would stay behind the user's branch, and a start held for
-  configuration one of its tasks landed would be held again at every start,
+  configuration one of its tasks landed would be held again at each start,
   where a person's start of a run whose base holds it is how they consent to
   it ([ADR-0028](../planner-envelope/0028-planners-never-run-repository-config.md)).
-  The release is the run's: no start in the new run is held for that
-  configuration, whoever makes it. Every other start that decides a run
-  continues the old one, and such a hold stands: a model's call at any level,
-  a subplanner's, the scheduler's (a dependent, a loop round, a resume at a
-  usage limit's reset, a start queued earlier), and a person's start of an ops,
-  read-only or script task, which grants nothing to a later start. So does any
-  start in a run already decided, whoever opened it. That is how a run a Stop
-  ended is cleared up, since a Stop hands nothing over and no close follows
-  it. A record that seats a child keeps the run whatever git finds in its
-  worktree, which is the child's code root
+  The release is the run's: the new run's base holds that configuration, so
+  no worktree of it is held for it, whoever starts the task. The planner's,
+  the supervisor's and autorun's starts, a dependent's Ordewell drains from
+  its queue, and a person's start of an ops, read-only or script task, alone
+  or before one of those, continue the old run, where such a hold stands; so
+  does a start in a run already decided, whoever opened it. That is how a
+  run a Stop ended is cleared up, since a Stop hands nothing over and no
+  close follows it. A record that seats a child keeps the run whatever git
+  finds in its worktree, which is the child's code root
   ([ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md)
-  D17). In a child plan every start is its subplanner's, so none replaces its
-  run. A record with nothing landed holds only superseded attempts and is
+  D17). In a child plan the hold says what its subplanner can do instead.
+  A record with nothing landed holds only superseded attempts and is
   discarded whole before a new one is minted. `discardRun` is how a user
   starts over.
+
+  This concerns configuration a worktree's tree has and its run's base
+  lacks. It leaves as they were before 2026-11-24 (History) the other ways
+  configuration reaches a task with no person's start. A start is held for
+  what differs in the checkout, and in the `.claude` and `.opencode` a
+  worktree links from it, from what they held when the run first launched a
+  task, which is the run's own look: the next run anyone opens after a Stop
+  takes its own (ADR-0028), and such a hold says, as it did before, to
+  remove the configuration or start a new run once the user's branch holds
+  it. Configuration that reaches HEAD before a dependent task has any
+  record, as automatic merging at a run's end brings it, is in the base of
+  the run that task's next start mints, whoever makes it. A reload or a
+  daemon restart adopts the saved run, and adopting it and `pruneOrphans`
+  clear a run whose work is merged, so the next start, anyone's, mints a run
+  from HEAD.
 - **Naming and location.** A task's worktrees are made by `prepare` when the task
   starts, not when the run opens. They live together in one *task
   workspace*, `.ordewell/worktrees/<run-id>/<order>-<slug>/`, each at its repo's
@@ -344,10 +359,11 @@ everything below applies per repo of the group.
   work stays. So does one with an attempt left `active` and nothing live in it,
   as a start held at launch leaves one, whatever git finds in its worktree:
   cleared up, the run would leave the next start of anyone's a run from HEAD,
-  where only a person's own start of a task in a worktree may take one
-  (ADR-0028). Adopting a run
+  which a spent run's replacement leaves to a person's own start of a task in
+  a worktree (above, ADR-0028). Adopting a run
   prunes such an attempt when git finds nothing on its branch or in its
-  worktree, and keeps one that seats a child as kept work. A handoff names
+  worktree, and keeps one that seats a child as kept work, so a reload can
+  clear a merged run (above). A handoff names
   only landed work not yet merged; a repo whose
   integration branch is gone has nothing Merge all could merge, so its landed
   work counts as merged there, while a repo git cannot read at all counts as not
@@ -683,4 +699,4 @@ literal git command lines or private fields.
 - 2026-11-18 — a running change task is told where its siblings land and takes in what it needs with `Merge: <subject> (take in landed work)`; a task's diff and its host view start at its fork point, past what it took in.
 - 2026-11-18 — the fork point is read from the run's recorded landings, never the integration branch; a parent and its subtask are told of each other; a take-in counts as dependence for a revert.
 - 2026-11-18 — the commits a revert makes are kept per repository and the fork point reads them beside the landings, so a take-in past a sibling's revert does not read that revert as the task's own change.
-- 2026-11-24 — a run git finds wholly in the user's branch, with nothing live, unlanded or seating a child left in it, is replaced rather than continued when a person's own start of a task in a worktree decides the next run, reverted or not; any other start continues it, as it does a run whose ledger names a landing no record speaks for, and a merged run a held start is in stays at its clear-up (ADR-0028).
+- 2026-11-24 — a run git finds wholly in the user's branch, with nothing live, unlanded, kept or seating a child left in it, the held task's own work included, is replaced rather than continued when a person's own start of a task in a worktree decides the next run, reverted or not; the planner's, the supervisor's and autorun's starts continue it, as they do a run whose ledger names a landing no record speaks for, and a merged run a held start is in stays at its clear-up; a hold for configuration in the checkout or linked from it, and the other ways configuration reaches a task with no person's start, are as they were (ADR-0028).

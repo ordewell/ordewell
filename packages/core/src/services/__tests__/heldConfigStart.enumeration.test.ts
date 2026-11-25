@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, realpathSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import type { IsolationMergeResult, IsolationRemoval, IsolationRun, IsolationTaskRecord } from '../../interfaces/IWorktreeIsolation';
 import type { IRunner } from '../../interfaces/IRunner';
@@ -6,8 +9,8 @@ import type { ExecutionActor } from '../../models/Execution';
 import type { Session } from '../createSession';
 import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import { McpAttachTimeout } from '../harness/ordewellBinding';
-import { fakeConfig, FakeRunnerSession, FakeWorktreeIsolation, patient } from '../../testing';
-import { closeSessions, makeSession, taskOf, testWorkspace } from './sessionTestKit';
+import { fakeConfig, FakeRunnerSession, FakeWorktreeIsolation, patient, removeDir } from '../../testing';
+import { closeSessions, fakeNotification, makeSession, taskOf, testWorkspace } from './sessionTestKit';
 
 /**
  * Who may replace a run a start was held in for configuration (ADR-0028,
@@ -30,9 +33,23 @@ import { closeSessions, makeSession, taskOf, testWorkspace } from './sessionTest
  *   records say: one a held start dropped, or a revert took, changes nothing.
  * - Rule 2: the start that decides the run is a person's own, of a task in a
  *   worktree whose launch the configuration check reads, and nothing else.
+ *
+ * Where the configuration is in the checkout, which has no base commit and
+ * which an ops task works in and a worktree links its `.claude` from, the
+ * check is real, and what is observed besides is whether a later start of an
+ * ops task, the supervisor's, is still held for it (the review of 8edf6409,
+ * O and W). That is as it was before this change (ADR-0028): what the
+ * checkout held when a run first launched a task is that run's alone, so
+ * the next run anyone opens after a Stop takes its own look and the start
+ * goes, and every hold for it says so. Where the configuration is changes
+ * nothing of who replaces the run.
  */
 
-afterEach(closeSessions);
+const checkouts: string[] = [];
+afterEach(async () => {
+  await closeSessions();
+  while (checkouts.length) await removeDir(checkouts.pop()!);
+});
 
 const WHO = {
   user: { kind: 'user' },
@@ -61,10 +78,20 @@ type RunState = typeof STATES[number];
  * `reverted`: t1's record, beside t7's landing, which the user reverted, so
  * the branch holds a revert no record names.
  */
-const SHAPES = ['record', 'continued', 'marked', 'reverted'] as const;
+const SHAPES = ['record', 'continued', 'marked', 'reverted', 'own-work'] as const;
 type Shape = typeof SHAPES[number];
 
-interface Case { who: Who; command: Command; starts: Starts; route: Route; state: RunState; shape: Shape }
+/**
+ * Where the configuration that holds a start is: `tree`, in what a worktree
+ * is cut from, as git compares it with the run's base; `checkout`, in the
+ * workspace's own checkout, as the run's first check found it (the review
+ * of 8edf6409, O and W). The `own-work` shape is the review's OWN: the held
+ * task's own worktree holds work that never landed.
+ */
+const CONFIGS = ['tree', 'checkout'] as const;
+type Config = typeof CONFIGS[number];
+
+interface Case { who: Who; command: Command; starts: Starts; route: Route; state: RunState; shape: Shape; config: Config }
 
 const TARGET: Record<Starts, string> = { held: 't2', worktree: 't4', ops: 't3', readOnly: 't5', script: 't6' };
 
@@ -116,7 +143,8 @@ function started(c: Case): Starts[] {
 const inWorktree = (s: Starts) => s === 'held' || s === 'worktree';
 
 function expectedReplaced(c: Case): boolean {
-  const rule1 = c.route !== 'none' && c.state !== 'open';
+  // A record holding work that never landed keeps the run, the held task's own included.
+  const rule1 = c.route !== 'none' && c.state !== 'open' && c.shape !== 'own-work';
   // Only an open run's own decision stands there: nothing in it decides again.
   const rule2 = c.who === 'user' && started(c).some(inWorktree) && c.state !== 'open';
   return rule1 && rule2;
@@ -149,9 +177,9 @@ const SCRIPT: Pick<Task, 'type' | 'commands'> = { type: 'script', commands: [['n
  * gate (ADR-0020) where the user's branch lacks t1's work. `only` keeps of
  * those the ones a case acts on, so a Run starts nothing it does not name.
  */
-function plan(state: RunState, only: readonly string[] | null, readOnlyFirst = false, shape: Shape = 'record'): LegacyPlanState {
+function plan(state: RunState, only: readonly string[] | null, readOnlyFirst = false, shape: Shape = 'record', config: Config = 'tree'): LegacyPlanState {
   const now = new Date().toISOString();
-  const kept = (task: Task) => only === null || ['t1', 't2', 'keep', 't0', 't7'].includes(task.id) || only.includes(task.id);
+  const kept = (task: Task) => only === null || ['t1', 't2', 'keep', 't0', 't7', 't8'].includes(task.id) || only.includes(task.id);
   return {
     tasks: [
       // Ahead of every other task, a read-only one is the first a Run starts.
@@ -164,6 +192,8 @@ function plan(state: RunState, only: readonly string[] | null, readOnlyFirst = f
       createTask({ id: 't6', order: 6, title: 'Script the hook', ...SCRIPT }),
       ...(state === 'open' ? [createTask({ id: 'keep', order: 7, title: 'Keep the run open', prompt: 'keep going' })] : []),
       ...(shape === 'reverted' ? [createTask({ id: 't7', order: 8, title: 'Write beside the hook', prompt: 'write it' })] : []),
+      // The ops task a case observes, held for the configuration in the checkout.
+      ...(config === 'checkout' ? [createTask({ id: 't8', order: 10, title: 'Deploy with the hook', prompt: 'deploy it', ops: true })] : []),
       createTask({ id: 't9', order: 9, title: 'Follow the hook', prompt: 'follow it', dependencies: ['t3'] }),
     ].filter(kept),
     generatedAt: now, status: 'approved', runners: ['claude-code'], lastUpdated: now,
@@ -181,8 +211,10 @@ function runners() {
   const fail = new Set<string>();
   const refuse = new Set<string>();
   const waiting = new Map<string, () => void>();
+  const spawned: string[] = [];
   const make = (): IRunner => ({
     spawn: vi.fn(async (opts) => {
+      spawned.push(opts.taskId);
       if (refuse.delete(opts.taskId)) throw new McpAttachTimeout('the runner never connected');
       const session = new FakeRunnerSession(`s-${opts.taskId}`, opts.taskId);
       const failing = fail.delete(opts.taskId);
@@ -195,7 +227,7 @@ function runners() {
     stopAll: vi.fn(),
     activeCount: 0,
   });
-  return { runner: make(), scriptRunner: make(), hold, fail, refuse, release: (id: string) => waiting.get(id)?.() };
+  return { runner: make(), scriptRunner: make(), hold, fail, refuse, spawned, release: (id: string) => waiting.get(id)?.() };
 }
 
 async function ok(session: Session, command: Parameters<Session['execute']>[0], actor: ExecutionActor = WHO.user) {
@@ -204,6 +236,28 @@ async function ok(session: Session, command: Parameters<Session['execute']>[0], 
 }
 
 const statusOf = (session: Session, id: string) => taskOf(session, id)?.status;
+const holdOf = (session: Session, id: string) => session.runSnapshot().tasks.find((t) => t.id === id)?.holdReason ?? null;
+
+/** What every hold of t8 says: what a hold for configuration in the checkout said before this change. */
+const CHECKOUT_HOLD = 'repository configuration ".mcp.json" differs from where this run started; remove it to continue, or start a new run once your branch holds it';
+
+/**
+ * Whether t8, the ops task held for the configuration in the checkout, runs
+ * once the supervisor starts it, if nothing before has; each of its holds
+ * says what it always said.
+ */
+async function released({ session, r, t8Holds, t8Reasons }: Pick<World, 'session' | 'r' | 't8Holds' | 't8Reasons'>): Promise<boolean> {
+  const spawns = () => r.spawned.filter((id) => id === 't8').length;
+  if (spawns() === 0) {
+    const holds = t8Holds();
+    await ok(session, { command: 'run_task', task: 't8' }, WHO.supervisor);
+    await vi.waitFor(() => expect(t8Holds() > holds || spawns() > 0).toBe(true), WAIT);
+  }
+  expect([...new Set(t8Reasons())]).toEqual([CHECKOUT_HOLD]);
+  if (spawns() === 0) return false;
+  await vi.waitFor(() => expect(statusOf(session, 't8')).toBe('completed'), WAIT);
+  return true;
+}
 const WAIT = { timeout: patient(5_000), interval: 2 };
 
 /**
@@ -218,16 +272,24 @@ async function world(c: Case, { readOnlyFirst = false, every = false } = {}) {
   const isolation = new HeldStartIsolation();
   isolation.unlandedWork = new Set();
   const r = runners();
+  // A checkout of its own, whose configuration the check reads; a fake worktree's directory is never there.
+  const root = c.config === 'checkout' ? realpathSync.native(mkdtempSync(join(tmpdir(), 'ordewell-held-checkout-'))) : testWorkspace;
+  if (c.config === 'checkout') checkouts.push(root);
+  const notifications = fakeNotification();
   const session = makeSession({
+    notifications,
     runner: r.runner, scriptRunner: r.scriptRunner, isolation, config: fakeConfig({ worktreeIsolation: true, autonomousMode: true, maxParallelSessions: 8 }),
     settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', mergeAtGatesAutomatically: c.route === 'auto-merge' } }),
+    workspaceRoot: () => root,
   });
   const target = targetOf(c);
-  session.loadPlan(plan(c.state, every ? null : [target], readOnlyFirst, c.shape), 'goal', testWorkspace, { persist: false });
+  session.loadPlan(plan(c.state, every ? null : [target], readOnlyFirst, c.shape, c.config), 'goal', root, { persist: false });
 
   // t1 runs while the rest is set up, so t2's held start comes in the run t1 lands in, before that run can close and be cleared up.
   r.hold.add('t1');
   await ok(session, { command: 'run_task', task: 't1' });
+  // Its launch was checked, which took the run's first look at the checkout.
+  if (c.config === 'checkout') await vi.waitFor(() => expect(r.spawned).toContain('t1'), WAIT);
   if (c.state === 'open') {
     r.hold.add('keep');
     await ok(session, { command: 'run_task', task: 'keep' });
@@ -241,12 +303,20 @@ async function world(c: Case, { readOnlyFirst = false, every = false } = {}) {
     await ok(session, { command: 'run_task', task: target });
     await vi.waitFor(() => expect(statusOf(session, target)).toBe(c.command === 'retry_fresh' ? 'failed' : 'completed'), WAIT);
   }
+  if (c.config === 'checkout') {
+    // As a task that wrote it through a link, or a merge, leaves it; t8's start, the supervisor's, is held for it.
+    writeFileSync(join(root, '.mcp.json'), '{}');
+    await ok(session, { command: 'run_task', task: 't8' }, WHO.supervisor);
+    await vi.waitFor(() => expect(holdOf(session, 't8')).toBe(CHECKOUT_HOLD), WAIT);
+  }
   isolation.heldOnce.add('t2');
   r.refuse.add('t2');
   await ok(session, { command: 'force_start', task: 't2' });
   r.release('t1');
   await vi.waitFor(() => expect(session.runSnapshot().tasks.find((t) => t.id === 't2')?.holdReason).toBeTruthy(), WAIT);
   expect(session.planState?.isolation?.run.tasks).toMatchObject({ t1: { status: 'merged' }, t2: { status: 'active' } });
+  // The held task's own worktree holds what an attempt of it left, as git would find it (the review of 8edf6409, OWN).
+  if (c.shape === 'own-work') isolation.unlandedWork = new Set(['t2']);
   if (c.shape === 'reverted') {
     await ok(session, { command: 'revert_task', task: 't7', confirmed: true, seen: ['t7'] });
     expect(session.planState?.isolation?.run).toMatchObject({ reverted: true, tasks: { t1: { status: 'merged' } } });
@@ -260,7 +330,11 @@ async function world(c: Case, { readOnlyFirst = false, every = false } = {}) {
   if (c.state === 'stopped') await ok(session, { command: 'stop_run' });
   if (dropped(c.shape)) await dropLanded(session, isolation, r, c.shape);
   if (c.command === 'mark_not_done_then_run_task') await ok(session, { command: 'mark_not_done', task: target, confirmed: true, seen: 'completed' });
-  return { session, isolation, r, runs: () => isolation.calls.filter((call) => call.op === 'startRun').length };
+  const T8_HELD = 'Task "Deploy with the hook" is on hold: ';
+  /** Why t8's start was held, each time it was. */
+  const t8Reasons = () => vi.mocked(notifications.warn).mock.calls.map(([line]) => String(line)).filter((line) => line.startsWith(T8_HELD)).map((line) => line.slice(T8_HELD.length));
+  const t8Holds = () => t8Reasons().length;
+  return { session, isolation, r, t8Holds, t8Reasons, runs: () => isolation.calls.filter((call) => call.op === 'startRun').length };
 }
 
 /**
@@ -299,26 +373,33 @@ function commandOf(c: Case): Parameters<Session['execute']>[0] {
   }
 }
 
-/** Whether the command's start decided the run: replaced by one from HEAD, or not. */
-async function decides(c: Case): Promise<{ refused: string | null; replaced: boolean }> {
-  const { session, runs } = await world(c);
+type World = Awaited<ReturnType<typeof world>>;
+
+/** Whether the command's start decided the run: replaced by one from HEAD, or not; and, in the checkout, whether t8 then runs, which a run kept open leaves to it. */
+async function decides(c: Case): Promise<{ refused: string | null; replaced: boolean; released?: boolean }> {
+  const w = await world(c);
+  const { session, runs } = w;
   const before = runs();
   const outcome = await session.execute(commandOf(c), WHO[c.who]);
   if (!outcome.ok) return { refused: outcome.message, replaced: false };
   // Settled: every start it asked for has decided, or none will.
   await vi.waitFor(() => expect(session.runSnapshot().tasks.some((t) => t.status === 'in_progress' && t.id !== 'keep')).toBe(false), WAIT);
-  return { refused: null, replaced: runs() > before };
+  const replaced = runs() > before;
+  return { refused: null, replaced, ...(c.config === 'checkout' ? { released: await released(w) } : {}) };
 }
 
-const ALL: Case[] = SHAPES.flatMap((shape) => (Object.keys(WHO) as Who[]).flatMap((who) => COMMANDS.flatMap((command) => STARTS.flatMap((starts) => ROUTES.flatMap((route) => STATES.map((state) => ({ who, command, starts, route, state, shape })))))));
+/** Every shape with the configuration in the tree, and the `record` shape with it in the checkout too, which the other shapes do not change. */
+const ALL: Case[] = SHAPES.flatMap((shape) => CONFIGS.filter((config) => config === 'tree' || shape === 'record').flatMap((config) => (Object.keys(WHO) as Who[]).flatMap((who) => COMMANDS.flatMap((command) => STARTS.flatMap((starts) => ROUTES.flatMap((route) => STATES.map((state) => ({ who, command, starts, route, state, shape, config }))))))));
 
-/** What a case is called; the `record` shape's names are the ones the table had before it had shapes. */
-const nameOf = (shape: Shape, rest: string) => (shape === 'record' ? rest : `${shape}: ${rest}`);
+/** What a case is called; the `record` shape's names, in the tree, are the ones the table had before it had shapes. */
+const nameOf = (shape: Shape, rest: string, config: Config = 'tree') => `${config === 'tree' ? '' : `${config}: `}${shape === 'record' ? rest : `${shape}: ${rest}`}`;
 
 describe('who replaces a run a start was held in for configuration (enumerated)', () => {
-  it.each(ALL.filter((c) => cannotOccur(c) === null).map((c) => [nameOf(c.shape, `${c.who} ${c.command} of ${c.starts}, ${c.route}, ${c.state}`), c] as const))('%s', async (_name, c) => {
-    const { refused, replaced } = await decides(c);
-    expect({ refused, replaced }).toEqual({ refused: null, replaced: expectedReplaced(c) });
+  it.each(ALL.filter((c) => cannotOccur(c) === null).map((c) => [nameOf(c.shape, `${c.who} ${c.command} of ${c.starts}, ${c.route}, ${c.state}`, c.config), c] as const))('%s', async (_name, c) => {
+    const outcome = await decides(c);
+    // Who replaces the run is the same wherever the configuration is; in the checkout, a run opened after the hold takes its own look, whoever opens it.
+    const released = c.config === 'checkout' ? { released: c.state === 'open' ? outcome.released : true } : {};
+    expect(outcome).toEqual({ refused: null, replaced: expectedReplaced(c), ...released });
   });
 });
 
@@ -361,21 +442,23 @@ const SECONDS = {
 
 const keepsT3 = (first: keyof typeof FIRSTS) => first.includes('ops task, kept running');
 
-const SEQUENCES = SHAPES.flatMap((shape) => (Object.keys(FIRSTS) as (keyof typeof FIRSTS)[])
+/** The held task's own work keeps every run of these, whoever starts what: the main table covers it. */
+const SEQUENCES = SHAPES.filter((shape) => shape !== 'own-work').flatMap((shape) => CONFIGS.filter((config) => config === 'tree' || shape === 'record').flatMap((config) => (Object.keys(FIRSTS) as (keyof typeof FIRSTS)[])
   // Held again, t1 is not done, so there is nothing to mark not done.
   .filter((first) => !(dropped(shape) && first.startsWith('Mark not done')))
   .flatMap((first) => (Object.keys(SECONDS) as (keyof typeof SECONDS)[])
-    // A queued start needs its dependency still running, which only those first steps leave.
-    .filter((second) => !second.startsWith('a queued') || keepsT3(first))
-    .flatMap((second) => (['user-merge', 'auto-merge', 'by-hand'] as const).flatMap((route) => (['stopped', 'closed'] as const).map((state) => ({ first, second, route, state, shape }))))));
+    // A queued start needs its dependency still running, which only those first steps leave, and only where the checkout holds no configuration t3 is held for.
+    .filter((second) => !second.startsWith('a queued') || (keepsT3(first) && config === 'tree'))
+    .flatMap((second) => (['user-merge', 'auto-merge', 'by-hand'] as const).flatMap((route) => (['stopped', 'closed'] as const).map((state) => ({ first, second, route, state, shape, config })))))));
 
 /** Per second step, how many sequences it was the start that decided the run in: what makes the table more than a run of no-ops. */
 const decidedBy = new Map<string, number>();
 
 describe('a person\'s command that starts no task in a worktree, then a start a model or Ordewell makes (enumerated)', () => {
-  it.each(SEQUENCES.map((q) => [nameOf(q.shape, `${q.first}, then ${q.second}; ${q.route}, ${q.state}`), q] as const))('%s: the run goes on', async (_name, q) => {
-    const c: Case = { who: 'user', command: 'run_task', starts: 'held', route: q.route, state: q.state, shape: q.shape };
-    const { session, isolation, r, runs } = await world(c, { every: true });
+  it.each(SEQUENCES.map((q) => [nameOf(q.shape, `${q.first}, then ${q.second}; ${q.route}, ${q.state}`, q.config), q] as const))('%s: the run goes on', async (_name, q) => {
+    const c: Case = { who: 'user', command: 'run_task', starts: 'held', route: q.route, state: q.state, shape: q.shape, config: q.config };
+    const w = await world(c, { every: true });
+    const { session, isolation, r, runs } = w;
     // Marked not done, or held again, t1 holds back t2, and its own next attempt is the one held (the second review's L2).
     const held = q.first.startsWith('Mark not done') || dropped(q.shape) ? 't1' : 't2';
     const before = runs();
@@ -388,6 +471,8 @@ describe('a person\'s command that starts no task in a worktree, then a start a 
     await vi.waitFor(() => expect(session.runSnapshot().tasks.some((t) => t.status === 'in_progress' && !['keep', 't3', 't5', 't6'].includes(t.id))).toBe(false), WAIT);
     if (assessed() > afterFirst) decidedBy.set(q.second, (decidedBy.get(q.second) ?? 0) + 1);
     expect({ replaced: runs() > before, askedGit: isolation.calls.some((call) => call.op === 'userBranchHolds') }).toEqual({ replaced: false, askedGit: false });
+    // While t8, held for the configuration in the checkout, starts in whatever run is opened after it, whoever opens it, as before this change.
+    if (q.config === 'checkout') expect(await released(w)).toBe(true);
   });
 
   it('has each kind of second start decide the run in some sequence', () => {
@@ -400,7 +485,7 @@ describe('a person\'s Run whose first start is a read-only task\'s', () => {
     ['run_plan', 'held'],
     ['approve_review', 'worktree'],
   ] as const)('%s still replaces the spent run, as it starts a task in a worktree too, though the read-only start decides it', async (command, starts) => {
-    const { session, isolation, runs } = await world({ who: 'user', command, starts, route: 'user-merge', state: 'stopped', shape: 'record' }, { readOnlyFirst: true });
+    const { session, isolation, runs } = await world({ who: 'user', command, starts, route: 'user-merge', state: 'stopped', shape: 'record', config: 'tree' }, { readOnlyFirst: true });
     const other = TARGET[starts];
     const before = runs();
     await ok(session, { command });
@@ -411,3 +496,4 @@ describe('a person\'s Run whose first start is a read-only task\'s', () => {
     expect(runs()).toBe(before + 1);
   });
 });
+
