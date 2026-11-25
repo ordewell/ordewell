@@ -15,6 +15,7 @@ import type { GlobalRunSettings, UserSettings } from './services/SettingsService
 import type { TaskLogEvent } from './models/TaskLog';
 import type { CommandPayload } from './services/ExecutionCommands';
 import type { RunnerAuth } from './services/runnerAuth';
+import type { RunnerSignIn } from './services/signInHint';
 import type { Escalation } from './services/escalations';
 import type { TaskRevertPreview } from './services/taskRevert';
 import type { ContainerStatus } from './services/container/containerSetup';
@@ -55,6 +56,8 @@ export type DaemonErrorCode =
   | 'planner_turn_discarded'
   /** The selected planner cannot plan yet (no key, no base URL, no model); `plannerNotReady` says which. */
   | 'planner_not_ready'
+  /** The planner's coding agent refused to start because its user is signed out; `signIn` names it and its ways in (ADR-0052). */
+  | 'runner_signed_out'
   /** The request asked for something the plan, task or conversation does not allow. */
   | 'refused'
   | 'checkpoint_not_waiting'
@@ -100,6 +103,8 @@ export interface ErrorBody {
   code?: DaemonErrorCode;
   /** Set with `planner_not_ready`: the reason as data, so a client can word it in its own commands. */
   plannerNotReady?: PlannerNotReady;
+  /** Set with `runner_signed_out`: the agent that refused, with its ways in, so a client offers that agent's sign-in. */
+  signIn?: RunnerSignIn;
   /** Set with `session_held`: the host that holds the session, and the runners a gone one left. */
   sessionHeld?: SessionHeld;
   /** Set on a command the seam refused after the act ran and stopped: the Merge all git would not take. */
