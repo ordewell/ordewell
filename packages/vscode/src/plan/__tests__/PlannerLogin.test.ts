@@ -1,12 +1,16 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { delimiter } from 'node:path';
-import { RunnerRegistry, runnerSignIn, type RunnerAuth } from '@ordewell/core';
-import { commandLine, loginPlanner, type PlannerLoginDeps } from '../PlannerLogin';
+import { ModelResolver, RunnerInstallation, RunnerRegistry, recordRunnerAuth, recordedRunnerAuth, resetRunnerAuth, runnerSignIn, signedOutAuth, type DiscoveredModel, type LaunchDeps, type PlannerBackendId, type RunnerAuth } from '@ordewell/core';
+import { loginPlanner, type PlannerLoginDeps } from '../PlannerLogin';
 
 interface FakeTerminal {
-  options: { name?: string; cwd?: string; shellPath?: string; env?: Record<string, string> };
+  options: { name?: string; cwd?: string; shellPath?: string; shellArgs?: string[] | string; env?: Record<string, string>; isTransient?: boolean };
   sent: string[];
   shown: number;
+  disposed: number;
   exitStatus: { code: number | undefined } | undefined;
   sendText(text: string): void;
   show(): void;
@@ -20,44 +24,65 @@ interface HarnessOptions {
   /** Runs right after each probe answers, so a test can close the terminal mid-flow. */
   afterProbe?: (probe: number, close: () => void) => void;
   timeoutMs?: number;
+  /** The login process exits with `code` once this many polls have slept; `undefined` is the user closing it. */
+  exitAfter?: { polls: number; code: number | undefined };
   /** POSIX unless a case is about Windows, so the terminal options read the same on every host. */
   platform?: NodeJS.Platform;
+  /** Where the agent's file is found; by default only the stand-ins in {@link FAKE_BIN}. */
+  launch?: Omit<LaunchDeps, 'platform'>;
+  /** The real installation and catalog, for a case about what a recheck records. */
+  runnerInstallation?: PlannerLoginDeps['runnerInstallation'];
+  modelResolver?: PlannerLoginDeps['modelResolver'];
 }
+
+/** A folder holding a stand-in for each agent these cases name, and nothing else: no agent installed on the host answers. */
+const FAKE_BIN = '/fake/bin';
+const STAND_INS = new Set(['claude', 'codex', 'copilot', 'cursor-agent', 'cline'].map((name) => `${FAKE_BIN}/${name}`));
+const STAND_IN_LAUNCH = { resolvePath: async () => FAKE_BIN, exists: (file: string) => STAND_INS.has(file) };
 
 const SIGNED_OUT_CLAUDE: RunnerAuth = { state: 'signed-out', loginCommand: ['claude', 'auth', 'login'] };
 
 function harness(options: HarnessOptions = {}) {
   let probe = 0;
   let clock = 0;
+  let polls = 0;
   const closeListeners: Array<(terminal: FakeTerminal) => void> = [];
   const terminal: FakeTerminal = {
     options: {},
     sent: [],
     shown: 0,
+    disposed: 0,
     exitStatus: undefined,
     sendText(text: string) { terminal.sent.push(text); },
     show() { terminal.shown += 1; },
-    dispose() { close(); },
+    dispose() { terminal.disposed += 1; if (!terminal.exitStatus) exit(undefined); },
   };
   const createTerminal = vi.fn((opts: FakeTerminal['options']) => {
     terminal.options = opts;
     return terminal;
   });
-  const close = (): void => {
-    terminal.exitStatus = { code: 0 };
+  // As VS Code does: the exit status is set, then the close event fires, once
+  // the terminal's own process ends or the user closes it.
+  const exit = (code: number | undefined): void => {
+    terminal.exitStatus = { code };
     for (const cb of [...closeListeners]) cb(terminal);
   };
+  const close = (): void => exit(undefined);
 
   const verdict = options.verdict ?? (() => SIGNED_OUT_CLAUDE);
   const deps = {
-    runnerInstallation: {
+    runnerInstallation: options.runnerInstallation ?? {
       runnerUsability: vi.fn(async () => {
         probe += 1;
         options.afterProbe?.(probe, close);
         return { usable: true, auth: verdict(probe) };
       }),
       refresh: vi.fn(),
+      // Forgets what was recorded; the look after it is the next probe.
+      recheck: vi.fn(async () => ({ usable: true })),
     },
+    ...(options.modelResolver ? { modelResolver: options.modelResolver } : {}),
+    launch: options.launch ?? STAND_IN_LAUNCH,
     // The real registry: the ids and labels a webview can name are its own.
     runnerRegistry: new RunnerRegistry(),
     config: { aiProvider: options.aiProvider ?? 'claude-code' },
@@ -74,7 +99,11 @@ function harness(options: HarnessOptions = {}) {
       }),
     },
     // Instant, and a clock that moves with it: no real seconds, no fake timers.
-    sleep: async (ms: number) => { clock += ms; },
+    sleep: async (ms: number) => {
+      clock += ms;
+      polls += 1;
+      if (options.exitAfter && polls === options.exitAfter.polls) exit(options.exitAfter.code);
+    },
     now: () => clock,
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
     platform: options.platform ?? 'linux',
@@ -86,12 +115,41 @@ function harness(options: HarnessOptions = {}) {
     terminal,
     createTerminal,
     close,
+    exit,
     /** The last word the webview is told the login ended with. */
     ended: () => vi.mocked(deps.post).mock.calls.map(([msg]) => msg).filter((msg) => msg.type === 'plannerLoginEnded').at(-1),
   };
 }
 
 describe('loginPlanner', () => {
+  // #62 F1: typed into the user's own shell, the login's end was never seen:
+  // the shell outlives it, so the spinner ran until the terminal was closed or
+  // five minutes passed. The agent is the terminal's process now.
+  it("runs Cursor's login as the terminal's own process and rechecks it when that process exits", async () => {
+    let rechecked = false;
+    const h = harness({
+      aiProvider: 'cursor-agent',
+      verdict: () => ({ state: rechecked ? 'signed-in' : 'signed-out', loginCommand: ['cursor-agent', 'login'] }),
+      exitAfter: { polls: 1, code: 0 },
+    });
+    const recheck = vi.fn(async () => { rechecked = true; return { usable: true, auth: { state: 'unknown' as const } }; });
+    Object.assign(h.deps.runnerInstallation, { recheck });
+
+    await loginPlanner(h.deps);
+
+    expect(h.createTerminal).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'Cursor login',
+      cwd: '/ws',
+      shellPath: '/fake/bin/cursor-agent',
+      shellArgs: ['login'],
+      isTransient: true,
+    }));
+    expect(h.terminal.sent).toEqual([]);
+    expect(h.terminal.shown).toBe(1);
+    expect(recheck).toHaveBeenCalledWith('cursor-agent');
+    expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner: 'cursor-agent', ok: true });
+  });
+
   it('signs in the active planner when the message names no runner, in its own terminal', async () => {
     // Signed out while it opens the terminal, signed in on the second poll.
     const h = harness({ verdict: (probe) => (probe >= 3 ? { ...SIGNED_OUT_CLAUDE, state: 'signed-in' } : SIGNED_OUT_CLAUDE) });
@@ -102,11 +160,14 @@ describe('loginPlanner', () => {
     expect(h.createTerminal).toHaveBeenCalledWith({
       name: 'Claude Code login',
       cwd: '/ws',
+      shellPath: '/fake/bin/claude',
+      shellArgs: ['auth', 'login'],
       env: expect.objectContaining({ CLAUDE_CONFIG_DIR: '/accounts/other' }),
+      isTransient: true,
     });
     expect(h.terminal.shown).toBe(1);
-    // The manifest's own argv, typed into the terminal exactly once.
-    expect(h.terminal.sent).toEqual(['claude auth login']);
+    // The manifest's own argv, run as the process; nothing typed into a shell.
+    expect(h.terminal.sent).toEqual([]);
     expect(h.deps.runnerInstallation.refresh).toHaveBeenCalled();
     expect(h.deps.sendState).toHaveBeenCalled();
     expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner: 'claude-code', ok: true });
@@ -118,7 +179,11 @@ describe('loginPlanner', () => {
     // A GUI-launched extension host inherits a minimal PATH; the terminal the
     // login runs in must see the directories the probe resolved, or the agent
     // it just found is ENOENT in its own login.
-    const h = harness({ verdict: (probe) => (probe >= 3 ? { ...SIGNED_OUT_CLAUDE, state: 'signed-in' } : SIGNED_OUT_CLAUDE) });
+    // The real augmented PATH, with every file on it standing in for the agent.
+    const h = harness({
+      verdict: (probe) => (probe >= 3 ? { ...SIGNED_OUT_CLAUDE, state: 'signed-in' } : SIGNED_OUT_CLAUDE),
+      launch: { exists: () => true },
+    });
 
     await loginPlanner(h.deps);
 
@@ -133,29 +198,114 @@ describe('loginPlanner', () => {
     expect(env.CLAUDE_CONFIG_DIR).toBe('/accounts/other');
   });
 
-  it('runs the login in cmd.exe on Windows, whatever the default terminal is', async () => {
-    // Windows PowerShell picks npm's codex.ps1 over codex.cmd and, under the
-    // default Restricted policy, refuses to run it.
+  // #62 F3: typed into a login shell, the name was found again after its
+  // startup files ran, so an rc file's PATH or alias could start another binary.
+  it('starts the first file on the probe\'s PATH, by its full path, with no shell to find it again', async () => {
     const h = harness({
-      platform: 'win32',
-      verdict: (probe) => (probe >= 3
-        ? { state: 'signed-in', loginCommand: ['codex', 'login'] }
-        : { state: 'signed-out', loginCommand: ['codex', 'login'] }),
+      aiProvider: 'cline',
+      verdict: () => ({ state: 'signed-out', loginCommand: ['cline', 'auth'] }),
+      exitAfter: { polls: 1, code: 0 },
+      launch: {
+        resolvePath: async () => '/opt/homebrew/bin:/Users/me/.local/bin:/usr/local/bin',
+        exists: (file) => file === '/Users/me/.local/bin/cline' || file === '/usr/local/bin/cline',
+      },
     });
 
-    await loginPlanner(h.deps, 'codex');
+    await loginPlanner(h.deps, 'cline');
 
-    expect(h.terminal.options.shellPath).toMatch(/cmd\.exe$/i);
-    expect(h.terminal.sent).toEqual(['codex login']);
-    expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner: 'codex', ok: true });
+    expect(h.terminal.options).toMatchObject({ shellPath: '/Users/me/.local/bin/cline', shellArgs: ['auth'] });
+    // The terminal's own PATH is the one the file was found on.
+    expect(h.terminal.options.env?.PATH).toBe('/opt/homebrew/bin:/Users/me/.local/bin:/usr/local/bin');
+    expect(h.terminal.sent).toEqual([]);
   });
 
-  it('leaves the shell to the user default off Windows', async () => {
-    const h = harness({ verdict: (probe) => (probe >= 3 ? { ...SIGNED_OUT_CLAUDE, state: 'signed-in' } : SIGNED_OUT_CLAUDE) });
+  it('says the login could not start, and opens no terminal, when the agent is not on that PATH', async () => {
+    const h = harness({
+      aiProvider: 'cursor-agent',
+      verdict: () => ({ state: 'signed-out', loginCommand: ['cursor-agent', 'login'] }),
+      launch: { resolvePath: async () => '/nowhere', exists: () => false },
+    });
 
     await loginPlanner(h.deps);
 
-    expect(h.terminal.options).not.toHaveProperty('shellPath');
+    expect(h.createTerminal).not.toHaveBeenCalled();
+    expect(h.ended()).toEqual({
+      type: 'plannerLoginEnded', runner: 'cursor-agent', ok: false,
+      message: 'The Cursor login could not be started. Could not find "cursor-agent" on PATH.',
+    });
+    // The folders searched are the log's, not the row's.
+    expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining('/nowhere'));
+  });
+
+  describe('on Windows', () => {
+    const WIN_BIN = 'C:\\Users\\me\\AppData\\Roaming\\npm';
+    const CMD = 'C:\\Windows\\System32\\cmd.exe';
+    /** A shim as npm's cmd-shim writes it, CRLF and all, starting `target` (relative to the shim) with node. */
+    const npmNodeShim = (target: string): string => [
+      '@ECHO off', 'GOTO start', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b', ':start', 'SETLOCAL', 'CALL :find_dp0', '',
+      'IF EXIST "%dp0%\\node.exe" (', '  SET "_prog=%dp0%\\node.exe"', ') ELSE (', '  SET "_prog=node"', '  SET PATHEXT=%PATHEXT:;.JS;=;%', ')', '',
+      `endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\${target}" %*`, '',
+    ].join('\r\n');
+    const windows = (files: Record<string, string>): Omit<LaunchDeps, 'platform'> => ({
+      resolvePath: async () => WIN_BIN,
+      exists: (file) => file in files,
+      readShim: (file) => files[file],
+      pathExt: () => '.COM;.EXE;.BAT;.CMD',
+      comSpec: () => CMD,
+    });
+    const codexSignedOut = { state: 'signed-out' as const, loginCommand: ['codex', 'login'] };
+
+    // Windows PowerShell picks npm's codex.ps1 over codex.cmd and, under the
+    // default Restricted policy, refuses to run it: no shell is in the way now.
+    it("starts an npm shim's own script with the node beside it, as a spawn does", async () => {
+      const h = harness({
+        platform: 'win32',
+        verdict: (probe) => (probe >= 3 ? { ...codexSignedOut, state: 'signed-in' } : codexSignedOut),
+        launch: windows({
+          [`${WIN_BIN}\\codex.cmd`]: npmNodeShim('node_modules\\@openai\\codex\\bin\\codex.js'),
+          [`${WIN_BIN}\\node_modules\\@openai\\codex\\bin\\codex.js`]: '',
+          [`${WIN_BIN}\\node.exe`]: '',
+        }),
+      });
+
+      await loginPlanner(h.deps, 'codex');
+
+      expect(h.terminal.options).toMatchObject({
+        shellPath: `${WIN_BIN}\\node.exe`,
+        shellArgs: [`${WIN_BIN}\\node_modules\\@openai\\codex\\bin\\codex.js`, 'login'],
+      });
+      expect(h.terminal.sent).toEqual([]);
+      expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner: 'codex', ok: true });
+    });
+
+    it('runs a batch file of its own through cmd.exe, its line handed over as written', async () => {
+      const h = harness({
+        platform: 'win32',
+        aiProvider: 'cursor-agent',
+        verdict: () => ({ state: 'signed-out', loginCommand: ['cursor-agent', 'login'] }),
+        exitAfter: { polls: 1, code: 0 },
+        launch: windows({ [`${WIN_BIN}\\cursor-agent.cmd`]: '@echo off\r\npowershell -File "%~dp0cursor-agent.ps1" %*\r\n' }),
+      });
+
+      await loginPlanner(h.deps);
+
+      // A string is VS Code's one Windows form for a command line taken verbatim.
+      expect(h.terminal.options).toMatchObject({ shellPath: CMD, shellArgs: `/d /s /c "${WIN_BIN}\\cursor-agent.cmd login"` });
+    });
+
+    it('starts a native executable directly', async () => {
+      const h = harness({
+        platform: 'win32',
+        aiProvider: 'cursor-agent',
+        verdict: () => ({ state: 'signed-out', loginCommand: ['cursor-agent', 'login'] }),
+        exitAfter: { polls: 1, code: 0 },
+        launch: windows({ [`${WIN_BIN}\\cursor-agent.exe`]: '', [`${WIN_BIN}\\cursor-agent.cmd`]: '@echo off\r\n' }),
+      });
+
+      await loginPlanner(h.deps);
+
+      expect(h.terminal.options).toMatchObject({ shellPath: `${WIN_BIN}\\cursor-agent.exe`, shellArgs: ['login'] });
+    });
   });
 
   it('signs in a named runner without making it the planner', async () => {
@@ -169,8 +319,7 @@ describe('loginPlanner', () => {
     await loginPlanner(h.deps, 'codex');
 
     expect(h.deps.runnerInstallation.runnerUsability).toHaveBeenCalledWith('codex');
-    expect(h.createTerminal).toHaveBeenCalledWith(expect.objectContaining({ name: 'Codex login' }));
-    expect(h.terminal.sent).toEqual(['codex login']);
+    expect(h.createTerminal).toHaveBeenCalledWith(expect.objectContaining({ name: 'Codex login', shellPath: '/fake/bin/codex', shellArgs: ['login'] }));
     expect(h.deps.config.aiProvider).toBe('claude-code');
     expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner: 'codex', ok: true });
     expect(h.deps.notifications.info).toHaveBeenCalledWith('Signed in to Codex.');
@@ -178,13 +327,12 @@ describe('loginPlanner', () => {
 
   it("runs a task-only agent's own login, though it cannot plan", async () => {
     // Copilot has a login but no status command, so the sign-in cannot be
-    // confirmed by a probe; the terminal still gets the manifest's argv.
-    const h = harness({ verdict: () => ({ state: 'unknown', loginCommand: ['copilot', 'login'] }), afterProbe: (probe, close) => { if (probe >= 2) close(); } });
+    // confirmed by a probe; the terminal still runs the manifest's argv.
+    const h = harness({ verdict: () => ({ state: 'unknown', loginCommand: ['copilot', 'login'] }), exitAfter: { polls: 2, code: undefined } });
 
     await loginPlanner(h.deps, 'copilot-cli');
 
-    expect(h.createTerminal).toHaveBeenCalledWith(expect.objectContaining({ name: 'GitHub Copilot CLI login' }));
-    expect(h.terminal.sent).toEqual(['copilot login']);
+    expect(h.createTerminal).toHaveBeenCalledWith(expect.objectContaining({ name: 'GitHub Copilot CLI login', shellPath: '/fake/bin/copilot', shellArgs: ['login'] }));
     expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner: 'copilot-cli', ok: false, message: 'The terminal closed before sign-in finished.' });
   });
 
@@ -318,6 +466,8 @@ describe('loginPlanner', () => {
     await loginPlanner(h.deps);
 
     expect(vi.mocked(h.deps.runnerInstallation.runnerUsability).mock.calls.length).toBe(2);
+    // A closed login is no recheck (ADR-0052): what was recorded stands.
+    expect(h.deps.runnerInstallation.recheck).not.toHaveBeenCalled();
     expect(h.deps.sendState).not.toHaveBeenCalled();
     expect(h.ended()).toEqual({
       type: 'plannerLoginEnded', runner: 'claude-code', ok: false, message: 'The terminal closed before sign-in finished.',
@@ -326,19 +476,19 @@ describe('loginPlanner', () => {
   });
 
   // ADR-0052, #46 F7: Cursor has no status command, so no poll can confirm its
-  // login. Closing the terminal is the user's word that it is done: Ordewell
-  // rechecks it once, by the agent's own handshake, and never calls it signed in.
+  // login. Its exit is when it is asked again, once, by the agent's own
+  // handshake, and only that answer says it is signed in.
   it.each([
     ['unknown', { ok: false, message: 'The login finished, but Cursor cannot say whether it is signed in. Send again to try it.' }],
     ['signed-out', { ok: false, message: 'Cursor still reports not logged in.' }],
     ['signed-in', { ok: true }],
-  ] as const)('rechecks an agent with no status command once its terminal closes: %s', async (answer, ended) => {
+  ] as const)('rechecks an agent with no status command once its login exits 0: %s', async (answer, ended) => {
     // The recheck records what the agent answered, which every later look reads.
     let rechecked = false;
     const h = harness({
       aiProvider: 'cursor-agent',
       verdict: () => ({ state: rechecked ? answer : 'signed-out', loginCommand: ['cursor-agent', 'login'] }),
-      afterProbe: (probe, close) => { if (probe === 2) close(); },
+      exitAfter: { polls: 3, code: 0 },
     });
     const recheck = vi.fn(async () => { rechecked = true; return { usable: true, auth: { state: answer } }; });
     Object.assign(h.deps.runnerInstallation, { recheck });
@@ -346,19 +496,52 @@ describe('loginPlanner', () => {
     await loginPlanner(h.deps);
 
     expect(recheck).toHaveBeenCalledWith('cursor-agent');
+    // No status command, so the wait polled nothing: one look before, one after.
+    expect(h.deps.runnerInstallation.runnerUsability).toHaveBeenCalledTimes(2);
     expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner: 'cursor-agent', ...ended });
     // The recheck changed what is recorded, so both roles are redrawn from it.
     expect(h.deps.sendState).toHaveBeenCalled();
   });
 
-  it('ends as a failure after the time limit, with the reason inline', async () => {
-    const h = harness({ timeoutMs: 60_000, verdict: () => SIGNED_OUT_CLAUDE });
+  // A login that failed or was cancelled is no recheck (ADR-0052): its blocker
+  // stays, and the send gate still asks the agent before the next turn.
+  it.each([
+    [1, 'The Cursor login exited with code 1.'],
+    [undefined, 'The terminal closed before sign-in finished.'],
+  ] as const)('ends a login that exits %s as a failure, keeping what was recorded', async (code, message) => {
+    const h = harness({ aiProvider: 'cursor-agent', verdict: () => ({ state: 'signed-out', loginCommand: ['cursor-agent', 'login'] }), exitAfter: { polls: 2, code } });
 
     await loginPlanner(h.deps);
 
+    expect(h.deps.runnerInstallation.recheck).not.toHaveBeenCalled();
+    expect(h.deps.sendState).not.toHaveBeenCalled();
+    expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner: 'cursor-agent', ok: false, message });
+    expect(h.deps.notifications.warn).toHaveBeenCalledWith(`Ordewell could not confirm the Cursor login. ${message}`);
+  });
+
+  it('asks a status command once more when the login exits between two polls', async () => {
+    // Signed in by the time it exits, before any poll saw it.
+    const h = harness({ verdict: (probe) => (probe >= 2 ? { ...SIGNED_OUT_CLAUDE, state: 'signed-in' } : SIGNED_OUT_CLAUDE), exitAfter: { polls: 1, code: 0 } });
+
+    await loginPlanner(h.deps);
+
+    expect(h.deps.runnerInstallation.recheck).toHaveBeenCalledWith('claude-code');
+    expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner: 'claude-code', ok: true });
+  });
+
+  it.each([
+    ['claude-code', SIGNED_OUT_CLAUDE],
+    ['cursor-agent', { state: 'signed-out', loginCommand: ['cursor-agent', 'login'] } as RunnerAuth],
+  ])('ends %s\'s login, terminal and all, after the time limit, with the reason inline', async (runner, auth) => {
+    const h = harness({ timeoutMs: 60_000, verdict: () => auth });
+
+    await loginPlanner(h.deps, runner);
+
+    expect(h.terminal.disposed).toBe(1);
+    expect(h.deps.runnerInstallation.recheck).not.toHaveBeenCalled();
     expect(h.deps.sendState).not.toHaveBeenCalled();
     expect(h.ended()).toEqual({
-      type: 'plannerLoginEnded', runner: 'claude-code', ok: false, message: 'Sign-in did not finish in time.',
+      type: 'plannerLoginEnded', runner, ok: false, message: 'Sign-in did not finish in time.',
     });
   });
 
@@ -373,11 +556,11 @@ describe('loginPlanner', () => {
   });
 
   // The webview clears its pending button only on `plannerLoginEnded`. A throw
-  // after the terminal exists (a terminal disposed between create and send, say)
+  // after the terminal exists (a terminal disposed between create and show, say)
   // must still end the attempt, or the button stays disabled until a reload.
-  it('ends the attempt as a failure when writing to the terminal throws', async () => {
+  it('ends the attempt as a failure when showing the terminal throws', async () => {
     const h = harness();
-    h.terminal.sendText = () => { throw new Error('terminal was disposed'); };
+    h.terminal.show = () => { throw new Error('terminal was disposed'); };
 
     await loginPlanner(h.deps);
 
@@ -386,15 +569,65 @@ describe('loginPlanner', () => {
   });
 });
 
-describe('commandLine', () => {
-  it('quotes only what the shell would split', () => {
-    expect(commandLine(['claude', 'auth', 'login'], 'linux')).toBe('claude auth login');
-    expect(commandLine(['/opt/My Agent/bin', '--config', '/a b/c'], 'linux')).toBe(`'/opt/My Agent/bin' --config '/a b/c'`);
+/**
+ * The real installation and catalog, with the agent's ACP handshake faked: what
+ * a login's recheck records is what the send gate and both pickers read next.
+ */
+describe('the recheck after a login, on the real installation', () => {
+  let store: string | undefined;
+  afterEach(() => {
+    resetRunnerAuth();
+    if (store) fs.rmSync(store, { recursive: true, force: true });
+    store = undefined;
   });
 
-  it("quotes for cmd.exe on Windows, the login terminal's shell there", () => {
-    expect(commandLine(['codex', 'login'], 'win32')).toBe('codex login');
-    expect(commandLine(['C:\\Program Files\\Agent\\agent.exe', 'auth', 'login'], 'win32'))
-      .toBe('"C:\\Program Files\\Agent\\agent.exe" auth login');
+  /**
+   * The provider store `cline auth` leaves behind, which Cline's start reads
+   * before any handshake (the key is a placeholder): with none, Cline is
+   * refused before it is asked, which its readiness work owns.
+   */
+  function clineStore(): Record<string, string> {
+    store = fs.mkdtempSync(path.join(os.tmpdir(), 'ow-cline-store-'));
+    const file = path.join(store, 'providers.json');
+    fs.writeFileSync(file, JSON.stringify({ lastUsedProvider: 'openrouter', providers: { openrouter: { settings: { provider: 'openrouter', apiKey: 'placeholder' } } } }));
+    return { CLINE_PROVIDER_SETTINGS_PATH: file };
+  }
+
+  function real(runner: 'cursor-agent' | 'cline', answer: 'signed-out' | DiscoveredModel[]) {
+    const registry = new RunnerRegistry();
+    const config = { aiProvider: runner as PlannerBackendId, getProviderApiKey: () => '', planningModel: '', orchestratorModel: '', openaiCompatibleBaseUrl: '' };
+    const acpClient = vi.fn(async () => answer);
+    const env = runner === 'cline' ? clineStore() : {};
+    const modelResolver = new ModelResolver(registry, config as never, { env: async () => env, acpClient, workspace: () => '/ws', execImpl: async () => ({ stdout: '' }) });
+    const installation = new RunnerInstallation(registry, async () => ({ stdout: '2026.10.22' }), Date.now, { launch: { platform: 'linux' }, workspace: () => '/ws' });
+    // A turn found it signed out: the blocker a probe with no status command cannot clear.
+    recordRunnerAuth(runner, signedOutAuth(runnerSignIn(runner)!), '/ws');
+    return { acpClient, modelResolver, installation };
+  }
+
+  it.each(['cursor-agent', 'cline'] as const)('clears %s\'s recorded blocker once its handshake opens a session', async (runner) => {
+    const r = real(runner, []);
+    const h = harness({ aiProvider: runner, runnerInstallation: r.installation, modelResolver: r.modelResolver, exitAfter: { polls: 2, code: 0 } });
+
+    await loginPlanner(h.deps, runner);
+
+    expect(h.terminal.options).toMatchObject({ shellPath: `/fake/bin/${runner}`, shellArgs: runnerSignIn(runner)!.login!.slice(1) });
+    expect(r.acpClient).toHaveBeenCalled();
+    expect(recordedRunnerAuth(runner, '/ws')?.state).toBe('signed-in');
+    expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner, ok: true });
+    expect(h.deps.sendState).toHaveBeenCalled();
+  });
+
+  it.each([['cursor-agent', 'Cursor'], ['cline', 'Cline']] as const)('keeps %s\'s blocker when its handshake still refuses, though the login exited 0', async (runner, label) => {
+    const r = real(runner, 'signed-out');
+    const h = harness({ aiProvider: runner, runnerInstallation: r.installation, modelResolver: r.modelResolver, exitAfter: { polls: 1, code: 0 } });
+
+    await loginPlanner(h.deps, runner);
+
+    expect(r.acpClient).toHaveBeenCalled();
+    expect(recordedRunnerAuth(runner, '/ws')?.state).toBe('signed-out');
+    expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner, ok: false, message: `${label} still reports not logged in.` });
+    // Both pickers are redrawn from the blocker it recorded again.
+    expect(h.deps.sendState).toHaveBeenCalled();
   });
 });
