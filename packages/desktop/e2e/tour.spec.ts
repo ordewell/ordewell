@@ -2050,7 +2050,10 @@ test('the visual tour', async () => {
   await closeApp(app2);
   if (app2) apps.splice(apps.indexOf(app2), 1);
   const thirdPort = await freePort();
-  const app3 = await launchApp(box, appEnv(box, thirdPort, started.port, { persona: 'desktop-tour-runners', runners: ALL_RUNNERS }), SWITCHES);
+  // The real daemon judges the plan's runners: Cline's credential hook finds no
+  // key it may hand over (the mock's endpoint is not one Cline reaches), which
+  // withholds Cline from the planner (ADR-0052), so it is given one of its own.
+  const app3 = await launchApp(box, { ...appEnv(box, thirdPort, started.port, { persona: 'desktop-tour-runners', runners: ALL_RUNNERS }), CLINE_API_KEY: 'mock-cline-key' }, SWITCHES);
   apps.push(app3);
   ports.push(thirdPort);
   watchConsole(app3, 'launch 3');
