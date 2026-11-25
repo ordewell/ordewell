@@ -1,5 +1,5 @@
 import type { AccountLimitSnapshot, GlobalRunSettings, IsolationPreview,
-  AiProvider, RunnerAuth, RunnerCommand, DisplayBlock, DiscoveredModel, PromptHold, RunnerId, RunActivity, RunView, SurfacePlan,
+  AiProvider, RunnerAuth, RunnerCommand, RunnerSignIn, DisplayBlock, DiscoveredModel, PromptHold, RunnerId, RunActivity, RunView, SurfacePlan,
   TaskModelAssignment, ChildPlanEntry, ChildPlanView, CardEdit,
 } from '@ordewell/core';
 
@@ -292,9 +292,11 @@ export type HostToWebview =
   /**
    * `code` names an error whose way out is detecting again: no planner was
    * ready for the goal. `resend` is the message whose planner turn failed, which
-   * Try Again sends again.
+   * Try Again sends again. `signIn` is the agent the failure itself names as
+   * signed out, with its ways in, so the error offers that agent's sign-in and
+   * never the planner picked since (ADR-0052).
    */
-  | { type: 'showError'; error: string; code?: 'planner_not_ready'; resend?: string }
+  | { type: 'showError'; error: string; code?: 'planner_not_ready'; resend?: string; signIn?: RunnerSignIn }
   | { type: 'setModels'; models: DiscoveredModel[] }
   | { type: 'setRunners'; runners: RunnerMeta[] }
   /**

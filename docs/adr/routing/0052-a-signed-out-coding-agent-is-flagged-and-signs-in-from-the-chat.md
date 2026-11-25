@@ -197,6 +197,16 @@ or run claude auth login. Then try again.` The headless CLI, which has no
 `/login`, says `Claude Code is not signed in. Run claude auth login to sign in.
 Then try again.`
 
+The refusal also names its agent as data, so the Desktop and VS Code chat's
+error offers that agent's own Sign in, never the planner picked since: a
+`signed_out` reason carries its `RunnerSignIn`, and an agent that refused to
+start (`RunnerSignedOutError`, below) reaches a daemon client as
+`runner_signed_out` (409) with the same `signIn` (`DaemonRefusal.signIn`). The
+button runs the agent's login as its Log in does, waits while any login of that
+agent runs, and says how it ended; it opens the key entry for a key-based
+agent, and an agent with neither keeps the words alone. Nothing is sent again:
+the refused message waits in the composer.
+
 ### When the verdict is stale
 
 A login can change while a host runs, and the gate reads a recording rather than
@@ -457,3 +467,4 @@ art for the TTL and the refresh trigger.
   of what it may list and assign, with the reason, and offered again once signed
   in; the user's `enabledRunners` is untouched.
 - 2026-11-25 — a recorded verdict keeps its evidence: a status-less probe's `unknown` no longer erases a turn's or discovery's refusal on refresh or expiry; an ACP start refusal and discovery's handshake are recorded by type; the send recheck asks the handshake, and a finished login or explicit recheck (`runners.list?recheck=`) is the only reset.
+- 2026-11-25 — a refusal that names a signed-out agent offers that agent's Sign in on the Desktop and VS Code chat's error; a refused start reaches daemon clients as `runner_signed_out` with its `signIn`.
