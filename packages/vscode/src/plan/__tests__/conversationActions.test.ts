@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as vscode from 'vscode';
 import { ConversationEditError, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, recordRunnerAuth, recordedRunnerAuth, resetRunnerAuth } from '@ordewell/core';
 import { forkConversation, rewindConversation, compactConversation, type ConversationDeps } from '../conversation';
+import { __setWorkspaceFolders } from '../../test/vscode.mock';
 
 const showQuickPick = vscode.window.showQuickPick as unknown as ReturnType<typeof vi.fn>;
 const showInformationMessage = vscode.window.showInformationMessage as unknown as ReturnType<typeof vi.fn>;
@@ -346,4 +347,23 @@ describe('while a planner turn is generating', () => {
   refused('rewind', (d) => rewindConversation(d), (s) => s.rewindConversation);
   refused('rewind <n>', (d) => rewindConversation(d, '2'), (s) => s.rewindConversation);
   refused('compact', compactConversation, (s) => s.compactConversation);
+});
+
+// Task #47: each of these writes a session, or is a planner turn, in the
+// project; with no folder open there is none, and the session is not touched.
+describe('the conversation commands in a window with no folder', () => {
+  beforeEach(() => __setWorkspaceFolders(undefined));
+  const noFolderWarnings = () => showWarningMessage.mock.calls.filter(([text]) => String(text).startsWith('Ordewell needs an open folder'));
+
+  it('neither forks, rewinds nor compacts', async () => {
+    const { deps, session } = setup();
+    await forkConversation(deps);
+    await rewindConversation(deps, '2');
+    await compactConversation(deps);
+    expect(session.forkConversation).not.toHaveBeenCalled();
+    expect(session.rewindTargets).not.toHaveBeenCalled();
+    expect(session.rewindConversation).not.toHaveBeenCalled();
+    expect(session.compactConversation).not.toHaveBeenCalled();
+    expect(noFolderWarnings()).toHaveLength(3);
+  });
 });

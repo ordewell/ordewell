@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { isApiProvider, listSessions, readSession } from '@ordewell/core';
 import type { AiProvider, PlannerBackendId, RunnerInstallation, RunnerRegistry, ModelResolver, SettingsService, DiscoveredModel, PlannerModelRecall } from '@ordewell/core';
 import type { ApiProvider } from '../adapters/SecretStore';
+import { requireWorkspaceFolder } from '../adapters/workspaceFolder';
 import type { ChatViewProvider, PlannerBackend } from '../providers/ChatViewProvider';
 import type { VendorModelOption } from '../plan/PlannerModelSwitch';
 import { configureModelAllowlist } from './configureModelAllowlist';
@@ -138,7 +139,8 @@ export async function handleSlashCommand(text: string, deps: SlashDeps): Promise
     return;
   }
   if (cmd === '/sessions') {
-    const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
+    const workspace = requireWorkspaceFolder();
+    if (workspace === undefined) return;
     const sessions = listSessions(workspace);
     if (sessions.length === 0) {
       vscode.window.showInformationMessage('No saved sessions.');

@@ -20,6 +20,16 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = () => {};
 }
 
+// Every test starts in a window with one folder open; a test that needs none says so.
+afterEach(async () => {
+  const mock = await import('./vscode.mock');
+  try {
+    mock.__setWorkspaceFolders([mock.MOCK_WORKSPACE_FOLDER]);
+  } catch {
+    // The file mocks `vscode` with a factory of its own, which has no folders to reset.
+  }
+});
+
 // setupFiles run for every test environment; only run DOM cleanup when a
 // document exists (jsdom-backed .test.tsx files), not for node-env adapter tests.
 afterEach(async () => {
