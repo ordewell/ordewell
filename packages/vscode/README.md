@@ -6,7 +6,7 @@ By default, submitted build plans wait for you to run them. Run settings let you
 automate execution and merging. Research tasks and consented script tasks can
 start during planning.
 
-This README describes 0.14.11. See the [published releases](https://github.com/ordewell/ordewell/releases)
+This README describes 0.14.12. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
 
 Ordewell is also a [terminal UI and command line](https://www.npmjs.com/package/@ordewell/cli)
