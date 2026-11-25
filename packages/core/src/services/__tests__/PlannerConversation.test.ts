@@ -2166,3 +2166,37 @@ describe('review of #499: wake account after a user turn that carried wake-ups',
     expect(sent[2]).toContain('retry_task #13');
   });
 });
+
+/** A turn the runner ended as signed out lands as it did, once, with that agent's way in as data (ADR-0052). */
+describe('a planner turn that ended signed out', () => {
+  const CLAUDE = { runner: 'claude-code', label: 'Claude Code', login: ['claude', 'auth', 'login'] };
+  const SAID = 'Claude Code is not signed in. Sign in with /login claude-code, or run claude auth login. Then try again.\n\nNot logged in · Please run /login';
+
+  it('keeps the failure once, after the message it answered, with the agent to sign in', async () => {
+    const { conversation, host, state } = fakeHost(fakeAi({
+      continueConversation: vi.fn().mockResolvedValue({ kind: 'message', text: SAID, researchLog: [], failed: true, signIn: CLAUDE } satisfies ConversationTurn),
+    }));
+
+    await conversation.reply('add YAML too');
+
+    const history = state.plan!.conversationHistory!;
+    expect(history.slice(2)).toEqual([
+      expect.objectContaining({ role: 'user', content: 'add YAML too' }),
+      expect.objectContaining({ role: 'assistant', content: SAID, signIn: CLAUDE }),
+    ]);
+    const said = vi.mocked(host.broadcast).mock.calls.map(([m]) => m).filter((m) => m.type === 'planner_message');
+    expect(said).toEqual([expect.objectContaining({ content: SAID, signIn: CLAUDE })]);
+  });
+
+  it('carries no sign-in on an ordinary reply, whatever it says about signing in', async () => {
+    const { conversation, host, state } = fakeHost(fakeAi({
+      continueConversation: vi.fn().mockResolvedValue({ kind: 'message', text: 'Run claude auth login if you are not logged in.', researchLog: [] } satisfies ConversationTurn),
+    }));
+
+    await conversation.reply('how do I sign in?');
+
+    expect(state.plan!.conversationHistory!.at(-1)).not.toHaveProperty('signIn');
+    const said = vi.mocked(host.broadcast).mock.calls.map(([m]) => m).filter((m) => m.type === 'planner_message');
+    expect(said).toEqual([expect.not.objectContaining({ signIn: expect.anything() })]);
+  });
+});

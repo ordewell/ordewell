@@ -4,6 +4,7 @@ import { isAbsolute, join } from 'path';
 import type { AiProvider } from '../../interfaces/IConfig';
 import type { RunnerCredentials } from '../../plugins/types';
 import { ordewellProvider } from './ordewellProvider';
+import { RunnerCredentialRefusal } from '../signInHint';
 
 /*
  * The provider key Cline's ACP process starts under, which does not read
@@ -87,8 +88,8 @@ export function clineCredentials(deps: ClineCredentialDeps = {}): RunnerCredenti
   };
 }
 
-function refused(reason: string): Error {
-  return new Error(`Cline has no provider key Ordewell can hand it: Ordewell holds none for a provider Cline offers, and ${reason}. ${ROUTES}`);
+function refused(reason: string): RunnerCredentialRefusal {
+  return new RunnerCredentialRefusal(`Cline has no provider key Ordewell can hand it: Ordewell holds none for a provider Cline offers, and ${reason}. ${ROUTES}`);
 }
 
 /** The file's text; undefined when it is not there, null when it cannot be read or is too big to be a store. */

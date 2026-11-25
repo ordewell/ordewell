@@ -1,5 +1,6 @@
 import type { ConfirmDifference, DaemonErrorCode, ErrorBody, LandingBranchHeld } from '../daemonContract';
 import type { PlannerNotReady } from '../services/plannerReadiness';
+import type { RunnerSignIn } from '../services/signInHint';
 import type { SessionHeld } from '../services/sessionLease';
 import type { CommandPayload } from '../services/ExecutionCommands';
 
@@ -23,6 +24,17 @@ export class DaemonRefusal extends Error {
 
   get code(): DaemonErrorCode | undefined { return this.fields.code; }
   get plannerNotReady(): PlannerNotReady | undefined { return this.fields.plannerNotReady; }
+  /**
+   * The agent this refusal names as signed out, with its ways in: a preflight's
+   * `signed_out` reason, a start the agent refused, or a new pick a stale
+   * picker offered and the daemon refused (ADR-0052).
+   */
+  get signIn(): RunnerSignIn | undefined {
+    const reason = this.fields.plannerNotReady;
+    if (reason?.code === 'signed_out') return reason.signIn;
+    const picked = this.fields.runnerNotReady?.readiness;
+    return this.fields.signIn ?? (picked?.kind === 'blocked' ? picked.signIn : undefined);
+  }
   /** With `session_held`: the host that runs the session (ADR-0049). */
   get sessionHeld(): SessionHeld | undefined { return this.fields.sessionHeld; }
   /** With `landing_branch_held`: the live run that lands on the branch (ADR-0062 G7). */

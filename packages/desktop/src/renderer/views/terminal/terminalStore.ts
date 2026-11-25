@@ -39,7 +39,8 @@ export interface TerminalState {
 
 /** What a login terminal tells the host that started it: the process or its tab ended. */
 export interface LoginTerminal {
-  ended: Promise<void>;
+  /** The login's exit code once its process exits; none when its tab closed first. */
+  ended: Promise<number | void>;
 }
 
 export const tabTitle = (tab: TerminalTab): string => tab.name ?? tab.shell ?? 'Terminal';
@@ -57,7 +58,7 @@ interface Entry {
   pty: { cols: number; rows: number } | undefined;
   words: boolean;
   /** A login's waiters: the agent's status command is the verdict, not this exit. */
-  ended(): void;
+  ended(code?: number): void;
 }
 
 /**
@@ -138,8 +139,8 @@ export class TerminalStore {
     }
     const task = scope.kind === 'task' ? scopes.session?.tasks.find((t) => t.id === scope.taskId) : undefined;
     const key = `terminal-${++this.counter}`;
-    let ended: () => void = () => undefined;
-    const done = new Promise<void>((resolve) => { ended = resolve; });
+    let ended: (code?: number) => void = () => undefined;
+    const done = new Promise<number | void>((resolve) => { ended = resolve; });
     const entry: Entry = { term: undefined, ptyId: undefined, closed: false, pty: undefined, words: false, ended };
     this.entries.set(key, entry);
     this.set({
@@ -207,7 +208,7 @@ export class TerminalStore {
     entry.term.write(`\r\n\x1b[2m[${message} Close this tab to dismiss it.]\x1b[0m\r\n`);
     entry.ptyId = undefined;
     this.patchTab(key, { phase: 'exited', message, words: false });
-    entry.ended();
+    entry.ended(event.exitCode);
   }
 
   close(key: string): void {

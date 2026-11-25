@@ -1,8 +1,9 @@
 import { CLI_PROVIDERS, getProviderMeta, plannerBackendEntries, runnerForProvider, type PlannerUsability } from '@ordewell/core';
 import { plannerNamesOr } from '../../runnerNames';
 import { dependencyCandidates } from '@ordewell/core/plan-utils';
-import { findTask, runnerSignInLine, signedOutWithWayIn, titledRefFor, type ModelView, type PickerItem, type PickerState, type TuiState } from '../state';
+import { findTask, runnerSignInLine, titledRefFor, type ModelView, type PickerItem, type PickerState, type TuiState } from '../state';
 import { effortsForTask, modelsForRunner, modelsForTask, modesForTask } from '../taskAssignment';
+import { runnerRowChoice, runnersInChoiceOrder } from '../runnerChoice';
 
 /** The picker id meaning "the runner's own default", as opposed to a model variant. */
 export const DEFAULT_EFFORT = '__runner_default__';
@@ -161,36 +162,48 @@ export function pickerItemsFor(state: TuiState, action: PickerState['action']): 
     }));
   }
   if (action.kind === 'set-runners') {
-    // Each row carries its own way in, so a signed-out agent can be fixed from
-    // the list that shows it (ADR-0052). An installed agent Ordewell cannot
-    // start says why it is unavailable and cannot be switched on for tasks.
-    return state.runners.map((runner) => {
+    // Each row carries its own way in, so a blocked agent can be fixed from the
+    // list that shows it, and the choosable ones come first (ADR-0052). An
+    // installed agent Ordewell cannot start says why it is unavailable and
+    // cannot be switched on for tasks. One already on stays tickable, so the
+    // user can switch it off; switching a blocked one on is refused.
+    return runnersInChoiceOrder(state.runners).map((runner) => {
       const unavailable = runner.usable === false;
+      const row = runnerRowChoice(runner, runner.enabled);
       const way = runnerSignInLine(runner);
       // A provider runner shares its name with the API planner (ADR-0070), so
       // the row says it is the built-in runner, not a coding agent.
-      const detail = unavailable ? runner.reason : way ?? (runner.provider ? 'built-in runner, on its API key' : undefined);
+      const detail = unavailable ? runner.reason
+        : row.choice.group === 'blocked' ? row.status
+          : row.choice.status === 'sign-in-unknown' ? way ?? row.status
+            : row.status ?? way ?? (runner.provider ? 'built-in runner, on its API key' : undefined);
       return {
         id: runner.id,
         label: runner.name,
         ...(detail ? { detail } : {}),
-        ...(!unavailable && way && signedOutWithWayIn(runner) ? { warn: true } : {}),
-        ...(unavailable ? { disabled: true } : {}),
+        ...(unavailable ? { disabled: true } : { ...(row.item.warn ? { warn: true } : {}), ...(row.item.refusal ? { refusal: row.item.refusal } : {}) }),
       };
     });
   }
   if (action.kind === 'set-task-runner') {
     const task = findTask(state.tasks, action.taskId);
     if (!task) return [];
-    return state.runners.map((runner) => ({
-      id: runner.id,
-      label: runner.name,
-      detail: runner.usable === false
-        ? runner.reason
-        : runner.enabled ? undefined : 'not enabled for planning',
-      selected: runner.id === task.assignedRunner,
-      ...(runner.usable === false ? { disabled: true } : {}),
-    }));
+    // The task's own runner is the user's earlier choice and stays choosable
+    // whatever has become of it; moving the task onto a blocked one is refused.
+    return runnersInChoiceOrder(state.runners).map((runner) => {
+      const current = runner.id === task.assignedRunner;
+      const row = runnerRowChoice(runner, current);
+      const shown = row.choice.status === 'sign-in-unknown' ? undefined : row.status;
+      return {
+        id: runner.id,
+        label: runner.name,
+        detail: runner.usable === false
+          ? runner.reason
+          : shown ?? (runner.enabled ? undefined : 'not enabled for planning'),
+        selected: current,
+        ...(runner.usable === false ? { disabled: true } : row.item),
+      };
+    });
   }
   if (action.kind === 'set-task-deps') {
     return dependencyCandidates(state.tasks, action.taskId).map((candidate) => ({
@@ -252,8 +265,11 @@ export function pickerItemsFor(state: TuiState, action: PickerState['action']): 
   return [];
 }
 
-/** A signed-out row never carries the check mark, so the current pick is said in words. */
-const signedOutDetail = (line: string, current: boolean): string => (current ? `(current) ${line}` : line);
+/** A blocked row never carries the check mark, so the current pick is said in words. */
+const blockedDetail = (line: string, current: boolean): string => (current ? `(current) ${line}` : line);
+
+/** A status that offers no recovery is said beside what every agent planner is: no API key needed. */
+const QUIET_STATUSES = new Set(['pending', 'sign-in-unknown', 'agent-default']);
 
 /** '6 effort levels' or '6 levels + default': what the effort list offers, the agent's own default row included. */
 function effortCount(variants: number): string {
@@ -301,20 +317,21 @@ export function plannerItems(state: TuiState): PickerItem[] {
       { id: '', label: 'No planner available', detail: `install a coding agent (${plannerNamesOr()}) or add a key with /key-set`, disabled: true },
     ];
   }
-  const items: PickerItem[] = offered.map((entry) => {
-    // A signed-out agent stays offered — auth never gates usability — but the
-    // row flags it and names its own way in so it can be fixed without switching.
-    const signedOut = entry.kind === 'harness' && entry.auth?.state === 'signed-out';
-    const row = installed.get(entry.runner ?? entry.id);
-    const way = row && runnerSignInLine(row);
-    return {
-      id: entry.id,
-      label: entry.label,
-      detail: signedOut ? signedOutDetail(way ?? `${entry.label} is not signed in.`, state.plannerProvider === entry.id) : entry.reason,
-      selected: state.plannerProvider === entry.id,
-      ...(signedOut ? { warn: true } : {}),
-    };
+  // A blocked agent stays listed, below every choosable backend, with its
+  // status and the command that fixes it; a new pick of it is refused with its
+  // way in, while the planner in effect stays choosable (ADR-0052).
+  const rows = offered.map((entry) => {
+    const current = state.plannerProvider === entry.id;
+    const runner = entry.kind === 'harness' ? installed.get(entry.runner ?? entry.id) : undefined;
+    const row = runner && runnerRowChoice(runner, current);
+    const blocked = row?.choice.group === 'blocked';
+    const detail = !row?.status ? entry.reason
+      : blocked ? blockedDetail(row.status, current)
+        : QUIET_STATUSES.has(row.choice.status) ? `${row.status} · no API key needed` : row.status;
+    const item: PickerItem = { id: entry.id, label: entry.label, detail, selected: current, ...(row?.item ?? {}) };
+    return { item, blocked };
   });
+  const items = [...rows.filter((r) => !r.blocked), ...rows.filter((r) => r.blocked)].map((r) => r.item);
 
   return [
     ...items,

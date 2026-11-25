@@ -55,10 +55,25 @@ describe('first run, machine A: the default planner', () => {
     expect((await client().getSettings()).aiProvider).toBe('openrouter');
   });
 
-  it('a goal sent after picking Claude Code anyway is refused with the way on: a signed-in agent and /planner', async () => {
-    const { client, pool, workspace } = await start(machineA());
+  // ADR-0052: a new pick of a signed-out agent is refused at the write, with its way in.
+  it('refuses picking signed-out Claude Code, and keeps Codex planning', async () => {
+    const { client } = await start(machineA());
     // As the TUI's /planner pick writes it.
+    const refused = await client().updateSettings({ env: { AI_PROVIDER: 'claude-code', ORCHESTRATOR_MODEL: '', ORDEWELL_PLANNER_EFFORT: '' } }).then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+
+    expect(refused).toMatchObject({ status: 409, code: 'runner_not_ready' });
+    expect((refused as Error).message).toMatch(/^Claude Code is not signed in\. Sign in with \/login claude-code.*Then pick it again\.$/);
+    expect((await client().getSettings()).aiProvider).toBe('codex');
+  });
+
+  it('a goal sent after Claude Code, picked while signed in, signed out is refused with the way on: a signed-in agent and /planner', async () => {
+    const { client, pool, workspace, machine } = await start({ ...machineA(), claude: { ...machineA().claude!, signedIn: true } });
     await client().updateSettings({ env: { AI_PROVIDER: 'claude-code', ORCHESTRATOR_MODEL: '', ORDEWELL_PLANNER_EFFORT: '' } });
+    machine.set(machineA());
+    await client().getRunners(workspace);
 
     const refused = await client().startConversation('picked-anyway', 'Add a --name flag to hello.py', undefined, workspace).then(
       () => undefined,

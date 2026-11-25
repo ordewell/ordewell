@@ -67,6 +67,11 @@ import {
   PROVIDER_CREDENTIAL_ENV,
   removesCredential,
   forgetSignedOutRunnerAuth,
+  recheckRunnerSignIn,
+  verifyRunnerSignIn,
+  refuseBlockedPick,
+  runnerReadiness,
+  type RunnerRecheck,
   type PlannerBackendId,
   type PlannerModelCandidate,
   type PlannerSelectionChange,
@@ -123,7 +128,7 @@ export class SessionOpenElsewhereError extends Error {
  * test may hand in only the two probes; the real `RunnerInstallation` always
  * has it, and a refresh then re-probes a CLI installed since the last look.
  */
-type RunnerInstall = Pick<RunnerInstallation, 'filterInstalled' | 'plannerUsability' | 'runnerUsability'> & Partial<Pick<RunnerInstallation, 'refresh'>>;
+type RunnerInstall = Pick<RunnerInstallation, 'filterInstalled' | 'plannerUsability' | 'runnerUsability'> & Partial<Pick<RunnerInstallation, 'refresh' | 'recheck'>>;
 
 export interface OrchestratorPoolDeps {
   /** Inject acquisition boundaries without reading real accounts in host lifecycle tests. */
@@ -233,6 +238,8 @@ export class OrchestratorPool {
     this.suppliedModelResolver = deps.modelResolver !== undefined;
     this.modelResolver = deps.modelResolver ?? new ModelResolver(this.registry, new WebConfig(), {
       env: async () => ({ ...process.env, ...(await workspaceEnvOf(process.cwd())) }),
+      // What its ACP handshake hears is recorded for the account it asked (ADR-0052).
+      workspace: () => process.cwd(),
     });
     this.codexSandbox = deps.codexSandbox
       ?? new CodexSandboxAvailability(this.registry, { spawn: nodeSpawn, fetch: globalThis.fetch }, { cwd: process.cwd(), env: process.env });
@@ -758,6 +765,10 @@ export class OrchestratorPool {
       const workspace = this.settingsWorkspace(sessionId, requestWorkspace);
       const judging = this.catalogJudging(change, workspace);
       await this.discoverUnheld(workspace, judging ? [judging] : []);
+      // A switch to a coding agent is a new pick (ADR-0052); staying on the
+      // planner in effect, whatever has become of it since, is not.
+      const incoming = change.provider !== undefined && change.provider !== this.plannerProviderInEffect(workspace) ? runnerForProvider(change.provider) : undefined;
+      if (incoming) await this.refuseBlockedRunner(incoming, workspace);
       return this.updateSettings(changes, sessionId, requestWorkspace);
     });
     this.plannerWrites = turn.catch(() => undefined);
@@ -1052,7 +1063,13 @@ export class OrchestratorPool {
    * runner can't be spawned. `workspace` names whose account the auth verdict
    * is about; without it the daemon's cwd stands in.
    */
-  async getInstalledRunners(workspace?: string): Promise<RunnersResponse['runners']> {
+  async getInstalledRunners(workspace?: string, { recheck = [] }: { recheck?: readonly string[] } = {}): Promise<RunnersResponse['runners']> {
+    // The user's own recovery (a finished login, or a recheck asked for) is
+    // asked before the list, so the list it answers already says what came of
+    // it; the list on its own keeps what a turn or discovery recorded. Only a
+    // registered runner is asked, so a request cannot spawn an unknown name.
+    const check = this.signInCheck(workspace);
+    await Promise.all(recheck.filter((runner) => this.registry.getManifest(runner)).map((runner) => recheckRunnerSignIn(runner, check)));
     // The runner list is the one place a user who just fixed their host looks
     // again, so every cached answer is asked afresh: the Codex sandbox, the
     // install verdicts, and the agent detection behind the no-choice defaults.
@@ -1065,6 +1082,7 @@ export class OrchestratorPool {
 
     const config = new WebConfig({ enabledRunners: this.enabledRunnerOverride() });
     const enabled = new Set(config.enabledRunners);
+    const unlisted = this.resolverFor(workspace).getRunnerUnlisted();
     const runners = this.registry.list();
     const installedIds = new Set(
       await installation.filterInstalled(runners.map((p) => p.manifest.name)),
@@ -1081,7 +1099,8 @@ export class OrchestratorPool {
       runners
         .filter((p) => installedIds.has(p.manifest.name))
         .map(async (p): Promise<RunnersResponse['runners'][number]> => {
-          const { usable, reason, auth, version } = await installation.runnerUsability(p.manifest.name);
+          const usability = await installation.runnerUsability(p.manifest.name);
+          const { usable, reason, auth, version } = usability;
           const provider = inProcessProvider(p.manifest);
           return {
             id: p.manifest.name,
@@ -1090,6 +1109,9 @@ export class OrchestratorPool {
             ...(usable ? {} : { usable: false, ...(reason ? { reason } : {}) }),
             ...(auth ? { auth } : {}),
             ...(version ? { version } : {}),
+            // Read from the same record and discovery answer the write checks
+            // read (`refuseBlockedRunner`), so the list and the refusal agree.
+            readiness: runnerReadiness(usability, unlisted[p.manifest.name]),
             plans: runnerPlans(p.manifest.name),
             ...(provider ? { provider } : {}),
           };
@@ -1105,6 +1127,44 @@ export class OrchestratorPool {
   }
 
   /**
+   * Refuse a new pick of `runner` in `workspace` — a planner switched to it, it
+   * switched on, a task moved onto it — when its readiness blocks one
+   * (ADR-0052). The picker's list may be stale, so it is judged here, as the
+   * send gate judges a planner: a recorded sign-out is asked again first, so a
+   * sign-in done since lets the pick through. A choice already made is never
+   * the caller's to pass here, and an unusable runner is refused at its start,
+   * as before.
+   */
+  async refuseBlockedRunner(runner: string, workspace: string | undefined): Promise<void> {
+    const manifest = this.registry.getManifest(runner);
+    if (!manifest) return;
+    const resolver = this.resolverFor(workspace);
+    await refuseBlockedPick(runner, manifest.displayName, {
+      ...this.signInCheck(workspace),
+      ...(workspace !== undefined ? { workspace } : {}),
+      unlisted: () => resolver.getRunnerUnlisted(),
+    });
+  }
+
+  /** {@link refuseBlockedRunner} for a task edit: only a move onto another runner is a new pick. */
+  async refuseBlockedTaskRunner(sessionId: string, workspace: string | undefined, taskId: string, runner: string): Promise<void> {
+    const session = this.session(sessionId, workspace);
+    const task = flattenTasks(session.planTasks).find((t) => t.id === taskId);
+    if (!task || task.assignedRunner === runner) return;
+    await this.refuseBlockedRunner(runner, session.workspaceRoot);
+  }
+
+  /**
+   * Switch `id` on or off for planning. Switching on is a new pick, judged by
+   * {@link refuseBlockedRunner}; one already on stays on, and off is never refused.
+   */
+  async enableRunner(id: string, enabled: boolean, workspace: string | undefined): Promise<void> {
+    const on = new WebConfig({ enabledRunners: this.enabledRunnerOverride() }).enabledRunners.includes(id);
+    if (enabled && !on) await this.refuseBlockedRunner(id, workspace);
+    this.setRunnerEnabled(id, enabled);
+  }
+
+  /**
    * Judge the planner as the workspace's account is now, not as it was when the
    * list was last read: the signed-out refusal itself offers the runner's own
    * `auth login` as a way back, and that happens in another process. Only a
@@ -1115,9 +1175,23 @@ export class OrchestratorPool {
   private recheckSignedOutPlanner(workspace: string, provider: PlannerBackendId): Promise<void> | null {
     const runner = runnerForProvider(provider);
     if (!runner || recordedRunnerAuth(runner, workspace)?.state !== 'signed-out') return null;
+    // A status-less agent is asked by its own ACP handshake (ADR-0052): a
+    // refresh alone cannot replace its refusal, and it should not.
+    return verifyRunnerSignIn(runner, this.signInCheck(workspace)).then(() => undefined);
+  }
+
+  /** The probe and the catalog that judge `workspace`'s account, for {@link verifyRunnerSignIn} and {@link recheckRunnerSignIn}. */
+  private signInCheck(workspace: string | undefined): RunnerRecheck {
     const installation = this.installationFor(workspace);
-    installation.refresh?.();
-    return installation.plannerUsability(runner).then(() => undefined);
+    return {
+      installation: {
+        refresh: () => installation.refresh?.(),
+        recheck: (runner) => (installation.recheck ? installation.recheck(runner) : installation.runnerUsability(runner)),
+        runnerUsability: (runner) => installation.runnerUsability(runner),
+      },
+      resolver: this.resolverFor(workspace),
+      manifests: this.registry,
+    };
   }
 
   /**

@@ -299,6 +299,8 @@ export function plansRoute(pool: OrchestratorPool) {
       const changes = await jsonObject<Partial<Task>>(c);
       // JSON cannot carry undefined, so a null is a client clearing the model.
       if (changes.assignedModel === null) changes.assignedModel = undefined;
+      // Moving the task onto another runner is a new pick (ADR-0052).
+      if (typeof changes.assignedRunner === 'string') await pool.refuseBlockedTaskRunner(c.req.param('sessionId'), callerWorkspace(c), c.req.param('taskId'), changes.assignedRunner);
       // One edit, whatever it holds: the session takes the fields a direct
       // edit may set, moves the runner with what it scopes, checks the
       // dependency list against the whole plan, and lands it as one save. An
@@ -317,6 +319,7 @@ export function plansRoute(pool: OrchestratorPool) {
     try {
       const edit = await jsonObject(c);
       if (!isCardEdit(edit)) return refuse(c, 400, 'Unknown card edit');
+      if (edit.kind === 'runner') await pool.refuseBlockedTaskRunner(c.req.param('sessionId'), callerWorkspace(c), c.req.param('taskId'), edit.runner);
       const result = await pool.session(c.req.param('sessionId'), callerWorkspace(c)).cardEdit(c.req.param('taskId'), edit);
       if (!result) return refuse(c, 404, 'Task not found', 'task_not_found');
       return c.json({ ok: true } satisfies OkResponse);

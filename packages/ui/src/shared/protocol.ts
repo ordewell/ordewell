@@ -1,5 +1,5 @@
 import type { AccountLimitSnapshot, GlobalRunSettings, IsolationPreview,
-  AiProvider, RunnerAuth, RunnerCommand, DisplayBlock, DiscoveredModel, PromptHold, RunnerId, RunActivity, RunView, SurfacePlan,
+  AiProvider, RunnerAuth, RunnerCommand, RunnerReadiness, RunnerSignIn, DisplayBlock, DiscoveredModel, PromptHold, RunnerId, RunActivity, RunView, SurfacePlan,
   TaskModelAssignment, ChildPlanEntry, ChildPlanView, CardEdit,
 } from '@ordewell/core';
 
@@ -18,14 +18,22 @@ export interface PlannerBackend {
   runner?: string;
   usable: boolean;
   reason?: string;
-  /** The runner's own login verdict: a signed-out agent stays usable and is flagged, never blocked. */
+  /** The runner's own login verdict: a signed-out agent stays usable and is flagged. */
   auth?: RunnerAuth;
+  /**
+   * Harness planners only: the runner's readiness as its host judges it
+   * (ADR-0052), which the picker words with core's `runnerEntryChoice`. A
+   * host that sends none is read from `auth` alone.
+   */
+  readiness?: RunnerReadiness;
 }
 
 export interface RunnerMeta {
   id: string;
   displayName: string;
   enabled: boolean;
+  /** The runner's readiness as its host judges it (ADR-0052); absent from a host that predates it. */
+  readiness?: RunnerReadiness;
 }
 
 export interface RunnerModeMeta {
@@ -292,9 +300,11 @@ export type HostToWebview =
   /**
    * `code` names an error whose way out is detecting again: no planner was
    * ready for the goal. `resend` is the message whose planner turn failed, which
-   * Try Again sends again.
+   * Try Again sends again. `signIn` is the agent the failure itself names as
+   * signed out, with its ways in, so the error offers that agent's sign-in and
+   * never the planner picked since (ADR-0052).
    */
-  | { type: 'showError'; error: string; code?: 'planner_not_ready'; resend?: string }
+  | { type: 'showError'; error: string; code?: 'planner_not_ready'; resend?: string; signIn?: RunnerSignIn }
   | { type: 'setModels'; models: DiscoveredModel[] }
   | { type: 'setRunners'; runners: RunnerMeta[] }
   /**

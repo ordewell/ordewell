@@ -27,6 +27,18 @@ describe('refusalOf', () => {
     expect(refusal.payload).toEqual(body.payload);
   });
 
+  it('names the agent a refused new pick is blocked on, with its way in (a stale picker, ADR-0052)', () => {
+    const signIn = { runner: 'cursor-agent', label: 'Cursor', login: ['cursor-agent', 'login'] };
+    const refusal = refusalOf(409, {
+      error: 'Cursor is not signed in. Then pick it again.',
+      code: 'runner_not_ready',
+      runnerNotReady: { runner: 'cursor-agent', readiness: { kind: 'blocked', why: 'signed-out', signIn } },
+    }, 'fallback');
+    expect(refusal.signIn).toEqual(signIn);
+    // A refusal for no sign-in has none to offer.
+    expect(refusalOf(409, { error: 'no', code: 'runner_not_ready', runnerNotReady: { runner: 'x', readiness: { kind: 'no-usable-model' } } }, 'f').signIn).toBeUndefined();
+  });
+
   it('falls back to the given sentence when the body has none', () => {
     expect(refusalOf(500, { code: 'refused' }, 'HTTP 500').message).toBe('HTTP 500');
     expect(refusalOf(500, { error: '' }, 'HTTP 500').message).toBe('HTTP 500');

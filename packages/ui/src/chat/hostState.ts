@@ -1,5 +1,5 @@
 import type { AccountLimitSnapshot, GlobalRunSettings, IsolationPreview } from '@ordewell/core';
-import type { SurfacePlan, DiscoveredModel, RunnerId, RunActivity, RunView, RunTask, AiProvider } from '@ordewell/core';
+import type { SurfacePlan, DiscoveredModel, RunnerId, RunnerSignIn, RunActivity, RunView, RunTask, AiProvider } from '@ordewell/core';
 import { DEFAULT_RUNNERS, EMPTY_HOLD, EMPTY_RUN, IDLE_ACTIVITY, type PromptHold } from '@ordewell/core/plan-utils';
 import type { HostToWebview, PlannerBackend, RunnerMeta } from '../shared/protocol';
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, type PatchedView } from '../shared/conversationPatch';
@@ -10,6 +10,8 @@ import type { RunnerMode } from './components/TaskCard';
 export interface RunnerInfo {
   id: string;
   displayName: string;
+  /** The host's readiness for it (ADR-0052), which its pill words. */
+  readiness?: RunnerMeta['readiness'];
 }
 
 export interface ModelOption {
@@ -41,6 +43,8 @@ export interface HostState {
   errorCode?: 'planner_not_ready';
   /** Set with an error that ended the planner turn for this message, whose Try Again sends it again. */
   errorResend?: string;
+  /** Set with an error whose cause is that agent being signed out: its sign-in is the error's way out. */
+  errorSignIn?: RunnerSignIn;
   models: DiscoveredModel[];
   modelsByRunner: Partial<Record<string, DiscoveredModel[]>>;
   modelAllowlist: Record<string, string[]>;
@@ -317,7 +321,7 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
       return { ...state, isResearchActive: false, turnLost: true };
 
     case 'patchError':
-      return { ...state, error: action.error, errorCode: undefined, errorResend: undefined };
+      return { ...state, error: action.error, errorCode: undefined, errorResend: undefined, errorSignIn: undefined };
 
     case 'patchReady':
       return { ...state, isReady: action.ready };
@@ -433,7 +437,7 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
 
     case 'showError':
       if (state.sessionCleared) return state;
-      return { ...state, error: action.error, errorCode: action.code, errorResend: action.resend, isResearchActive: false, turnLost: false, plannerTurnStartedAt: undefined, starting: false, startRequestId: null };
+      return { ...state, error: action.error, errorCode: action.code, errorResend: action.resend, errorSignIn: action.signIn, isResearchActive: false, turnLost: false, plannerTurnStartedAt: undefined, starting: false, startRequestId: null };
 
     case 'taskOutput':
       return { ...state, taskOutput: appendTaskOutput(state.taskOutput, action.taskId, action.text ?? '') };
@@ -530,7 +534,7 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
       const list = action.runners ?? [];
       return {
         ...state,
-        runnerList: list.map((r: RunnerMeta) => ({ id: r.id, displayName: r.displayName })),
+        runnerList: list.map((r: RunnerMeta) => ({ id: r.id, displayName: r.displayName, ...(r.readiness ? { readiness: r.readiness } : {}) })),
         enabledRunnerIds: list.filter((r: RunnerMeta) => r.enabled).map((r: RunnerMeta) => r.id),
         runnersKnown: true,
         detectionError: null,
@@ -542,7 +546,7 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
 
     // The held message's turn is a new one, as the user's own send is (turnRequested).
     case 'heldPromptsSent':
-      return { ...state, error: '', errorCode: undefined, errorResend: undefined };
+      return { ...state, error: '', errorCode: undefined, errorResend: undefined, errorSignIn: undefined };
 
     case 'promptUnsent':
       return { ...state, unsent: { text: action.text, seq: (state.unsent?.seq ?? 0) + 1 } };

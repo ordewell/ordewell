@@ -383,10 +383,11 @@ export class ApiClient {
     return this.planOf('plans.converseMessageNow', 'Send now failed', { params: { sessionId }, body: { message, surface: this.surface } });
   }
 
-  getRunners(workspace?: string): Promise<RunnersResponse> {
+  getRunners(workspace?: string, options?: { recheck?: string }): Promise<RunnersResponse> {
     // The login verdict is asked about the account the planner will use, so a
     // daemon started elsewhere judges this workspace's `.envrc`, not its cwd's.
-    return this.call('runners.list', 'Failed to fetch runners', { query: { workspace: workspace ?? this.workspace } });
+    // `recheck` is the user's recovery for one runner's sign-in (ADR-0052).
+    return this.call('runners.list', 'Failed to fetch runners', { query: { workspace: workspace ?? this.workspace, ...(options?.recheck ? { recheck: options.recheck } : {}) } });
   }
 
   /** The full provider catalog the daemon has discovered (used by the TUI model picker). */
@@ -398,7 +399,8 @@ export class ApiClient {
   }
 
   setRunnerEnabled(runner: string, enabled: boolean): Promise<OkResponse> {
-    return this.call('runners.setEnabled', `Failed to ${enabled ? 'enable' : 'disable'} ${runner}`, { params: { id: runner }, body: { enabled } });
+    // Switching one on is judged against this workspace's sign-ins (ADR-0052), as the list is.
+    return this.call('runners.setEnabled', `Failed to ${enabled ? 'enable' : 'disable'} ${runner}`, { params: { id: runner }, query: { workspace: this.workspace }, body: { enabled } });
   }
 
   executePlan(sessionId: string): Promise<ExecuteResponse> {

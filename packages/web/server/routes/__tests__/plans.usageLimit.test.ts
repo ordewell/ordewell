@@ -57,7 +57,7 @@ describe('task editing route with a task waiting on a usage-limit reset', () => 
     sessions[0].emitOutput(limit);
     sessions[0].emitTurnEnd('failed');
     await vi.waitFor(() => expect(session.planTasks[0].resumeAt).toBe(RESUME_AT));
-    const pool = { session: () => session } as unknown as OrchestratorPool;
+    const pool = { session: () => session, refuseBlockedTaskRunner: async () => {} } as unknown as OrchestratorPool;
     const app = new Hono().route('/api/plans', plansRoute(pool));
 
     const response = await app.request('/api/plans/s1/tasks/t1', {

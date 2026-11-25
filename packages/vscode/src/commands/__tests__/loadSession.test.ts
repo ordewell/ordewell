@@ -5,6 +5,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { createTask, loadState, saveSession, type LegacyPlanState } from '@ordewell/core';
 import { registerCommands, type CommandDeps } from '../CommandRegistry';
+import { __setWorkspaceFolders } from '../../test/vscode.mock';
 
 const registerCommand = vscode.commands.registerCommand as unknown as ReturnType<typeof vi.fn>;
 
@@ -94,5 +95,61 @@ describe('loading a session from history', () => {
     await loadById(meta.id);
 
     expect(sendRunSettings).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Task #47: with no folder, the root was the extension host's cwd, `/` for a
+// VS Code started from the Dock. A load or save is refused before it reads or
+// writes any project.
+describe('the session commands in a window with no folder', () => {
+  const showWarningMessage = vscode.window.showWarningMessage as unknown as ReturnType<typeof vi.fn>;
+  let workspace: string;
+  beforeEach(() => {
+    workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-load-nofolder-'));
+    showWarningMessage.mockReset();
+    vi.mocked(vscode.window.showQuickPick).mockClear();
+    vi.mocked(vscode.window.showInputBox).mockClear();
+    __setWorkspaceFolders(undefined);
+  });
+  afterEach(() => { fs.rmSync(workspace, { recursive: true, force: true }); });
+
+  function register() {
+    registerCommand.mockClear();
+    const session = { loadPlan: vi.fn(), runSnapshot: vi.fn() };
+    const saveCurrentSession = vi.fn(() => null);
+    registerCommands({ subscriptions: [] } as unknown as vscode.ExtensionContext, {
+      session,
+      chatProvider: { restoreChat: vi.fn(), showPlan: vi.fn(), adoptRun: vi.fn() },
+      fsAdapter: { getWorkspaceRoot: () => workspace },
+      getCurrentGoal: () => 'build me a parser',
+      setCurrentPlan: vi.fn(),
+      setCurrentGoal: vi.fn(),
+      persistState: vi.fn(),
+      saveCurrentSession,
+      sendRunSettings: vi.fn(),
+      log: vi.fn(),
+    } as unknown as CommandDeps);
+    const command = (id: string) => registerCommand.mock.calls.find(([name]) => name === id)![1] as (...args: unknown[]) => Promise<unknown>;
+    return { session, saveCurrentSession, command };
+  }
+  const noFolderWarnings = () => showWarningMessage.mock.calls.filter(([text]) => String(text).startsWith('Ordewell needs an open folder'));
+
+  it('opens no saved session, by id or from the list', async () => {
+    const meta = saveSession(plan(), 'build me a parser', workspace);
+    const h = register();
+    await expect(h.command('ordewell.loadSessionById')(meta.id)).resolves.toBe(false);
+    await h.command('ordewell.loadSession')();
+    expect(h.session.loadPlan).not.toHaveBeenCalled();
+    expect(vscode.window.showQuickPick).not.toHaveBeenCalled();
+    expect(loadState(workspace)).toBeNull();
+    expect(noFolderWarnings()).toHaveLength(2);
+  });
+
+  it('saves nothing', async () => {
+    const h = register();
+    await h.command('ordewell.saveSession')();
+    expect(vscode.window.showInputBox).not.toHaveBeenCalled();
+    expect(h.saveCurrentSession).not.toHaveBeenCalled();
+    expect(noFolderWarnings()).toHaveLength(1);
   });
 });

@@ -9,6 +9,7 @@ import {
   PlannerNotReadyError,
   PlannerTurnDiscardedError,
   PlannerTurnStoppedError,
+  RunnerSignedOutError,
   SessionNotFoundError,
   TaskControlError,
   UserGitError,
@@ -57,6 +58,19 @@ describe('failure', () => {
 
     expect(res.status).toBe(409);
     expect(res.body).toEqual({ error: err.message, code: 'planner_not_ready', plannerNotReady: reason });
+  });
+
+  it('carries the agent a refused start names as signed out, so a client offers its sign-in', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const signIn = { runner: 'cursor-agent', label: 'Cursor', login: ['cursor-agent', 'login'] };
+    const err = new RunnerSignedOutError(signIn, 'Cursor is not signed in. Sign in with /login cursor-agent, or run cursor-agent login.');
+
+    const res = await answer(err);
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: err.message, code: 'runner_signed_out', signIn });
+    // The agent's own answer, not a daemon fault.
+    expect(log).not.toHaveBeenCalled();
   });
 
   it('does not log a stack for a stopped or discarded planner turn', async () => {

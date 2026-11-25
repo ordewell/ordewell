@@ -130,13 +130,14 @@ export { Planner } from './services/Planner';
 export type { PlanRequest } from './services/Planner';
 export { ContextCollector } from './services/ContextCollector';
 export { discoverGeminiModels } from './services/ModelDiscovery';
-export type { ExecImpl } from './services/ModelDiscovery';
+export type { ExecImpl, UnlistedReason } from './services/ModelDiscovery';
 export { ModelResolver } from './services/ModelResolver';
 export type { ModelResolverDeps } from './services/ModelResolver';
 export { RunnerInstallation } from './services/RunnerInstallation';
 export type { RunnerInstallationOptions, RunnerUsability } from './services/RunnerInstallation';
-export { forgetSignedOutRunnerAuth, readRunnerAuth, recordRunnerAuth, recordedRunnerAuth, resetRunnerAuth, rewordSignIn, runnerSignIn, signedOutFromFailure } from './services/runnerAuth';
-export type { RunnerAuth, RunnerAuthExec, RunnerAuthExecOptions, RunnerAuthExecResult, ReadRunnerAuthOptions } from './services/runnerAuth';
+export { forgetRunnerAuth, forgetSignedOutRunnerAuth, readRunnerAuth, recordRunnerAuth, recordedRunnerAuth, recordedRunnerEvidence, resetRunnerAuth, rewordSignIn, runnerAuthClock, runnerSignIn, signedOutAuth, signedOutFromFailure } from './services/runnerAuth';
+export type { RecordRunnerAuthOptions, RunnerAuth, RunnerAuthEvidence, RunnerAuthExec, RunnerAuthExecOptions, RunnerAuthExecResult, RunnerAuthSource, ReadRunnerAuthOptions } from './services/runnerAuth';
+export { checksSignInByHandshake, orderByChoice, recheckRunnerSignIn, refuseBlockedPick, runnerChoice, runnerChoiceRefusal, runnerEntryChoice, runnerEntryReadiness, runnerReadiness, verifyRunnerSignIn, RunnerNotReadyError, type RunnerChoice, type RunnerReadiness, type RunnerReadinessFields, type RunnerPickCheck, type RunnerRecheck, type RunnerRecoveryKind, type RunnerSignInCheck } from './services/runnerReadiness';
 export { workspaceEnvOf } from './services/workspaceEnv';
 export { withoutParentSession } from './services/harness/runnerEnv';
 export { AccountLimitMonitor } from './services/AccountLimitMonitor';
@@ -156,7 +157,7 @@ export { resolveProvider, fetchAllProviderModels, collectProviderCredentials, to
 export type { ProviderModelLists, FetchAllProviderModelsOptions, AllProviderModels, OrchestratorOption, ProviderModelsResult, ProviderCredentialSource } from './services/ProviderRouting';
 export { ALL_PROVIDERS, getProviderMeta, isApiProvider, isPlannerBackend, prefixModelId, stripModelPrefix, resolveProviderFromPrefix, isOpenAiProvider, isCliProvider, runnerForProvider, providerForRunner, plannerBackendEntries, configuredProviders, PROVIDER_LABEL, PROVIDER_SHORT_LABEL, HARNESS_PLANNER_REASON, HARNESS_PLANNER_UNAVAILABLE_REASON, PROVIDER_PRIORITY, PROVIDER_DETECT_PRIORITY, CLI_PROVIDERS, type ByPlannerBackend } from './services/ProviderRegistry';
 export type { ProviderRegistration, PlannerUsability, PlannerBackendEntry } from './services/ProviderRegistry';
-export { endpointUrlProblem } from './services/apiProviders';
+export { endpointUrlProblem, vendorApiKeyIn, vendorBaseUrlIn } from './services/apiProviders';
 export {
   admitSettingsEnv,
   SETTINGS_ENV_ALLOWLIST,
@@ -210,7 +211,7 @@ export { DaemonStream, type ConnectedFrame, type DaemonFrame } from './utils/dae
 export { ReconnectBackoff } from './utils/reconnectBackoff';
 export { SessionNotFoundError, NoPlanError, AlreadyExecutingError } from './services/SessionErrors';
 export { LeaseHost, processLeaseHost, SessionHeldError, describeHeld, describeHolder, LEASE_HEARTBEAT_MS, LEASE_STALE_MS, type LeaseHostKind, type LeaseHostOptions, type SessionHeld, type SessionLease, type SessionLeaseRecord } from './services/sessionLease';
-export { describeRunnerSignIn, describeSignIn, describeSignInWays, signInAction, signInOf, signInOfVerdict, TERMINAL_UI_SIGN_IN, HEADLESS_CLI_SIGN_IN, type KeySignInRoute, type RunnerSignIn, type SignInSyntax } from './services/signInHint';
+export { describeRunnerSignIn, describeSignIn, describeSignInWays, RunnerCredentialRefusal, RunnerSignedOutError, signInAction, signInOf, signInOfVerdict, TERMINAL_UI_SIGN_IN, HEADLESS_CLI_SIGN_IN, type KeySignInRoute, type RunnerSignIn, type SignInSyntax } from './services/signInHint';
 export { daemonWaitLine, DETECTING_AGENTS, DETECTING_AGENTS_DETAIL } from './services/startupWait';
 export { AGENT_DEFAULT_MODEL, AGENT_SIGN_IN_NOTE, agentInstallRoutes, describeUnusedPlanningKey, type AgentInstallRoute } from './services/plannerNotices';
 export { plannerNotReady, plannerNotReadyFor, describePlannerNotReady, PlannerNotReadyError, TERMINAL_UI_COMMANDS, CHAT_COMMANDS, HEADLESS_CLI_COMMANDS, type PlannerNotReady, type PlannerCommandSyntax, type PlannerReadinessConfig } from './services/plannerReadiness';

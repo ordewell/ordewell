@@ -28,6 +28,7 @@ function runnerMeta(data: RunnersResponse): RunnerMeta[] {
     id: entry.id,
     displayName: entry.name || RUNNER_LABELS[entry.id] || entry.id,
     enabled: entry.enabled !== false,
+    ...(entry.readiness ? { readiness: entry.readiness } : {}),
   }));
 }
 
