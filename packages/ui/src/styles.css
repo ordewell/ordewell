@@ -572,6 +572,11 @@ body {
   padding: 4px 14px;
 }
 
+/* A signed-out turn's error carries its sign-in under its words (ADR-0052). */
+.chat-msg-error:has(.error-sign-in, .error-sign-in-outcome) {
+  gap: 6px;
+}
+
 .chat-msg-error .chat-msg-content {
   font-size: 11px;
   color: var(--ow-status-error, var(--red));
@@ -2754,7 +2759,8 @@ section.isolation-notice {
   line-height: 1.5;
 }
 
-.error-state button {
+.error-state button,
+.chat-msg-error .error-sign-in {
   background: var(--accent-emphasis);
   color: var(--on-accent-emphasis);
   border: none;
@@ -2767,7 +2773,8 @@ section.isolation-notice {
   transition: background var(--transition-fast);
 }
 
-.error-state button:hover {
+.error-state button:hover,
+.chat-msg-error .error-sign-in:hover:not(:disabled) {
   background: var(--accent);
 }
 

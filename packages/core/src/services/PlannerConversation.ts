@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
+import type { RunnerSignIn } from './signInHint';
 import type { ConversationRequest, ConversationTurn, IAiService, TurnRun } from './AiService';
 import { reEmitPlanPrompt, repairLoop, resubmitEditPrompt, resubmitPlanPrompt, taskOpsRejectedPrompt, type RepairVerdict } from './PlanRepair';
 import { renderTaskQueryAnswer, taskQuerySignature, TASK_QUERY_ANSWER_OR_OPS, TASK_QUERY_REMINDER, TASK_READ_TOOLS_REMINDER, type LiveOutputLookup, type TaskQuery, type TaskQueryCatalog } from './TaskQuery';
@@ -285,6 +286,7 @@ interface Landed {
   content: string;
   kind?: 'plan_generated';
   runs?: ReplyRun[];
+  signIn?: RunnerSignIn;
 }
 
 /** A read made through a planner tool: refused once the turn's budget is gone, else answered, told to land when the budget asks it to. */
@@ -960,10 +962,11 @@ export class PlannerConversation {
   }
 
   /** Call inside the host's mutation ritual. */
-  append(role: ConversationMessage['role'], content: string, opts: { timestamp?: string; kind?: ConversationMessage['kind']; runs?: ReplyRun[]; actor?: ConversationMessage['actor'] } = {}): void {
+  append(role: ConversationMessage['role'], content: string, opts: { timestamp?: string; kind?: ConversationMessage['kind']; runs?: ReplyRun[]; actor?: ConversationMessage['actor']; signIn?: RunnerSignIn } = {}): void {
     this.appendEntries([{
       role, content, timestamp: opts.timestamp ?? new Date().toISOString(),
       ...(opts.kind ? { kind: opts.kind } : {}), ...(opts.actor ? { actor: opts.actor } : {}), ...(opts.runs ? { runs: opts.runs } : {}),
+      ...(opts.signIn ? { signIn: opts.signIn } : {}),
     }]);
   }
 
@@ -1608,15 +1611,15 @@ export class PlannerConversation {
     const plan = this.host.mutate(() => {
       this.writeHeld(userTurn, researchLog, settles);
       said = outcome();
-      for (const { content, kind, runs } of said) this.append('assistant', content, { timestamp: now, kind: kind ?? (supervisor ? 'supervisor' : undefined), runs });
+      for (const { content, kind, runs, signIn } of said) this.append('assistant', content, { timestamp: now, kind: kind ?? (supervisor ? 'supervisor' : undefined), runs, signIn });
       this.recordSkillWarnings(skillWarnings, now);
       const taken = userTurn.onCommit;
       userTurn.onCommit = undefined;
       taken?.();
       return true;
     }, () => {
-      for (const { content, kind, runs } of said) {
-        if (kind !== 'plan_generated') this.host.broadcast({ type: 'planner_message', content, timestamp: now, turnId, ...(supervisor ? { supervisor: true } : {}), ...withRuns(runs) });
+      for (const { content, kind, runs, signIn } of said) {
+        if (kind !== 'plan_generated') this.host.broadcast({ type: 'planner_message', content, timestamp: now, turnId, ...(supervisor ? { supervisor: true } : {}), ...withRuns(runs), ...(signIn ? { signIn } : {}) });
       }
       announce?.();
     });
@@ -1945,9 +1948,11 @@ export class PlannerConversation {
         ? '(Stopped before replying.)'
         : '(The planner returned an empty response. Reply to continue, or rephrase your goal.)';
     const runs = this.shown(userTurn, replied ? turn.runs : writtenOver(turn.runs, text).runs, text);
+    // Only a failure the runner's manifest recognized carries one: a reply is never read for it (ADR-0052).
+    const signIn = turn.kind === 'message' && turn.failed ? turn.signIn : undefined;
     return this.land(userTurn, turn.researchLog, () => {
       this.host.capturePrd(text);
-      return [{ content: text, runs }];
+      return [{ content: text, runs, ...(signIn ? { signIn } : {}) }];
     }, { unheard: turn.failed === true || userTurn.signal.aborted });
   }
 
