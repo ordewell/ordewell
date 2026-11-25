@@ -3663,6 +3663,47 @@ describe('CliAgentAiService — a turn that says the agent is signed out', () =>
     });
   });
 
+  // The surfaces offer that agent's own sign-in from data, never from the words (ADR-0052).
+  it('carries the signed-out agent and its way in with the failed turn', async () => {
+    const turn = await failing('Not logged in · Please run /login').startConversation(request());
+
+    expect(turn).toMatchObject({ signIn: { runner: 'claude-code', label: 'Claude Code', login: ['claude', 'auth', 'login'] } });
+  });
+
+  it('carries the sign-in of a planner that started signed in and was refused mid-session', async () => {
+    const hint = 'Cursor is not signed in. Sign in with /login cursor-agent, or run cursor-agent login.';
+    const svc = new CliAgentAiService(fakeConfig({ aiProvider: 'cursor-agent' }), {
+      createAdapter: scriptedAdapter([
+        [{ type: 'assistant_text', runId: 'r1', text: 'Which file formats?' }, { type: 'turn_end' }],
+        // The agent's session/prompt answered -32000 (AcpAdapter): its words are the hint.
+        [{ type: 'error', message: hint }, { type: 'turn_end' }],
+      ]),
+      workspaceRoot: () => '/repo',
+      mcpServer: fakeMcpServer(),
+    });
+
+    const first = await svc.startConversation(request({ runners: ['cursor-agent'] }));
+    const second = await svc.continueConversation('JSON and YAML', () => {});
+
+    expect(first).not.toHaveProperty('signIn');
+    expect(second).toMatchObject({ kind: 'message', failed: true, text: hint, signIn: { runner: 'cursor-agent', label: 'Cursor', login: ['cursor-agent', 'login'] } });
+  });
+
+  it('carries no sign-in with an ordinary reply that talks about signing in', async () => {
+    const svc = new CliAgentAiService(fakeConfig({ aiProvider: 'claude-code' }), {
+      createAdapter: scriptedAdapter([[{ type: 'assistant_text', runId: 'r1', text: 'Not logged in · Please run /login is what Claude Code says when signed out.' }, { type: 'turn_end' }]]),
+      workspaceRoot: () => '/repo',
+      mcpServer: fakeMcpServer(),
+    });
+
+    const turn = await svc.startConversation(request());
+
+    expect(turn).toMatchObject({ kind: 'message', text: 'Not logged in · Please run /login is what Claude Code says when signed out.' });
+    expect(turn).not.toHaveProperty('failed');
+    expect(turn).not.toHaveProperty('signIn');
+    expect(recordedRunnerAuth('claude-code', '/repo')).toBeUndefined();
+  });
+
   // An ACP agent's refusal is already worded as the hint (AcpAdapter), so the
   // planner's turn says it once rather than twice over.
   it.each([
@@ -3672,7 +3713,7 @@ describe('CliAgentAiService — a turn that says the agent is signed out', () =>
   ])('names the way into a signed-out %s planner once', async (runner, hint) => {
     const turn = await failing(hint, runner).startConversation(request({ runners: [runner] }));
 
-    expect(turn).toMatchObject({ kind: 'message', failed: true, text: hint });
+    expect(turn).toMatchObject({ kind: 'message', failed: true, text: hint, signIn: { runner } });
     expect(recordedRunnerAuth(runner, '/repo')?.state).toBe('signed-out');
   });
 
@@ -3681,6 +3722,7 @@ describe('CliAgentAiService — a turn that says the agent is signed out', () =>
 
     expect(turn).toMatchObject({ kind: 'message', failed: true, text: 'The repository is not a git repository' });
     expect(recordedRunnerAuth('claude-code', '/repo')).toBeUndefined();
+    expect(turn).not.toHaveProperty('signIn');
   });
 
   it('leaves a runner that declares no login alone, even when its words say not logged in', async () => {

@@ -3,6 +3,7 @@ import type { ResearchLogEntry, ResearchProgress, ResearchStep, RunnerId } from 
 import type { ConversationTurn, TurnRun } from './AiService';
 import type { UsageLimitSignal } from './harness/AgentAdapter';
 import type { RunnerModeInfo } from './ModeResolver';
+import type { RunnerSignIn } from './signInHint';
 import { classifyRunnerStop, PROVIDER_RETRY_DELAYS_MS } from './runnerExit';
 import { redactAgentText } from '../utils/redactSecrets';
 import {
@@ -25,6 +26,8 @@ export interface ReplyAttempt {
   failure?: string;
   /** Whether the runner's own field called the failure its usage limit, where it has one. */
   usageLimit?: UsageLimitSignal | false;
+  /** With `failure`: the runner said its user is signed out, and these are its ways in (ADR-0052). */
+  signIn?: RunnerSignIn;
   /**
    * The whole reply the user reads, when it is more than `text`: text from
    * calls the backend continued past on the user's behalf, joined in front.
@@ -153,8 +156,8 @@ export async function settleReply(opts: SettleReplyOptions): Promise<Conversatio
         return { done: turn };
       }
       if (attempt.failure !== undefined) {
-        const { usageLimit } = attempt;
-        return { done: { ...note(attempt, attempt.failure), failed: true, ...(usageLimit !== undefined && { usageLimit }) } };
+        const { usageLimit, signIn } = attempt;
+        return { done: { ...note(attempt, attempt.failure), failed: true, ...(usageLimit !== undefined && { usageLimit }), ...(signIn && { signIn }) } };
       }
       if (!attempt.text.trim()) return { done: note(attempt, emptyReplyReport(deniedStep(attempt))) };
 

@@ -43,7 +43,7 @@ import type { PlannerToolHandler } from '../mcp';
 import { providerForRunner, runnerForProvider } from '../ProviderRegistry';
 import { recordRunnerAuth, signedOutAuth, signedOutFromFailure } from '../runnerAuth';
 import { describePlannerNotReady, TERMINAL_UI_COMMANDS, type PlannerNotReady } from '../plannerReadiness';
-import { describeSignIn, RunnerSignedOutError } from '../signInHint';
+import { describeSignIn, RunnerSignedOutError, type RunnerSignIn } from '../signInHint';
 import { workspaceEnvOf } from '../workspaceEnv';
 import { augmentedPath, withPath } from '../../utils/shellPath';
 import { BUILTIN_MANIFESTS } from '../../plugins/builtin';
@@ -143,6 +143,8 @@ interface HarnessTurn {
   /** The agent's own failure, verbatim. Present means the turn did not complete. */
   error?: string;
   usageLimit?: UsageLimitSignal | false;
+  /** Set with `error` when the runner's manifest says the failure is its user being signed out (ADR-0052). */
+  signIn?: RunnerSignIn;
   aborted?: boolean;
   /** Subagents the agent left running when it ended the turn. See {@link MAX_AGENT_WAITS}. */
   backgroundAgents: number;
@@ -637,6 +639,7 @@ export class CliAgentAiService implements IAiService {
         // than leave an empty planner bubble.
         failure: turn.error,
         usageLimit: turn.usageLimit,
+        ...(turn.signIn ? { signIn: turn.signIn } : {}),
         fullText: [...carried, turn.text].filter((part) => part.trim()).join('\n\n'),
       };
     };
@@ -985,8 +988,8 @@ export class CliAgentAiService implements IAiService {
     if (error || signal?.aborted) session.stop();
 
     if (error) {
-      const failure = await this.explainSignedOut(reply.fail(error));
-      return { text: reply.text, runs: reply.runs(), researchLog: settledLog(), error: failure, usageLimit, aborted: signal?.aborted, backgroundAgents, ordewellCalls };
+      const { failure, signIn } = await this.explainSignedOut(reply.fail(error));
+      return { text: reply.text, runs: reply.runs(), researchLog: settledLog(), error: failure, usageLimit, ...(signIn ? { signIn } : {}), aborted: signal?.aborted, backgroundAgents, ordewellCalls };
     }
     return { text: reply.text, runs: reply.runs(), researchLog: settledLog(), error, aborted: signal?.aborted, backgroundAgents, ordewellCalls };
   }
@@ -1056,19 +1059,19 @@ export class CliAgentAiService implements IAiService {
     return researchAgentSetting({ ...process.env, ...workspace });
   }
 
-  private async explainSignedOut(failure: string): Promise<string> {
+  private async explainSignedOut(failure: string): Promise<{ failure: string; signIn?: RunnerSignIn }> {
     const manifest = BUILTIN_MANIFESTS.find((candidate) => candidate.name === this.runner);
-    if (!manifest) return failure;
+    if (!manifest) return { failure };
     let env: NodeJS.ProcessEnv;
     try {
       const workspace = await (this.processDeps.workspaceEnv ?? workspaceEnvOf)(this.workspaceRoot());
       env = withPath(process.env, await augmentedPath(), workspace);
     } catch {
       // The runner's config could not be read; its words stand as they are.
-      return failure;
+      return { failure };
     }
     const auth = signedOutFromFailure(manifest, failure, env);
-    if (!auth) return failure;
+    if (!auth) return { failure };
     recordRunnerAuth(this.runner, auth, this.workspaceRoot());
     const reason: PlannerNotReady = {
       code: 'signed_out',
@@ -1079,8 +1082,8 @@ export class CliAgentAiService implements IAiService {
     };
     const guidance = describePlannerNotReady(reason, TERMINAL_UI_COMMANDS);
     // An ACP agent's refusal is already the hint (AcpAdapter); saying it twice reads as two problems.
-    if (failure.includes(describeSignIn(auth.signIn, TERMINAL_UI_COMMANDS))) return failure;
-    return `${guidance}\n\n${failure}`;
+    if (failure.includes(describeSignIn(auth.signIn, TERMINAL_UI_COMMANDS))) return { failure, signIn: auth.signIn };
+    return { failure: `${guidance}\n\n${failure}`, signIn: auth.signIn };
   }
 
   // --- Process lifecycle ---
