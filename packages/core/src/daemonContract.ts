@@ -15,6 +15,7 @@ import type { GlobalRunSettings, UserSettings } from './services/SettingsService
 import type { TaskLogEvent } from './models/TaskLog';
 import type { CommandPayload } from './services/ExecutionCommands';
 import type { RunnerAuth } from './services/runnerAuth';
+import type { RunnerReadiness } from './services/runnerReadiness';
 import type { RunnerSignIn } from './services/signInHint';
 import type { Escalation } from './services/escalations';
 import type { TaskRevertPreview } from './services/taskRevert';
@@ -56,6 +57,12 @@ export type DaemonErrorCode =
   | 'planner_turn_discarded'
   /** The selected planner cannot plan yet (no key, no base URL, no model); `plannerNotReady` says which. */
   | 'planner_not_ready'
+  /**
+   * A new planner pick, runner switched on or task assigned to it, refused:
+   * the runner is signed out, needs a key or lists no model it can run
+   * (ADR-0052); `runnerNotReady` says which, and the message names the way back.
+   */
+  | 'runner_not_ready'
   /** The planner's coding agent refused to start because its user is signed out; `signIn` names it and its ways in (ADR-0052). */
   | 'runner_signed_out'
   /** The request asked for something the plan, task or conversation does not allow. */
@@ -103,6 +110,8 @@ export interface ErrorBody {
   code?: DaemonErrorCode;
   /** Set with `planner_not_ready`: the reason as data, so a client can word it in its own commands. */
   plannerNotReady?: PlannerNotReady;
+  /** Set with `runner_not_ready`: the runner and its readiness, for a client to word and offer its recovery (`runnerChoice`). */
+  runnerNotReady?: { runner: string; readiness: RunnerReadiness };
   /** Set with `runner_signed_out`: the agent that refused, with its ways in, so a client offers that agent's sign-in. */
   signIn?: RunnerSignIn;
   /** Set with `session_held`: the host that holds the session, and the runners a gone one left. */
@@ -312,6 +321,13 @@ export interface RunnerEntry {
   auth?: RunnerAuth;
   /** What the CLI's `--version` printed, as a number; absent when it printed none. */
   version?: string;
+  /**
+   * The runner's readiness in the requested workspace (ADR-0052): `auth` and
+   * why its discovery lists nothing, read as one. A picker words a row and
+   * decides whether a new pick is allowed with `runnerEntryChoice(row)`.
+   * Absent on a row from a daemon that predates the field.
+   */
+  readiness?: RunnerReadiness;
   /**
    * Whether the runner can also be the planner (its connector's `plans`). A
    * surface building a planner list from runners offers only these: a runner

@@ -69,6 +69,10 @@ import {
   forgetSignedOutRunnerAuth,
   recheckRunnerSignIn,
   verifyRunnerSignIn,
+  runnerChoice,
+  runnerChoiceRefusal,
+  runnerReadiness,
+  RunnerNotReadyError,
   type RunnerRecheck,
   type PlannerBackendId,
   type PlannerModelCandidate,
@@ -763,6 +767,10 @@ export class OrchestratorPool {
       const workspace = this.settingsWorkspace(sessionId, requestWorkspace);
       const judging = this.catalogJudging(change, workspace);
       await this.discoverUnheld(workspace, judging ? [judging] : []);
+      // A switch to a coding agent is a new pick (ADR-0052); staying on the
+      // planner in effect, whatever has become of it since, is not.
+      const incoming = change.provider !== undefined && change.provider !== this.plannerProviderInEffect(workspace) ? runnerForProvider(change.provider) : undefined;
+      if (incoming) await this.refuseBlockedRunner(incoming, workspace);
       return this.updateSettings(changes, sessionId, requestWorkspace);
     });
     this.plannerWrites = turn.catch(() => undefined);
@@ -1076,6 +1084,7 @@ export class OrchestratorPool {
 
     const config = new WebConfig({ enabledRunners: this.enabledRunnerOverride() });
     const enabled = new Set(config.enabledRunners);
+    const unlisted = this.resolverFor(workspace).getRunnerUnlisted();
     const runners = this.registry.list();
     const installedIds = new Set(
       await installation.filterInstalled(runners.map((p) => p.manifest.name)),
@@ -1092,7 +1101,8 @@ export class OrchestratorPool {
       runners
         .filter((p) => installedIds.has(p.manifest.name))
         .map(async (p): Promise<RunnersResponse['runners'][number]> => {
-          const { usable, reason, auth, version } = await installation.runnerUsability(p.manifest.name);
+          const usability = await installation.runnerUsability(p.manifest.name);
+          const { usable, reason, auth, version } = usability;
           const provider = inProcessProvider(p.manifest);
           return {
             id: p.manifest.name,
@@ -1101,6 +1111,9 @@ export class OrchestratorPool {
             ...(usable ? {} : { usable: false, ...(reason ? { reason } : {}) }),
             ...(auth ? { auth } : {}),
             ...(version ? { version } : {}),
+            // Read from the same record and discovery answer the write checks
+            // read (`refuseBlockedRunner`), so the list and the refusal agree.
+            readiness: runnerReadiness(usability, unlisted[p.manifest.name]),
             plans: runnerPlans(p.manifest.name),
             ...(provider ? { provider } : {}),
           };
@@ -1113,6 +1126,44 @@ export class OrchestratorPool {
     if (recheck) await recheck;
     const session = this.openPlanningSession(sessionId, runners, workspace, modelOverride);
     return migratePlanState(await this.firstTurn(sessionId, session, () => session.generatePlan(goal, runners)));
+  }
+
+  /**
+   * Refuse a new pick of `runner` in `workspace` — a planner switched to it, it
+   * switched on, a task moved onto it — when its readiness blocks one
+   * (ADR-0052). The picker's list may be stale, so it is judged here, as the
+   * send gate judges a planner: a recorded sign-out is asked again first, so a
+   * sign-in done since lets the pick through. A choice already made is never
+   * the caller's to pass here, and an unusable runner is refused at its start,
+   * as before.
+   */
+  async refuseBlockedRunner(runner: string, workspace: string | undefined): Promise<void> {
+    const manifest = this.registry.getManifest(runner);
+    if (!manifest) return;
+    const usability = recordedRunnerAuth(runner, workspace)?.state === 'signed-out'
+      ? await verifyRunnerSignIn(runner, this.signInCheck(workspace))
+      : await this.installationFor(workspace).runnerUsability(runner);
+    const readiness = runnerReadiness(usability, this.resolverFor(workspace).getRunnerUnlisted()[runner]);
+    if (runnerChoice(readiness).group !== 'blocked') return;
+    throw new RunnerNotReadyError(runner, readiness, runnerChoiceRefusal(manifest.displayName, readiness) ?? `${manifest.displayName} cannot be picked now.`);
+  }
+
+  /** {@link refuseBlockedRunner} for a task edit: only a move onto another runner is a new pick. */
+  async refuseBlockedTaskRunner(sessionId: string, workspace: string | undefined, taskId: string, runner: string): Promise<void> {
+    const session = this.session(sessionId, workspace);
+    const task = flattenTasks(session.planTasks).find((t) => t.id === taskId);
+    if (!task || task.assignedRunner === runner) return;
+    await this.refuseBlockedRunner(runner, session.workspaceRoot);
+  }
+
+  /**
+   * Switch `id` on or off for planning. Switching on is a new pick, judged by
+   * {@link refuseBlockedRunner}; one already on stays on, and off is never refused.
+   */
+  async enableRunner(id: string, enabled: boolean, workspace: string | undefined): Promise<void> {
+    const on = new WebConfig({ enabledRunners: this.enabledRunnerOverride() }).enabledRunners.includes(id);
+    if (enabled && !on) await this.refuseBlockedRunner(id, workspace);
+    this.setRunnerEnabled(id, enabled);
   }
 
   /**

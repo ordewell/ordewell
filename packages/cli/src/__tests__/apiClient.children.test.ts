@@ -78,7 +78,7 @@ describe('ApiClient: the plans below a root', () => {
       `POST /api/sessions/${enc}/children/${enc}/message?workspace=%2Fw`,
       `GET /api/sessions/${enc}?workspace=%2Fws`,
       `POST /api/plans/${enc}/execute?workspace=%2Fw`,
-      `PUT /api/runners/${enc}`,
+      `PUT /api/runners/${enc}?workspace=%2Fw`,
       `POST /api/approvals/${enc}/${enc}?workspace=%2Fw`,
     ]);
   });
