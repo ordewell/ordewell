@@ -463,6 +463,8 @@ describe('a path outside the workspaces that only some checks read', () => {
     ['scripts/desktop-release-assets.mjs', {}, {}, ['bench', 'harness']],
     ['scripts/release-latest.mjs', {}, {}, ['bench', 'harness']],
     ['scripts/release-latest.test.mjs', {}, {}, ['bench', 'harness']],
+    ['scripts/winget-submit.mjs', {}, {}, ['bench', 'harness']],
+    ['scripts/winget-submit.test.mjs', {}, {}, ['bench', 'harness']],
     ['scripts/cli-release.test.mjs', {}, {}, ['bench', 'harness']],
     ['scripts/desktop-release.test.mjs', {}, {}, ['bench', 'harness']],
     ['scripts/sea/build.mjs', {}, {}, ['bench', 'binary', 'harness']],

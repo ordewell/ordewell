@@ -313,7 +313,7 @@ const ROOT_OWNERS = [
   // read by its tests and by no workspace, job step or build.
   [/^packaging\/homebrew\/[^/]+\.rb\.tmpl$|^packaging\/winget\/[^/]+\.yaml\.tmpl$/, owes('bench')],
   [/^scripts\/(render-package-manifests(\.test)?\.mjs|publish-tap\.(sh|test\.mjs)|homebrew-publish\.test\.mjs|verify-brew-install\.sh)$/, owes('bench')],
-  [/^scripts\/(desktop-release-assets\.mjs|release-latest(\.test)?\.mjs|(cli|desktop)-release\.test\.mjs)$/, owes('bench')],
+  [/^scripts\/(desktop-release-assets\.mjs|release-latest(\.test)?\.mjs|winget-submit(\.test)?\.mjs|(cli|desktop)-release\.test\.mjs)$/, owes('bench')],
   // The standalone binary's build (ADR-0065): build-and-test builds and drives
   // it, and its tests read it. Only a macOS signature reads the entitlements,
   // which cli-build.yml makes; it builds every target on its own for a pull

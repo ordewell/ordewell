@@ -257,7 +257,7 @@ describe('the package-manager jobs in release.yml (ADR-0063 H11)', () => {
     }
     assert.match(winget, /node scripts\/render-package-manifests\.mjs --version \$tag\.TrimStart\('v'\) --sums sums\/SHA256SUMS --only winget --out rendered/);
     assert.ok(homebrew.indexOf('render-package-manifests.mjs') < homebrew.indexOf('scripts/publish-tap.sh'));
-    assert.ok(winget.indexOf('render-package-manifests.mjs') < winget.indexOf('wingetcreate.exe submit'));
+    assert.ok(winget.indexOf('render-package-manifests.mjs') < winget.indexOf('node scripts/winget-submit.mjs'));
   });
 
   it('publish the formula whenever either tap credential exists, and the cask only for a notarized macOS build', () => {
@@ -330,9 +330,17 @@ describe('the package-manager jobs in release.yml (ADR-0063 H11)', () => {
     assert.match(download, /Get-FileHash -Algorithm SHA256/);
     assert.match(download, /if \(\$actual -ne \$expected\) \{ throw/);
     const submit = winget.slice(winget.indexOf('- name: Open the pull request'), winget.indexOf('- name: Say why no pull request'));
-    assert.match(submit, /wingetcreate\.exe submit --token \$env:WINGET_TOKEN --no-open/);
-    assert.match(submit, /"rendered\/winget\/manifests\/o\/Ordewell\/Ordewell\/\$version"/);
+    assert.match(submit, /node scripts\/winget-submit\.mjs --version \$version --wingetcreate \.\/wingetcreate\.exe `\n\s+--manifests "rendered\/winget\/manifests\/o\/Ordewell\/Ordewell\/\$version"/);
     assert.match(winget, /::notice::WINGET_TOKEN is not set/);
+  });
+
+  it('sync the fork, title, submit and close superseded submissions through scripts/winget-submit.mjs, the token in its environment alone', () => {
+    const submit = winget.slice(winget.indexOf('- name: Open the pull request'), winget.indexOf('- name: Say why no pull request'));
+    assert.match(submit, /^ {10}WINGET_TOKEN: \$\{\{ secrets\.WINGET_TOKEN \}\}$/m);
+    // The script reads the token from its environment (winget-submit.test.mjs);
+    // the step neither names it on a command line nor runs wingetcreate itself.
+    assert.doesNotMatch(submit.slice(submit.indexOf('run: |')), /WINGET_TOKEN|--token|wingetcreate\.exe submit|--prtitle/);
+    assert.doesNotMatch(winget, /New package: Ordewell/);
   });
 
   it('never put a publishing token in a job-level env, only in the step that uses it', () => {
