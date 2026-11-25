@@ -32,7 +32,7 @@ describe('routeRequest', () => {
   });
 
   it('refuses a query parameter the row does not list', () => {
-    expect(() => routePath('r', DAEMON_ROUTES['runners.setEnabled'], { id: 'claude-code' }, { workspace: '/ws' })).toThrow(/not a query parameter/);
+    expect(() => routePath('r', DAEMON_ROUTES['files.save'], {}, { workspace: '/ws' })).toThrow(/not a query parameter/);
   });
 
   it('sends a live row with the workspace it is asked from, so another project\'s copy of the id is refused', () => {

@@ -1127,6 +1127,19 @@ describe('planner choice', () => {
     expect(types(h.actions)).toContain('failed');
   });
 
+  // ADR-0052: the stepper shows a pick before the daemon answers, and a pick of
+  // a runner blocked since the list was read is refused at the write.
+  it('reads the planner and the runner rows again when the daemon refuses the pick, so neither shows it', async () => {
+    const refused = Object.assign(new Error('Claude Code is not signed in. Sign in with /login claude-code, or run claude auth login. Then pick it again.'), { status: 409, code: 'runner_not_ready' });
+    const h = harness({ updateSettings: vi.fn().mockRejectedValue(refused), getSettings: vi.fn().mockResolvedValue({ aiProvider: 'codex' }) });
+    await runEffect(choice, h.deps);
+
+    expect(h.api.getSettings).toHaveBeenCalled();
+    expect(h.api.getRunners).toHaveBeenCalled();
+    expect(types(h.actions)).toEqual(expect.arrayContaining(['runnersLoaded', 'failed']));
+    expect(h.actions.find((a) => a.type === 'failed')).toMatchObject({ message: refused.message });
+  });
+
   it("shows the choice in state with the daemon's updated per-backend memory", async () => {
     const plannerModels = { 'claude-code': { model: 'opus', effort: 'high' } };
     const h = harness({ updateSettings: vi.fn().mockResolvedValue({ plannerModels }) });
