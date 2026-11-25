@@ -1,9 +1,11 @@
 import * as vscode from 'vscode';
 import { spawn as nodeSpawn } from 'child_process';
+import * as os from 'os';
 import { createIsolationPreview, AccountLimitMonitor, claudeAccountLimitCollector, codexAccountLimitCollector, openCodeGoAccountLimitCollector, createSession, CodexSandboxAvailability, RunnerRegistry, removedPluginNotice, ModelResolver, RunnerInstallation, SettingsService, PlannerModelMemory, StructuredRunner, runnerForProvider, processLeaseHost, setHostCredentials, workspaceEnvOf } from '@ordewell/core';
 import { ChatViewProvider } from './providers/ChatViewProvider';
 import { VsCodeConfig, moveAutonomyFromVsCodeSetting, moveEnabledRunnersFromVsCodeSetting } from './adapters/VsCodeConfig';
 import { VsCodeFileSystem } from './adapters/VsCodeFileSystem';
+import { workspaceFolderRoot } from './adapters/workspaceFolder';
 import { SecretStore } from './adapters/SecretStore';
 import { VsCodeNotification } from './adapters/VsCodeNotification';
 import { startExtensionVersionCheck } from './versionCheck';
@@ -77,7 +79,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       codexSandbox: new CodexSandboxAvailability(
         runnerRegistry,
         { spawn: nodeSpawn, fetch: globalThis.fetch },
-        { cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd(), env: process.env },
+        // The probe spawns Codex, which needs a real directory: with no folder
+        // open, the temp one its account read uses too, never the host's cwd.
+        { cwd: workspaceFolderRoot() ?? os.tmpdir(), env: process.env },
       ),
       fsAdapter,
       notifications: new VsCodeNotification(),
