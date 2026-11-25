@@ -84,6 +84,43 @@ const AGENT_DEFAULT_LABEL = AGENT_DEFAULT_MODEL[0].toUpperCase() + AGENT_DEFAULT
  * it failed with a Retry, so the first screen never waits on an answer that
  * is not coming.
  */
+/**
+ * The way out of an error the failure itself says is that agent's sign-in
+ * (ADR-0052): keyed by the agent it names, never by the planner picked since.
+ * The login is the pills' own, so one in flight anywhere waits here too; it
+ * sends nothing when it ends, as the refused message waits for its sender.
+ */
+function ErrorSignIn({ signIn, pending, done, failure, onLogIn, onKey }: {
+  signIn: RunnerSignIn;
+  pending: boolean;
+  done: boolean;
+  failure?: string;
+  onLogIn: (runner: string) => void;
+  onKey: (provider: string) => void;
+}) {
+  const action = signInAction(signIn);
+  if (done) return <p className="error-sign-in-outcome" role="status">Signed in to {signIn.label}. Send your message again.</p>;
+  return (
+    <>
+      {failure !== undefined && <p className="error-sign-in-outcome" role="status">{failure}</p>}
+      {action === 'login' && (
+        <PlannerLoginAction
+          className="error-sign-in"
+          label="Sign in"
+          pending={pending}
+          onLogIn={() => onLogIn(signIn.runner)}
+          ariaLabel={pending ? `Signing in to ${signIn.label}` : `Sign in to ${signIn.label}`}
+        />
+      )}
+      {action === 'key' && signIn.key && (
+        <button type="button" className="error-sign-in" aria-label={`Add a key for ${signIn.label}`} onClick={() => onKey(signIn.key!.provider)}>
+          Add key
+        </button>
+      )}
+    </>
+  );
+}
+
 function Detecting({ error, onRetry }: { error: string | null; onRetry: () => void }) {
   if (error === null) return <>{DETECTING_AGENTS}</>;
   return (
@@ -214,6 +251,8 @@ export default function App({ layout = 'chat', selection, goal }: {
   const [pendingLogin, setPendingLogin] = useState<Record<string, true>>({});
   /** Each login that did not finish and why, by runner id: shown inline on the row or pill that asked. */
   const [loginFailure, setLoginFailure] = useState<Record<string, string>>({});
+  /** Each login that finished signed in, by runner id, until another starts: the error that asked for it says so. */
+  const [loginDone, setLoginDone] = useState<Record<string, true>>({});
 
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
@@ -276,6 +315,13 @@ export default function App({ layout = 'chat', selection, goal }: {
           if (msg.runner === undefined) return {};
           const next = { ...current };
           delete next[msg.runner];
+          return next;
+        });
+        setLoginDone((current) => {
+          if (msg.runner === undefined) return current;
+          const next = { ...current };
+          if (msg.ok) next[msg.runner] = true;
+          else delete next[msg.runner];
           return next;
         });
         setLoginFailure((current) => {
@@ -497,6 +543,9 @@ export default function App({ layout = 'chat', selection, goal }: {
     dispatch({ type: 'turnRequested' });
     bridge.post({ type: 'sendMessage', text: host.errorResend, runners, typed: true, again: true });
   }, [host.errorCode, host.errorResend, setError, runners]);
+
+  // A sign-in that finished answered the error it was asked from; the next one asks again.
+  useEffect(() => setLoginDone({}), [error]);
 
   const handleOpenLink = useCallback((url: string) => {
     bridge.post({ type: 'openLink', url });
@@ -902,6 +951,11 @@ export default function App({ layout = 'chat', selection, goal }: {
   /** A pill's own action: that agent's login, without switching the planner to it. */
   const handleRunnerLogin = useCallback((runner: string) => {
     setLoginFailure((current) => {
+      const next = { ...current };
+      delete next[runner];
+      return next;
+    });
+    setLoginDone((current) => {
       const next = { ...current };
       delete next[runner];
       return next;
@@ -1493,6 +1547,16 @@ export default function App({ layout = 'chat', selection, goal }: {
           <div className="error-state">
             <div className="error-icon">!</div>
             <p className="error-message">{error}</p>
+            {host.errorSignIn && (
+              <ErrorSignIn
+                signIn={host.errorSignIn}
+                pending={pendingLogin[host.errorSignIn.runner] === true}
+                done={loginDone[host.errorSignIn.runner] === true}
+                failure={loginFailure[host.errorSignIn.runner]}
+                onLogIn={handleRunnerLogin}
+                onKey={(provider) => bridge.post({ type: 'sendMessage', text: `/key-set ${provider}`, runners })}
+              />
+            )}
             <button onClick={handleTryAgain}>Try Again</button>
           </div>
         )}

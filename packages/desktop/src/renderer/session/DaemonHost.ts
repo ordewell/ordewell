@@ -1739,9 +1739,12 @@ export class DaemonHost {
     // No planner ready is the one refusal whose Try Again means detecting again:
     // its message is back in the composer already.
     const noPlanner = error instanceof DaemonRefusal && error.code === 'planner_not_ready';
+    // The agent the refusal names as signed out, whatever planner is picked since (ADR-0052).
+    const signIn = error instanceof DaemonRefusal ? error.signIn : undefined;
     this.emit({
       type: 'showError', error: messageOf(error),
       ...(noPlanner ? { code: 'planner_not_ready' as const } : resend !== undefined ? { resend } : {}),
+      ...(signIn ? { signIn } : {}),
     });
   }
 
