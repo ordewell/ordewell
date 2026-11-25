@@ -17,6 +17,7 @@ import { adoptCompaction, followCompaction } from './reducers/compaction';
 import { disarmStop, drainQueue, forceSendPlanner, giveBackUnsent, plannerEscape, queueToEditor, restoreForced } from './reducers/turnQueue';
 import { applySettings, foldRun, followSession, leaveSession, planSnapshot, withRun } from './reducers/incoming';
 import { pulseAfter } from './plannerPulse';
+import { foldSavedFailure, reportTurnFailure } from './reducers/turnFailure';
 import { refillPicker, reseedRunnerChoice } from './reducers/pickers';
 import { openStepperAt, refreshStepper } from './reducers/stepper';
 import { plannerStepper } from './reducers/plannerStepper';
@@ -252,7 +253,8 @@ function reduceAction(state: TuiState, action: Action): Step {
       // line a user's Merge all earns here; the timeline's "You merged …" would
       // announce the same merge a second time.
       if (action.message.type === 'execution_action' && isOwnMerge(action.message.record)) return step(state);
-      const followed = followSession(state, action.message);
+      const heard = followSession(state, action.message);
+      const followed = action.message.type === 'plan_generated' ? foldSavedFailure(state, heard) : heard;
       const plannerPulse = pulseAfter(state.plannerPulse, followed.conversation, action.message, action.at);
       const next = plannerPulse === followed.plannerPulse ? followed : { ...followed, plannerPulse };
       // A child's turns start on the daemon, so no call here has told the status.
@@ -521,7 +523,8 @@ function reduceAction(state: TuiState, action: Action): Step {
       // The daemon's own end for a compaction may have been lost with the call.
       const settled = state.planner === 'condensing' ? endRunningCompactions(state, quiet || action.code === 'planner_turn_stopped' ? 'stopped' : 'failed') : state;
       const reported = {
-        ...(quiet ? settled : reportError(settled, action.message)),
+        // A turn the daemon kept may have drawn its saved failure already, or will.
+        ...(quiet ? settled : action.unsent === undefined ? reportTurnFailure(settled, action.message) : reportError(settled, action.message)),
         planner: 'idle' as const,
         // A start that never reached the daemon has no run to wait for: the
         // spinner must not outlive the failure that answered it.
