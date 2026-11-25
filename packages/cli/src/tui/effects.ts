@@ -663,7 +663,10 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       // leave the revival to a later /refresh.
       let refreshed: RunnersResponse | undefined;
       try {
-        refreshed = await loadRunners(deps);
+        // A login that finished is the user's recovery: the daemon forgets the
+        // refusal it recorded and asks the agent again (ADR-0052). One that
+        // failed or was cancelled is not, so its blocker stays.
+        refreshed = await loadRunners(deps, result.ok ? { recheck: effect.runner } : undefined);
       } catch (err) {
         if (!isConnectionRefused(err)) throw err;
       }
@@ -967,7 +970,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       return;
 
     case 'refresh':
-      await Promise.all([loadRunnersThenSettings(deps, effect.sessionId), loadModels(deps), loadIsolationPreview(deps)]);
+      await Promise.all([loadRunnersThenSettings(deps, effect.sessionId, effect.recheck?.length ? { recheck: effect.recheck.join(',') } : undefined), loadModels(deps), loadIsolationPreview(deps)]);
       if (effect.announce) dispatch({ type: 'notice', message: 'Refreshed runners, settings, models and repositories.' });
       return;
 
@@ -1293,8 +1296,8 @@ async function loadSessions(deps: EffectDeps): Promise<void> {
   deps.dispatch({ type: 'sessionsLoaded', sessions: list });
 }
 
-async function loadRunners(deps: EffectDeps): Promise<RunnersResponse> {
-  const state = await deps.api.getRunners();
+async function loadRunners(deps: EffectDeps, options?: { recheck?: string }): Promise<RunnersResponse> {
+  const state = await deps.api.getRunners(undefined, options);
   deps.dispatch({
     type: 'runnersLoaded',
     // The daemon's own rows, auth included: re-typing the bag here is how the
@@ -1310,8 +1313,8 @@ async function loadRunners(deps: EffectDeps): Promise<RunnersResponse> {
  * change who plans, so the settings are read once it has answered: read beside
  * it, they would still name the planner from before an agent was installed.
  */
-async function loadRunnersThenSettings(deps: EffectDeps, sessionId?: string): Promise<void> {
-  await loadRunners(deps);
+async function loadRunnersThenSettings(deps: EffectDeps, sessionId?: string, options?: { recheck?: string }): Promise<void> {
+  await loadRunners(deps, options);
   await loadSettings(deps, sessionId);
 }
 

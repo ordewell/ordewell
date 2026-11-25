@@ -5,7 +5,7 @@ import {
   saveState, clearState, ModelResolver, RunnerRegistry, plannerNotReadyFor, describePlannerNotReady, CHAT_COMMANDS,
   createEmptyPlan, installedPlannerAnswered, isRunnerApproval, loopRemovalRefusal, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner,
   type ExecutionCommand, type ExecutionSummary, type OverrideDirection,
-  recordedRunnerAuth, runnerForProvider, type RunnerInstallation,
+  recordedRunnerAuth, runnerForProvider, verifyRunnerSignIn, type RunnerInstallation,
 } from '@ordewell/core';
 import type { TaskDraft, TaskEdit, WebviewToHost } from '@ordewell/ui/protocol';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
@@ -150,15 +150,19 @@ export function plannerPreflightError(config: PlanManagerDeps['config'], workspa
  * that route stays refused until a runner-list refresh.
  */
 export function recheckSignedOutPlanner(
-  deps: Pick<PlanManagerDeps, 'config' | 'fsAdapter' | 'runnerInstallation' | 'refreshPlannerState'>,
+  deps: Pick<PlanManagerDeps, 'config' | 'fsAdapter' | 'runnerInstallation' | 'refreshPlannerState'> & Partial<Pick<PlanManagerDeps, 'modelResolver'>>,
 ): Promise<void> | null {
   const installation = deps.runnerInstallation;
   if (!installation) return null;
   const runner = runnerForProvider(deps.config.aiProvider);
   const root = deps.fsAdapter.getWorkspaceRoot();
   if (!runner || recordedRunnerAuth(runner, root)?.state !== 'signed-out') return null;
-  installation.refresh();
-  return installation.plannerUsability(runner).then(async () => {
+  // A status-less agent is asked by its own ACP handshake (ADR-0052): a
+  // refresh alone keeps its refusal, as it should.
+  return verifyRunnerSignIn(runner, {
+    installation: { refresh: () => installation.refresh(), runnerUsability: (r) => installation.plannerUsability(r) },
+    ...(deps.modelResolver ? { resolver: deps.modelResolver } : {}),
+  }).then(async () => {
     // The gate re-probed so the turn can go ahead; the pill and empty state
     // must stop saying signed out too, or they offer a login already done.
     if (recordedRunnerAuth(runner, root)?.state !== 'signed-out') await deps.refreshPlannerState?.();

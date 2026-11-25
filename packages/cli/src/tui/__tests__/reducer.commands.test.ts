@@ -177,6 +177,14 @@ describe('models and providers', () => {
   it('/refresh re-discovers runners and catalogs', () => {
     expect(run('/refresh').effects).toEqual([{ type: 'refresh', announce: true }]);
   });
+
+  it('/refresh rechecks each signed-out agent\'s sign-in, and only those (ADR-0052)', () => {
+    const cursor: RunnerView = { id: 'cursor-agent', name: 'Cursor', enabled: true, auth: { state: 'signed-out', loginCommand: ['cursor-agent', 'login'] } };
+    const qwen: RunnerView = { id: 'qwen-code', name: 'Qwen Code', enabled: true, auth: { state: 'signed-out' } };
+    const claude: RunnerView = { id: 'claude-code', name: 'Claude Code', enabled: true, auth: { state: 'unknown' } };
+    const { effects } = run('/refresh', { runners: [cursor, claude, qwen] });
+    expect(effects).toEqual([{ type: 'refresh', announce: true, recheck: ['cursor-agent', 'qwen-code'] }]);
+  });
 });
 
 describe('login', () => {
@@ -193,14 +201,14 @@ describe('login', () => {
   it("signs the active planner in through the command its manifest declares", () => {
     const { state, effects } = run('/login', { plannerProvider: 'claude-code', runners: [claude], runnersKnown: true });
 
-    expect(effects).toEqual([{ type: 'plannerLogin', command: ['claude', 'login'], label: 'Claude Code' }]);
+    expect(effects).toEqual([{ type: 'plannerLogin', command: ['claude', 'login'], label: 'Claude Code', runner: 'claude-code' }]);
     expect(state.plannerProvider).toBe('claude-code');
   });
 
   it('signs in a named runner without making it the planner', () => {
     const { state, effects } = run('/login codex', { plannerProvider: 'claude-code', runners: [claude, codex], runnersKnown: true });
 
-    expect(effects).toEqual([{ type: 'plannerLogin', command: ['codex', 'login'], label: 'Codex' }]);
+    expect(effects).toEqual([{ type: 'plannerLogin', command: ['codex', 'login'], label: 'Codex', runner: 'codex' }]);
     expect(state.plannerProvider).toBe('claude-code');
   });
 
@@ -211,21 +219,21 @@ describe('login', () => {
     };
     const { state, effects } = run('/login copilot-cli', { plannerProvider: 'claude-code', runners: [claude, copilot], runnersKnown: true });
 
-    expect(effects).toEqual([{ type: 'plannerLogin', command: ['copilot', 'login'], label: 'GitHub Copilot CLI' }]);
+    expect(effects).toEqual([{ type: 'plannerLogin', command: ['copilot', 'login'], label: 'GitHub Copilot CLI', runner: 'copilot-cli' }]);
     expect(state.plannerProvider).toBe('claude-code');
   });
 
   it('matches a named runner by its display label too', () => {
     const { effects } = run('/login Claude Code', { plannerProvider: 'codex', runners: [claude, codex], runnersKnown: true });
 
-    expect(effects).toEqual([{ type: 'plannerLogin', command: ['claude', 'login'], label: 'Claude Code' }]);
+    expect(effects).toEqual([{ type: 'plannerLogin', command: ['claude', 'login'], label: 'Claude Code', runner: 'claude-code' }]);
   });
 
   it('offers a signed-in agent its login again, since an explicit /login may re-authenticate', () => {
     const signedIn: RunnerView = { ...claude, auth: { state: 'signed-in', loginCommand: ['claude', 'login'] } };
 
     expect(run('/login', { plannerProvider: 'claude-code', runners: [signedIn], runnersKnown: true }).effects).toEqual([
-      { type: 'plannerLogin', command: ['claude', 'login'], label: 'Claude Code' },
+      { type: 'plannerLogin', command: ['claude', 'login'], label: 'Claude Code', runner: 'claude-code' },
     ]);
   });
 
