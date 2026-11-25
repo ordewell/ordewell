@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { type AiProvider, type PlannerBackendId, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, defaultEnabledRunners, parseMaxParallel, normalizeGeminiModel, isApiProvider, getProviderMeta, configuredProviders, parseApprovalModeSetting, DEFAULT_WEB_READ_BUDGET, SettingsService, notifyCommandOf, PROVIDER_PRIORITY, PROVIDER_CREDENTIAL_ENV, globalEnvFile, readEnvFile, vendorApiKeyIn, vendorBaseUrlIn } from '@ordewell/core';
+import { type AiProvider, type PlannerBackendId, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, defaultEnabledRunners, parseMaxParallel, normalizeGeminiModel, isApiProvider, getProviderMeta, configuredProviders, parseApprovalModeSetting, DEFAULT_WEB_READ_BUDGET, SettingsService, notifyCommandOf, PROVIDER_PRIORITY, PROVIDER_CREDENTIAL_ENV, globalEnvFile, readEnvFile, setHostCredentials, setSharedProviderCredentials, vendorApiKeyIn, vendorBaseUrlIn } from '@ordewell/core';
 import type { ConfiguredPlanner, ProviderModelLists, ResolvedPlanner } from '@ordewell/core';
 import { SecretStore, type ApiProvider, type SecretKey } from './SecretStore';
 
@@ -248,12 +248,29 @@ export class VsCodeConfig extends BaseConfig {
       if (key) env[meta.apiKeyEnvVar] = key;
       const url = setting(meta.vscodeBaseUrlKey);
       if (url && meta.baseUrlEnvVar) env[meta.baseUrlEnvVar] = url;
-      if (this.lendsSaved(provider, { ...runnerEnv, ...env })) {
-        env[meta.apiKeyEnvVar] = vendorApiKeyIn(this.saved, provider);
-        if (meta.baseUrlEnvVar) env[meta.baseUrlEnvVar] = vendorBaseUrlIn(this.saved, provider);
-      }
+      if (this.lendsSaved(provider, { ...runnerEnv, ...env })) this.lendSaved(provider, env);
     }
     return env;
+  }
+
+  /**
+   * What `~/.ordewell/.env` saved for each provider `runnerEnv` has no key
+   * for, each key with its saved endpoint or the provider's default, as the
+   * daemon's environment holds the file: the shared store alone, never a key
+   * this window keeps in SecretStorage or its settings. Read only by an
+   * agent's own credential hook that takes such a pair (Cline's, ADR-0060 R9).
+   */
+  sharedProviderEnv(runnerEnv: Readonly<Record<string, string | undefined>>): Record<string, string> {
+    const env: Record<string, string> = {};
+    for (const provider of PROVIDER_PRIORITY) if (this.lendsSaved(provider, runnerEnv)) this.lendSaved(provider, env);
+    return env;
+  }
+
+  /** The saved key and endpoint together, so no other variable can move the key. */
+  private lendSaved(provider: AiProvider, env: Record<string, string>): void {
+    const meta = getProviderMeta(provider);
+    env[meta.apiKeyEnvVar] = vendorApiKeyIn(this.saved, provider);
+    if (meta.baseUrlEnvVar) env[meta.baseUrlEnvVar] = vendorBaseUrlIn(this.saved, provider);
   }
 
   /** Whether the runner, under `env`, would have `provider` only from the saved file. */
@@ -444,6 +461,23 @@ export class VsCodeConfig extends BaseConfig {
       if (e.affectsConfiguration('ordewell')) listener();
     });
   }
+}
+
+/**
+ * Lends what `config` holds outside the extension host's environment, which
+ * every child and every other extension here inherits: all of it to the
+ * built-in runner (ADR-0070), and the shared store's keys alone to an agent's
+ * credential hook that takes them (ADR-0060 R9). Read where the extension host
+ * runs, which is where it spawns the agents: a remote window's host reads the
+ * remote's store. Answers the function that takes both back.
+ */
+export function lendHeldCredentials(config: VsCodeConfig): () => void {
+  setHostCredentials((env) => config.heldProviderEnv(env));
+  setSharedProviderCredentials((env) => config.sharedProviderEnv(env));
+  return () => {
+    setHostCredentials(undefined);
+    setSharedProviderCredentials(undefined);
+  };
 }
 
 /**

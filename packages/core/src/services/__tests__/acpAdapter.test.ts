@@ -24,6 +24,7 @@ import { fakeConfig, setEnv } from '../../testing';
 import { CURSOR_EXTENSION_REQUESTS } from '../harness/cursorRequests';
 import { runnerEnv } from '../harness/runnerEnv';
 import { clineCredentials } from '../harness/clineCredentials';
+import { setSharedProviderCredentials } from '../hostCredentials';
 import { qwenCredentials } from '../harness/qwenCredentials';
 import { stubNoOrdewellProvider } from './ordewellProviderEnv';
 import { COPILOT_CLI_PROFILE } from '../harness/copilotProfile';
@@ -1293,6 +1294,34 @@ describe('AcpAdapter provider credential', () => {
       // OpenRouter's OpenAI-compatible endpoint, and Cline's id for OpenRouter.
       expect(qwen.spawned.lastEnv()).toMatchObject({ OPENAI_API_KEY: KEY, OPENAI_BASE_URL: 'https://openrouter.ai/api/v1' });
       expect(cline.spawned.lastEnv()).toMatchObject({ CLINE_PROVIDER: 'openrouter', CLINE_API_KEY: KEY });
+    });
+
+    it('starts Cline\'s planner, first turn included, and its task on a key the host keeps only in the shared store, and hands it nothing else', async () => {
+      setSharedProviderCredentials(() => ({ OPENROUTER_API_KEY: KEY, OPENROUTER_BASE_URL: 'https://openrouter.ai/api/v1' }));
+      try {
+        const credentials = clineCredentials({ homedir: () => '/no-such-home' });
+        const planner = setup([...handshake(), { expect: 'session/prompt', reply: { stopReason: 'end_turn' } }], { ...ROLES_PROFILE, credentials });
+        await planner.adapter.start(plannerStart());
+        await turn(planner.adapter, 'Plan the change');
+        const task = setup(handshake(), withKey(credentials));
+        await task.adapter.start(taskStart());
+        // Qwen reads any OpenAI-compatible key, so the store is no business of its hook.
+        const qwen = setup(handshake(), withKey(qwenCredentials));
+        await qwen.adapter.start(taskStart());
+
+        for (const started of [planner, task]) {
+          const env = started.spawned.lastEnv();
+          expect(env).toMatchObject({ CLINE_PROVIDER: 'openrouter', CLINE_API_KEY: KEY });
+          expect(Object.entries(env).filter(([, value]) => value === KEY).map(([name]) => name)).toEqual(['CLINE_API_KEY']);
+          expect(env.OPENROUTER_BASE_URL || undefined).toBeUndefined();
+          expect(JSON.stringify(started.agent.received)).not.toContain(KEY);
+          expect(JSON.stringify(started.spawned.lastArgs())).not.toContain(KEY);
+        }
+        expect(JSON.stringify(qwen.spawned.lastEnv())).not.toContain(KEY);
+        expect(process.env.OPENROUTER_API_KEY || undefined).toBeUndefined();
+      } finally {
+        setSharedProviderCredentials(undefined);
+      }
     });
 
     it('keeps the key out of the log, the agent\'s transcript, the arguments and the errors of a start the agent refuses', async () => {
