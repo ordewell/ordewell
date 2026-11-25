@@ -188,7 +188,7 @@ export function handleStepperKey(state: TuiState, stepper: StepperState, key: Ke
 function confirm(state: TuiState, stepper: StepperState, item: PickerItem | undefined): Step {
   if (!item) return step(state);
   if (item.disabled) {
-    return step(say(state, 'error', item.detail ? `${item.label}: ${item.detail}` : `${item.label} is not available.`));
+    return step(say(state, 'error', item.refusal ?? (item.detail ? `${item.label}: ${item.detail}` : `${item.label} is not available.`)));
   }
   return choose(state, stepper, item.id);
 }

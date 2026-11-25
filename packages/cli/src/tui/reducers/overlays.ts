@@ -169,13 +169,16 @@ function handlePickerKey(state: TuiState, picker: PickerState, key: Key): Step {
   }
 
   // Space toggles membership in a multi-select; elsewhere it is filter text.
+  // Ticking on a row whose new pick is refused says why and leaves the ticks.
+  const toggle = (next: PickerState, item: PickerItem): Step => {
+    if (next.chosen.includes(item.id)) return reopen({ ...next, chosen: next.chosen.filter((id) => id !== item.id) });
+    if (item.refusal) return step({ ...say(state, 'error', item.refusal), overlay: { kind: 'picker', picker: next } });
+    return reopen({ ...next, chosen: [...next.chosen, item.id] });
+  };
   if (picker.multi && key.name === 'char' && key.char === ' ') {
     const item = items[picker.index];
     if (!item) return reopen(picker);
-    const chosen = picker.chosen.includes(item.id)
-      ? picker.chosen.filter((id) => id !== item.id)
-      : [...picker.chosen, item.id];
-    return reopen({ ...picker, chosen });
+    return toggle(picker, item);
   }
 
   if (key.name === 'enter') return choose(state, picker, items[picker.index]);
@@ -184,9 +187,7 @@ function handlePickerKey(state: TuiState, picker: PickerState, key: Key): Step {
     const row = digitRow(key);
     if (row === null || !items[row]) return reopen(picker);
     if (!picker.multi) return choose(state, { ...picker, index: row }, items[row]);
-    const id = items[row].id;
-    const chosen = picker.chosen.includes(id) ? picker.chosen.filter((c) => c !== id) : [...picker.chosen, id];
-    return reopen({ ...picker, index: row, chosen });
+    return toggle({ ...picker, index: row }, items[row]);
   }
 
   const filter = editText(picker.filter, key);
@@ -241,7 +242,7 @@ function choose(state: TuiState, picker: PickerState, item: PickerItem | undefin
   // Placeholder and unavailable rows are on screen to explain themselves, not
   // to be chosen. Keep the picker open so the reason stays readable.
   if (item.disabled) {
-    return step(say(state, 'error', item.detail ? `${item.label}: ${item.detail}` : `${item.label} is not available.`));
+    return step(say(state, 'error', item.refusal ?? (item.detail ? `${item.label}: ${item.detail}` : `${item.label} is not available.`)));
   }
 
   switch (picker.action.kind) {

@@ -363,9 +363,10 @@ describe('ApiClient — endpoints the TUI drives', () => {
     });
     servers.push(server);
 
-    await new ApiClient(server.port).setRunnerEnabled('opencode', false);
+    await new ApiClient(server.port, '/ws').setRunnerEnabled('opencode', false);
     expect(seen.method).toBe('PUT');
-    expect(seen.url).toBe('/api/runners/opencode');
+    // Judged against this workspace's sign-ins when it switches one on (ADR-0052).
+    expect(seen.url).toBe('/api/runners/opencode?workspace=%2Fws');
     expect(JSON.parse(seen.body)).toEqual({ enabled: false });
   });
 

@@ -204,6 +204,11 @@ export interface PickerItem {
    * which cannot be chosen at all.
    */
   warn?: boolean;
+  /**
+   * A new pick of this row is refused with these words, its way back in: a
+   * blocked runner (ADR-0052). Enter, or ticking it on, says them instead.
+   */
+  refusal?: string;
 }
 
 /** What the runtime should do with the item(s) the user picks. */

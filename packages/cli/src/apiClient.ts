@@ -399,7 +399,8 @@ export class ApiClient {
   }
 
   setRunnerEnabled(runner: string, enabled: boolean): Promise<OkResponse> {
-    return this.call('runners.setEnabled', `Failed to ${enabled ? 'enable' : 'disable'} ${runner}`, { params: { id: runner }, body: { enabled } });
+    // Switching one on is judged against this workspace's sign-ins (ADR-0052), as the list is.
+    return this.call('runners.setEnabled', `Failed to ${enabled ? 'enable' : 'disable'} ${runner}`, { params: { id: runner }, query: { workspace: this.workspace }, body: { enabled } });
   }
 
   executePlan(sessionId: string): Promise<ExecuteResponse> {

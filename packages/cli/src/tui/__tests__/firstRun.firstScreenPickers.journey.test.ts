@@ -5,6 +5,7 @@ import { pickerItemsFor } from '../reducers/pickers';
 import type { StepperState } from '../reducers/stepper';
 import type { ModelView, PickerItem, TaskView, TuiState } from '../state';
 import { machineA, type MachineAgents } from '../../../../core/src/services/__tests__/firstRunAMachine';
+import { lastMessage } from './chat';
 import { firstRunADaemon, type FirstRunADaemon, type FirstRunTui } from './firstRunADaemon';
 
 /**
@@ -99,10 +100,28 @@ describe('first run, machine A: the first screen and its pickers', () => {
       expect(rowOf(await openPlanner(tui), 'Claude Code')).not.toContain('✔');
       await tui.press('escape');
 
-      // The user picks it anyway, as /planner saves the pick.
+      // Picked while signed in, and signed out since: it stays the planner (ADR-0052).
+      daemon!.machine.set({ ...machineA(), claude: { ...machineA().claude!, signedIn: true } });
+      await tui.run({ type: 'refresh' });
       await tui.run({ type: 'setPlannerChoice', provider: 'claude-code', modelId: '', effort: '', notice: 'Planner: Claude Code' });
+      daemon!.machine.set(machineA());
+      await tui.run({ type: 'refresh' });
       expect(tui.state().plannerProvider).toBe('claude-code');
-      expect(rowOf(await openPlanner(tui), 'Claude Code')).not.toContain('✔');
+      const row = rowOf(await openPlanner(tui), 'Claude Code');
+      expect(row).not.toContain('✔');
+      expect(row).toContain('(current) Signed out · /login claude-code');
+    });
+
+    it('lists signed-out Claude Code below the agents that can plan, and refuses a new pick of it with its way in', async () => {
+      const tui = await firstScreen();
+      const lines = await openPlanner(tui);
+      expect(lines.indexOf(rowOf(lines, 'Claude Code'))).toBeGreaterThan(lines.indexOf(rowOf(lines, 'Codex')));
+      expect(rowOf(lines, 'Claude Code')).toContain('Signed out · /login claude-code');
+
+      await choose(tui, 'claude-code');
+      expect(tui.state().plannerProvider).not.toBe('claude-code');
+      // Said in the transcript under the stepper, which stays open on the row.
+      expect(lastMessage(tui.state())).toMatchObject({ role: 'error', text: expect.stringMatching(/^Claude Code is not signed in\. Sign in with \/login claude-code/) });
     });
 
     it('says signed-in Codex is signed in', async () => {

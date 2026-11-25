@@ -10,6 +10,7 @@ import { findTask, plannerInFlight, type PickerItem, type TuiState } from '../st
 import { modelsForRunner } from '../taskAssignment';
 import { say } from '../transcript';
 import { picker, pickerItemsFor } from './pickers';
+import { runnerPickRefusal } from '../runnerChoice';
 import { plannerStepper } from './plannerStepper';
 import { openInbox } from './inbox';
 import { openStepper } from './stepper';
@@ -432,6 +433,9 @@ function runners(state: TuiState, args: string[]): Step {
     const known = state.runners.find((r) => r.id === runner);
     const enabled = resolveToggle(arg, known?.enabled ?? true);
     if (enabled === null) return fail(state, 'Usage: /runners [<runner-id> on|off]');
+    // Switching a blocked agent on is a new pick, refused with its way in (ADR-0052).
+    const refusal = enabled && known && !known.enabled ? runnerPickRefusal(known) : null;
+    if (refusal) return fail(state, refusal);
     return step(state, [{ type: 'setRunnerEnabled', runner, enabled }]);
   }
 

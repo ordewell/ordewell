@@ -2,7 +2,7 @@ import { execSync } from 'child_process';
 import {
   clipboardCopyCommand, getProviderMeta, isApiProvider, isCliProvider, isUserMessage, mergeOutcome, confirmedOverride, newTaskFields, taskActionCommand, TERMINAL_UI_COMMANDS, type HasBinFn, type SerializedConversationMessage, type SurfacePlan,
   type PlannerModelRecall,
-  type RunnersResponse, type ExecutionSummary,
+  type RunnersResponse, type ExecutionSummary, type SettingsUpdateResponse,
 } from '@ordewell/core';
 import { describeConnectionRefused, isConnectionRefused } from '../daemon';
 import { RequestTimeoutError, UnreadableResponseError, deliveryOf, type ApiClient } from '../apiClient';
@@ -590,7 +590,19 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       // and is remembered for this provider, the way VS Code's
       // `PlannerSelection.setModel` remembers a pick.
       const env = { AI_PROVIDER: effect.provider, ORCHESTRATOR_MODEL: effect.modelId, ORDEWELL_PLANNER_EFFORT: effect.effort };
-      const settings = await api.updateSettings({ env });
+      let settings: SettingsUpdateResponse;
+      try {
+        settings = await api.updateSettings({ env });
+      } catch (err) {
+        // The stepper showed the pick before this answer. A refused one, say a
+        // runner blocked since its row was read (ADR-0052), is undone by the
+        // daemon's own word, and the rows are read again so they show why.
+        if (!isConnectionRefused(err)) {
+          await loadRunners(deps).catch(() => undefined);
+          await reloadSettings(deps);
+        }
+        throw err;
+      }
       persistAfterDaemon(deps, env);
       dispatchSettings(deps, {
         ...settings,

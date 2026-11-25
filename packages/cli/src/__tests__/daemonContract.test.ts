@@ -11,6 +11,7 @@ import {
   GeminiService,
   ModelResolver,
   OpenAiService,
+  RunnerInstallation,
   type ConversationTurn,
   type IConfig,
   type IRunner,
@@ -450,6 +451,9 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
     });
 
     it('names the model a planner switch landed on and why', async () => {
+      // Claude Code installed with its sign-in unread, which never refuses a pick
+      // (ADR-0052): this host's own login is not the contract's to judge.
+      vi.spyOn(RunnerInstallation.prototype, 'runnerUsability').mockResolvedValue({ usable: true, auth: { state: 'unknown' } });
       const switched = await client.updateSettings({ env: { AI_PROVIDER: 'claude-code' } });
 
       expect(switched.aiProvider).toBe('claude-code');

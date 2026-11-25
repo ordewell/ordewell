@@ -5,6 +5,7 @@ import * as path from 'path';
 import { Hono } from 'hono';
 import {
   ModelResolver,
+  RunnerInstallation,
   SettingsService,
   type ExecImpl,
   type IConfig,
@@ -73,6 +74,9 @@ describe('/api/settings while a runner is slow to list its models', () => {
     };
     const registry = { getManifest: (id: string) => (id in LISTINGS ? harnessManifest(id) : undefined) } as unknown as RunnerRegistry;
     const config = { getProviderBaseUrl: () => '', getProviderApiKey: () => '', setProviderModelLists: () => {} } as unknown as IConfig;
+    // Every agent installed with its sign-in unread, which never refuses a
+    // pick (ADR-0052): what these cases judge is the catalog, not this host's logins.
+    vi.spyOn(RunnerInstallation.prototype, 'runnerUsability').mockResolvedValue({ usable: true, auth: { state: 'unknown' } });
     pool = new OrchestratorPool({ modelResolver: new ModelResolver(registry, config, { execImpl: exec }) });
     app = new Hono().route('/api/settings', settingsRoute(pool));
   });

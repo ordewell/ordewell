@@ -28,9 +28,10 @@ or the extension host.
 ## Decision
 
 **The preflight asks each runner's own status command with the workspace
-environment; a signed-out agent stays listed, enabled and usable but is flagged
-to the user and not offered to a planner as a runner until its check reads
-signed in, and a planner turn is refused before it is sent with the way in kept in the message;
+environment; a signed-out agent stays listed and enabled but is flagged
+to the user, is not offered to a planner as a runner until its check reads
+signed in, cannot be newly picked as the planner, switched on or given a task
+until it can run, and a planner turn is refused before it is sent with the way in kept in the message;
 the user signs in from the chat by Ordewell handing the terminal to the login
 command the runner declares, then asks again. Wherever Ordewell says an agent is
 signed out, it names the way in, from one core function.**
@@ -121,6 +122,61 @@ fails at its start with the sign-in hint, as above. An `unknown` verdict
 ACP agent with none until it is asked) leaves the agent offered. A goal with every enabled agent signed out is refused
 with the reasons and `Sign in to one and send the goal again`.
 
+### Picking a runner
+
+Every picker of a planner, of the runners switched on and of a task's runner
+reads one rule, `runnerChoice(runnerReadiness(...))` in core, from the
+`readiness` each runner row of the daemon's list carries (`runnerEntryChoice`
+for a row from an older daemon, read from its sign-in alone). It gives one short
+status in words, the recovery a row offers as a kind a surface binds to its own
+control, and whether a new pick is refused:
+
+| Readiness | Status | Recovery | New pick |
+|---|---|---|---|
+| signed out | Signed out | Sign in (`sign-in`) | refused |
+| no credential | API key needed | Add key (`add-key`) | refused |
+| a finished catalog with no model and no agent default | No usable model | Refresh models (`refresh-models`) | refused |
+| the ask got no answer | Couldn't load models | Retry (`retry`) | allowed |
+| discovery still asking | Checking models… | — | allowed |
+| no evidence of the sign-in | Sign-in not checked | — | allowed |
+| the agent offers no model and runs on its own | Uses agent default | — | allowed |
+| signed in, models listed | — | — | allowed |
+
+Only evidence blocks: a confirmed sign-out, a credential hook with no key, or a
+discovery that finished and established there is nothing to run the agent on.
+A failed or pending ask, an unknown sign-in and an agent default are each told
+apart and never refuse, so a runner with a usable model or default and no
+confirmed blocker stays choosable. The colour a surface gives a status
+(`tone`) only reinforces its words.
+
+A list shows every choosable row first, then the blocked, then the unusable,
+each group in its own order (`orderByChoice`). A blocked agent stays visible
+with its status and its way back. Only a *new* choice is refused: the planner in
+effect, a runner already switched on and a task's own runner stay as they are,
+are never dropped or replaced for it, and stay choosable there; a runner
+switched on can always be switched off. Settings written another way (an
+environment variable, a migration, a settings file) are read as before; only a
+pick that activates a known-blocked runner is refused.
+
+A picker's list can be stale, so the daemon judges each new pick again at its
+write: a planner switch (`settings.update` with a different `AI_PROVIDER`), a
+runner switched on (`runners.setEnabled`), and a task moved onto another runner
+(a task `PUT` or `card-edit`). It reads the same record and discovery answer
+the list does, asking a recorded sign-out again first as the send gate does
+(`verifyRunnerSignIn`), so a sign-in done since lets the pick through. A refusal
+is a 409 `runner_not_ready` whose `runnerNotReady` carries the runner and its
+readiness, and whose message is `runnerChoiceRefusal`'s: the way in and `Then
+pick it again.`, or `Run /refresh to load its models again, then pick it.` An
+unusable runner is no new refusal here: it is refused at its start, as before.
+
+The TUI words each blocked row as the status and the usual command:
+`Signed out · /login cursor-agent`, `API key needed · /key-set`,
+`No usable model · /refresh`, `Couldn't load models · /refresh`, with no other
+ornament; its label is red. Enter on a blocked row, ticking it on in `/runners`,
+`/runners <id> on` and `/task-runner <task> <id>` say the refusal with its way in
+and change nothing. A pick the daemon refuses reads the planner and the runner
+rows again, so the stepper's early display of it is undone.
+
 ### The way in, worded once
 
 A verdict carries its agent's ways in as data, `RunnerSignIn`, built by
@@ -157,7 +213,7 @@ by-hand route is no news to someone who may be signed in already.
 
 | Surface | The flag | Signing in |
 |---|---|---|
-| TUI | a red welcome line per signed-out agent, the active planner first, and the red name of every signed-out runner its Runners row shows; the selected planner's value in the Setup block is red, and so is the confirmation notice of a pick, while its agent is signed out; the planner picker row's detail is the hint and the row stays selectable; each `/runners` row carries its agent's hint | `/login` for the active planner, `/login <runner>` by id or display label, `/key-set` for a key-based agent |
+| TUI | a red welcome line per signed-out agent, the active planner first, and the red name of every signed-out runner its Runners row shows; the selected planner's value in the Setup block is red, and so is the confirmation notice of a pick, while its agent is signed out; the planner, `/runners` and task-runner pickers list it below the choosable rows as `Signed out · /login <runner>`, choosable only where it is already the user's choice (*Picking a runner*) | `/login` for the active planner, `/login <runner>` by id or display label, `/key-set` for a key-based agent |
 | VS Code | a red dot and a **Log in** segment on every signed-out pill, planner or runner, titled with the hint; the empty state lists one row per signed-out agent, the active planner first, each with the hint and its own action; a task that failed on a signed-out agent has **Log in** beside Retry | that pill's, row's or card's button: the agent's login, or the key entry for a key-based agent |
 | Headless CLI | `ordewell runners` prints the hint under a signed-out row, and the login under an unknown one | the agent's own command, or `ordewell key set` |
 
@@ -173,8 +229,8 @@ name.
 
 Both surfaces flag every agent whose own status says signed out, not only the
 one planning, because any of them can be signed in without moving the planner.
-The TUI keeps the row in the picker — auth never gates usability — and flags
-the agent in the welcome: a red line per signed-out agent, that agent's name in
+The TUI keeps the row in the picker, below the choosable ones and refused as a
+new pick, and flags the agent in the welcome: a red line per signed-out agent, that agent's name in
 red in the Runners row whenever the row lists it, and the Setup block's planner
 value red while it is the planner in hand. VS
 Code keeps the pill beside the others and marks it: the same action sits in the
@@ -241,9 +297,12 @@ are kept as the reason the list is empty), is signed out; a session the agent
 opened, with models or none, is signed in; an ask that got no answer says
 nothing. Why a runner lists nothing is told apart (`UnlistedReason`): `pending`,
 `signed-out`, `no-credential`, `no-choice` (an agent that offers no model and
-plans on its own default), `no-answer`. Only the first two are worded as
-discovery errors, and `runnerReadiness` classifies a runner from the record and
-that reason, so a picker reads the blocker the gate and the catalog read.
+plans on its own default), `no-answer` (an ask, or a degraded fallback, that
+said nothing), and `no-models` (a discovery that finished, cacheably, and listed
+no model for a runner with no default of its own). Only `signed-out` and
+`no-credential` are worded as discovery errors, and `runnerReadiness` classifies
+a runner from the record and that reason, so a picker reads the blocker the
+gate and the catalog read (*Picking a runner*).
 
 Before a send to a planner recorded signed out, both hosts ask again
 (`verifyRunnerSignIn`): a runner with a status command answers by it, and a
@@ -294,9 +353,12 @@ both surfaces.
 - **The runner is the only judge of its login.** No surface infers signed-out
   from an exit code, a string it did not parse or a timeout; only the manifest's
   declared answer does, for the status command and for a failed turn alike.
-- **Only signed out blocks, and only with a way in.** A signed-out verdict
-  for a runner Ordewell knows no way into is not a refusal; `unknown` never is
-  one.
+- **Only evidence blocks.** A sign-out, a missing credential or a finished
+  catalog with nothing to run on refuses a new pick; a sign-out refuses a turn
+  only with a way in to name. `unknown`, a pending or failed ask and an agent
+  default never refuse anything.
+- **A choice already made is kept.** Only a new pick is refused; the planner
+  in effect, a runner switched on and a task's runner are never dropped for it.
 - **Signed out is never said without the way in.** Every surface words it with
   `describeSignIn` and its own syntax: Ordewell's way first, then the agent's.
 - **A signed-out agent is flagged to the user, never hidden from them, and not
@@ -354,6 +416,12 @@ art for the TTL and the refresh trigger.
 - **Keep offering a signed-out agent to the planner, flagged.** Chosen first,
   then dropped: the planner assigned tasks to it, and each failed once it
   started, with the sign-in hint, after the plan was approved.
+- **Keep a signed-out agent choosable in the pickers, flagged.** The design
+  until 2026-11-25: the TUI's planner row stayed selectable with the hint as its
+  detail, and a pick landed an agent the next send refused. Dropped: the pick
+  is the moment to say it cannot run, and a planner that is picked and then
+  refused reads as settled when it is not. Refusing only a new pick keeps the
+  user's earlier choices whole.
 - **Switch a signed-out agent off in `enabledRunners`.** Rejected: the setting
   is the user's choice, and rewriting it would keep the agent off after the
   login that fixes it.
@@ -468,3 +536,4 @@ art for the TTL and the refresh trigger.
   in; the user's `enabledRunners` is untouched.
 - 2026-11-25 — a recorded verdict keeps its evidence: a status-less probe's `unknown` no longer erases a turn's or discovery's refusal on refresh or expiry; an ACP start refusal and discovery's handshake are recorded by type; the send recheck asks the handshake, and a finished login or explicit recheck (`runners.list?recheck=`) is the only reset.
 - 2026-11-25 — a refusal that names a signed-out agent offers that agent's Sign in on the Desktop and VS Code chat's error; a refused start reaches daemon clients as `runner_signed_out` with its `signIn`.
+- 2026-11-25 — one choice rule for every picker (`runnerChoice`): ready choices first, blocked ones kept visible with one status and their recovery; a new planner pick, runner switched on or task assignment of a signed-out, keyless or modelless runner is refused, and judged again at the daemon's write (`runner_not_ready`); choices already made are kept.

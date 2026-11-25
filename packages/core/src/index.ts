@@ -137,7 +137,7 @@ export { RunnerInstallation } from './services/RunnerInstallation';
 export type { RunnerInstallationOptions, RunnerUsability } from './services/RunnerInstallation';
 export { forgetRunnerAuth, forgetSignedOutRunnerAuth, readRunnerAuth, recordRunnerAuth, recordedRunnerAuth, recordedRunnerEvidence, resetRunnerAuth, rewordSignIn, runnerAuthClock, runnerSignIn, signedOutAuth, signedOutFromFailure } from './services/runnerAuth';
 export type { RecordRunnerAuthOptions, RunnerAuth, RunnerAuthEvidence, RunnerAuthExec, RunnerAuthExecOptions, RunnerAuthExecResult, RunnerAuthSource, ReadRunnerAuthOptions } from './services/runnerAuth';
-export { checksSignInByHandshake, recheckRunnerSignIn, runnerReadiness, verifyRunnerSignIn, type RunnerReadiness, type RunnerRecheck, type RunnerSignInCheck } from './services/runnerReadiness';
+export { checksSignInByHandshake, orderByChoice, recheckRunnerSignIn, runnerChoice, runnerChoiceRefusal, runnerEntryChoice, runnerEntryReadiness, runnerReadiness, verifyRunnerSignIn, RunnerNotReadyError, type RunnerChoice, type RunnerReadiness, type RunnerReadinessFields, type RunnerRecheck, type RunnerRecoveryKind, type RunnerSignInCheck } from './services/runnerReadiness';
 export { workspaceEnvOf } from './services/workspaceEnv';
 export { withoutParentSession } from './services/harness/runnerEnv';
 export { AccountLimitMonitor } from './services/AccountLimitMonitor';

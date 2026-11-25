@@ -18,7 +18,7 @@ describe('PUT /:sessionId/tasks/:taskId with assignedRunner', () => {
       updateTask: vi.fn().mockResolvedValue({ tasks: [] }),
       setTaskRunner: vi.fn().mockResolvedValue({ tasks: [] }),
     };
-    const pool = { session: vi.fn().mockReturnValue(session) } as unknown as OrchestratorPool;
+    const pool = { session: vi.fn().mockReturnValue(session), refuseBlockedTaskRunner: vi.fn(async () => {}) } as unknown as OrchestratorPool;
     const { plansRoute } = await import('../../routes/plans');
     app = new Hono();
     app.route('/api/plans', plansRoute(pool));
