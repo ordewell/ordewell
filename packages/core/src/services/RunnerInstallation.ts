@@ -16,10 +16,11 @@ const execAsync = promisify(exec);
 
 // Installation checks must find `claude`/`opencode` wherever the user installed
 // them, even under the minimal PATH a GUI-launched host inherits — same
-// augmented-PATH rationale as ModelDiscovery.
-const defaultExec: ExecImpl = async (command, options) => {
+// augmented-PATH rationale as ModelDiscovery. No console window on Windows,
+// as ModelDiscovery's. Exported for its test.
+export const defaultExec: ExecImpl = async (command, options) => {
   const PATH = await augmentedPath();
-  const { stdout } = await execAsync(command, { ...options, env: withPath(process.env, PATH) });
+  const { stdout } = await execAsync(command, { ...options, env: withPath(process.env, PATH), windowsHide: true });
   return { stdout: String(stdout) };
 };
 
