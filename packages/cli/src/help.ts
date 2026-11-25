@@ -134,9 +134,12 @@ Run options:
   --stash             Stash a dirty tree and continue in the task's worktree
   --without-isolation Run the plan in your checkout; tasks share it
   --unattended        Return, exit 3, when the run waits on a person (a checkpoint,
-                      an input, an approval, a task on hold) that nobody unattended
+                      an input, an approval, a task on hold, a landing conflict, a
+                      landing git refused, an ops task that changed tracked files,
+                      a usage limit with no reset time) that nobody unattended
                       answers: at Act once the supervisor's turn on it left it
-                      standing, below Act at once. A manual task, a merge gate,
+                      standing, below Act at once, though other tasks of the run
+                      may still be running. A manual task, a merge gate,
                       a task waiting to be started or one with nothing to run
                       counts once nothing else can run. The run stays in the
                       daemon as it is: nothing is answered, stopped or skipped

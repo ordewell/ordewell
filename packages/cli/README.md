@@ -97,9 +97,12 @@ command that answers it and who can, and, at a task on hold or a manual task,
 the commands that release it. Below Act nobody answers such a wait unattended,
 so the run waits until someone does, and nobody does a manual task unattended
 at any level. `ordewell run --unattended` returns instead, with exit status 3,
-once the run waits on a person (a checkpoint, an input, an approval or a task
-on hold) that nobody unattended will answer: at Act after the supervisor's turn
-on it left it standing, below Act at once. A manual task, a merge gate, a task
+once the run waits on a person (a checkpoint, an input, an approval, a task on
+hold, a landing conflict, a landing git refused, an ops task that changed
+tracked files, or a usage limit with no reset time) that nobody unattended will
+answer: at Act after the supervisor's turn on it left it standing, below Act at
+once, though other tasks of the run may still be running. A usage limit with a
+reset time is no such wait: the task resumes by itself. A manual task, a merge gate, a task
 waiting to be started or one with nothing to run counts too, but only once
 nothing else can run: while a task is at work or another can start, it keeps
 following. It prints what waits and leaves the run as it is in the daemon:
