@@ -118,7 +118,7 @@ describe('the runner toggle', () => {
   }
 
   function fakePool(): OrchestratorPool {
-    return { setRunnerEnabled: vi.fn() } as unknown as OrchestratorPool;
+    return { enableRunner: vi.fn(async () => {}) } as unknown as OrchestratorPool;
   }
 
   it.each([
@@ -134,7 +134,7 @@ describe('the runner toggle', () => {
     });
 
     expect(res.status).toBe(400);
-    expect(pool.setRunnerEnabled).not.toHaveBeenCalled();
+    expect(pool.enableRunner).not.toHaveBeenCalled();
   });
 
   it('still toggles on an explicit boolean', async () => {
@@ -146,6 +146,6 @@ describe('the runner toggle', () => {
     });
 
     expect(res.status).toBe(200);
-    expect(pool.setRunnerEnabled).toHaveBeenCalledWith('claude-code', false);
+    expect(pool.enableRunner).toHaveBeenCalledWith('claude-code', false, undefined);
   });
 });

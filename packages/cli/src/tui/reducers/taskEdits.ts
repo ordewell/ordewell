@@ -3,6 +3,7 @@ import { noExecutorRefusal, dependentsNotice, dependentsOf, loopLeaveNotice, loo
 import { findTask, refFor, titledRefFor, type ModelView, type TaskView, type TuiState } from '../state';
 import { assignedModelFor, effortsForTask, modesForTask, runnerAccepts } from '../taskAssignment';
 import { picker, pickerItemsFor } from './pickers';
+import { runnerPickRefusal } from '../runnerChoice';
 import { fail, step, withSession, type Step } from './shared';
 
 const noExecutor = (task: TaskView, manual: string, script: string): string => noExecutorRefusal(task.type, manual, script);
@@ -280,6 +281,9 @@ export function taskRunnerCommand(state: TuiState, args: string[]): Step {
     if (!args[1] || task.type !== 'ai') return openTaskRunnerPicker(state, task);
     const runner = state.runners.find((candidate) => candidate.id === args[1]);
     if (!runner) return fail(state, `Unknown runner "${args[1]}".`);
+    // Moving the task onto a blocked runner is a new pick (ADR-0052).
+    const refusal = runner.id === task.assignedRunner ? null : runnerPickRefusal(runner);
+    if (refusal) return fail(state, refusal);
     return assignTaskRunner(state, sessionId, task, runner.id, runner.name);
   });
 }

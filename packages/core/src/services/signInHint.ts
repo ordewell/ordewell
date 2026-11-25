@@ -29,6 +29,34 @@ export interface RunnerSignIn {
   byHand?: string;
 }
 
+/**
+ * A runner's credential hook found no key to start it with (ADR-0060, R9).
+ * Its message is the hook's own and names no credential, so discovery keeps
+ * it as the reason the runner lists nothing; a hook that throws anything else
+ * is told as the runner's sign-in hint instead, since its words could quote
+ * what it read.
+ */
+export class RunnerCredentialRefusal extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RunnerCredentialRefusal';
+  }
+}
+
+/**
+ * An agent's own refusal to start because its user is signed out, as its
+ * protocol said it (ACP's auth-required error), never read from its words.
+ * The message is the hint every surface words (ADR-0052); `signIn` is what a
+ * host records for the planner gate, so the first refusal already blocks the
+ * next send (#49 F2).
+ */
+export class RunnerSignedOutError extends Error {
+  constructor(readonly signIn: RunnerSignIn, message: string) {
+    super(message);
+    this.name = 'RunnerSignedOutError';
+  }
+}
+
 /** How one surface spells the ways in a sign-in hint points at. */
 export interface SignInSyntax {
   /** The surface's own way to run the agent's login, or null where that is the agent's command itself. */

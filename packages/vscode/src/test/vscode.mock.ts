@@ -3,6 +3,8 @@
 // file (see vitest.config.ts) so config getters can be exercised in isolation.
 
 import { vi } from 'vitest';
+import * as os from 'os';
+import * as path from 'path';
 
 let configValues: Record<string, unknown> = {};
 let workspaceValues: Record<string, unknown> = {};
@@ -25,10 +27,29 @@ export function __resetConfig(): void {
   configUpdates.length = 0;
 }
 
+/** The folder a mocked window has open unless a test says otherwise; never created. */
+export const MOCK_WORKSPACE_FOLDER = path.join(os.tmpdir(), 'ordewell-vscode-mock-workspace');
+
+type MockFolder = { uri: { fsPath: string }; name: string; index: number };
+const foldersAt = (paths: readonly string[]): MockFolder[] =>
+  paths.map((fsPath, index) => ({ uri: { fsPath, toString: () => `file://${fsPath}` }, name: path.basename(fsPath), index }));
+
+/**
+ * The window's folders, as `workspace.workspaceFolders` reads them: `undefined`
+ * is an empty window or one with only a loose file open, `[]` a workspace whose
+ * last folder was removed. Reset to one folder after every test.
+ */
+export function __setWorkspaceFolders(paths: readonly string[] | undefined): void {
+  workspace.workspaceFolders = paths && foldersAt(paths);
+}
+
 export const workspace = {
+  workspaceFolders: foldersAt([MOCK_WORKSPACE_FOLDER]) as MockFolder[] | undefined,
   getConfiguration(_section?: string) {
     return {
+      // The workspace's value over the user's, as VS Code reads a setting.
       get<T>(key: string, defaultValue?: T): T {
+        if (key in workspaceValues) return workspaceValues[key] as T;
         return (key in configValues ? configValues[key] : defaultValue) as T;
       },
       // A value a test set reads as the user's own (global) one; anything else as unset.

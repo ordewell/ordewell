@@ -171,6 +171,7 @@ describe('the empty-catalog warning', () => {
       runnerRegistry: registry,
       runnerInstallation: anything({
         plannerUsability: async () => ({ usable: false }),
+        runnerUsability: async () => ({ usable: true }),
         filterInstalled: async () => ['claude-code', 'codex', 'openrouter'],
       }),
       modelResolver: anything({
@@ -179,6 +180,7 @@ describe('the empty-catalog warning', () => {
         refresh: async () => {},
         getDiscoveryErrors: () => ({}),
         getRunnerDiscoveryErrors: () => ({}),
+        getRunnerUnlisted: () => ({}),
         getCachedPickerOptions: () => [],
       }),
       chatProvider: anything(),

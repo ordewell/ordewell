@@ -5,6 +5,7 @@ import type { ApprovalKind } from '../interfaces/IApproval';
 import type { ApprovalSource } from '../services/ApprovalPolicy';
 import type { RunnerCommand, RunnerMcpServer } from '../models/RunnerCommand';
 import type { PromptPartKind } from '../models/PromptPart';
+import type { RunnerSignIn } from '../services/signInHint';
 
 /**
  * What a surface draws for one planner conversation (#51): an ordered list of
@@ -47,6 +48,12 @@ export interface MessageBlock {
    * around the brief `text` holds, grouped, for a surface to fold.
    */
   sections?: readonly MessageSectionGroup[];
+  /**
+   * An 'error' that is the planner's runner signed out, as its manifest
+   * recognized it: that agent and its ways in, for a surface to offer its
+   * sign-in without reading `text` (ADR-0052).
+   */
+  signIn?: RunnerSignIn;
 }
 
 /** One group of a first message's sections: "Handoffs from earlier tasks" or "Ordewell's instructions to the runner". */

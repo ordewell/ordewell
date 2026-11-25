@@ -1127,6 +1127,19 @@ describe('planner choice', () => {
     expect(types(h.actions)).toContain('failed');
   });
 
+  // ADR-0052: the stepper shows a pick before the daemon answers, and a pick of
+  // a runner blocked since the list was read is refused at the write.
+  it('reads the planner and the runner rows again when the daemon refuses the pick, so neither shows it', async () => {
+    const refused = Object.assign(new Error('Claude Code is not signed in. Sign in with /login claude-code, or run claude auth login. Then pick it again.'), { status: 409, code: 'runner_not_ready' });
+    const h = harness({ updateSettings: vi.fn().mockRejectedValue(refused), getSettings: vi.fn().mockResolvedValue({ aiProvider: 'codex' }) });
+    await runEffect(choice, h.deps);
+
+    expect(h.api.getSettings).toHaveBeenCalled();
+    expect(h.api.getRunners).toHaveBeenCalled();
+    expect(types(h.actions)).toEqual(expect.arrayContaining(['runnersLoaded', 'failed']));
+    expect(h.actions.find((a) => a.type === 'failed')).toMatchObject({ message: refused.message });
+  });
+
   it("shows the choice in state with the daemon's updated per-backend memory", async () => {
     const plannerModels = { 'claude-code': { model: 'opus', effort: 'high' } };
     const h = harness({ updateSettings: vi.fn().mockResolvedValue({ plannerModels }) });
@@ -1154,7 +1167,7 @@ describe('planner choice', () => {
 });
 
 describe('runner login', () => {
-  const loginEffect: Effect = { type: 'plannerLogin', command: ['claude', 'login'], label: 'Claude Code' };
+  const loginEffect: Effect = { type: 'plannerLogin', command: ['claude', 'login'], label: 'Claude Code', runner: 'claude-code' };
 
   it('runs the login command, re-probes the runners, then says the agent is signed in', async () => {
     const order: string[] = [];
@@ -1220,6 +1233,20 @@ describe('runner login', () => {
     await runEffect(loginEffect, h.deps);
 
     expect(messageOf(h.actions, 'notice')).toBe('Claude Code is signed in.');
+  });
+
+  it('asks the daemon to recheck the agent after a login that finished, and keeps its blocker after one that did not (ADR-0052)', async () => {
+    const cursorLogin: Effect = { type: 'plannerLogin', command: ['cursor-agent', 'login'], label: 'Cursor', runner: 'cursor-agent' };
+    const unknown = { runners: [{ id: 'cursor-agent', name: 'Cursor', enabled: true, auth: { state: 'unknown' as const, loginCommand: ['cursor-agent', 'login'] } }], orchestratorModel: '' };
+    const finished = harness({ getRunners: vi.fn().mockResolvedValue(unknown) }, { login: vi.fn(async () => ({ ok: true })) });
+    await runEffect(cursorLogin, finished.deps);
+    expect(finished.api.getRunners).toHaveBeenCalledWith(undefined, { recheck: 'cursor-agent' });
+    // A status-less agent's exit 0 is never taken as signed in.
+    expect(messageOf(finished.actions, 'notice')).toBe('Could not confirm that Cursor is signed in.');
+
+    const cancelled = harness({}, { login: vi.fn(async () => ({ ok: false, message: 'cursor-agent exited with status 130.' })) });
+    await runEffect(cursorLogin, cancelled.deps);
+    expect(cancelled.api.getRunners).toHaveBeenCalledWith(undefined, undefined);
   });
 
   it('fails the effect when the login throws, so the runtime restores the terminal', async () => {
@@ -1660,6 +1687,15 @@ describe('catalogs and sessions', () => {
     await runEffect({ type: 'loadScope' }, h.deps);
     expect(types(h.actions)).toEqual(expect.arrayContaining(['runnersLoaded', 'settingsLoaded']));
     expect(types(h.actions)).not.toContain('modelsLoaded');
+  });
+
+  it('an explicit refresh hands the daemon the runners to recheck, and a plain one none', async () => {
+    const h = harness();
+    await runEffect({ type: 'refresh', announce: true, recheck: ['cursor-agent', 'qwen-code'] }, h.deps);
+    expect(h.api.getRunners).toHaveBeenCalledWith(undefined, { recheck: 'cursor-agent,qwen-code' });
+    const plain = harness();
+    await runEffect({ type: 'refresh' }, plain.deps);
+    expect(plain.api.getRunners).toHaveBeenCalledWith(undefined, undefined);
   });
 
   it('refresh stays silent unless announced', async () => {

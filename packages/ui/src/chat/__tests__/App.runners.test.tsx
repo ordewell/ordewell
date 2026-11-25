@@ -67,10 +67,10 @@ describe('the Runners block', () => {
     expect(group.className).toContain('signed-out');
     expect(group.querySelectorAll('button')).toHaveLength(2);
     expect(group.querySelector('.planner-auth-dot')).not.toBeNull();
-    expect(group.querySelector('.runner-pill-login')?.getAttribute('aria-label')).toBe('Log in to Codex');
+    expect(group.querySelector('.runner-pill-login')?.getAttribute('aria-label')).toBe('Sign in to Codex');
   });
 
-  it('keeps a signed-out runner visibly off, and still switches it on when clicked', () => {
+  it('keeps a signed-out runner visibly off, and refuses switching it on until it signs in (ADR-0052)', () => {
     post({
       type: 'setRunners',
       runners: [
@@ -105,7 +105,8 @@ describe('the Runners block', () => {
     api.post.mockClear();
     fireEvent.click(off);
 
-    expect(api.post).toHaveBeenCalledWith({ type: 'setRunnerEnabled', runnerId: 'codex', enabled: true, requestId: expect.any(String) });
+    expect(off.getAttribute('aria-disabled')).toBe('true');
+    expect(api.post).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'setRunnerEnabled' }));
   });
 
   it('hangs the capsule rows from their top edge, so a login slot shifts no neighbour', () => {

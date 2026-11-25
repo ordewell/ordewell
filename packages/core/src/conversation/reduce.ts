@@ -1,9 +1,10 @@
 import type { ReplyRun, ResearchStep } from '../models/Task';
+import type { RunnerSignIn } from '../services/signInHint';
 import type { SerializedConversationMessage, SerializedPendingTurn, SessionMessage } from '../services/SessionMessage';
 import { isMeasured } from '../models/Usage';
 import { isCheckpoint } from '../services/conversationSummary';
 import type { CompactionBlock, DisplayBlock, MessageBlock, MessageRole, PlanBlock, ToolBlock } from './blocks';
-import { compactionBlock, pendingTool, planMarker, settledMessage, settledTool, skillLoadBlock, toolFromStep, userMessage } from './records';
+import { compactionBlock, pendingTool, planMarker, settledMessage, settledTool, signedOutFailure, skillLoadBlock, toolFromStep, userMessage } from './records';
 import {
   append, appendOutput, closeOpenBlocks, findLastIndex, laneBlocks, laneOf, laneAppend, laneReplace, replaceAt, sealLane, sealed, setUsageLine,
   think, updateSubagent, type BlockList,
@@ -151,16 +152,17 @@ function dropBuildingPlan(view: ConversationView, turnId: string | undefined, se
   return blocks.length === view.blocks.length ? view : { ...view, blocks };
 }
 
-function settleReply(view: ConversationView, { content, turnId, supervisor, runs }: Message<'planner_message'>): ConversationView {
+function settleReply(view: ConversationView, { content, turnId, supervisor, runs, signIn }: Message<'planner_message'>): ConversationView {
   const role = supervisor ? 'supervisor' : 'planner';
-  if (runs) return settleRuns(view, runs, role, turnId);
+  if (runs) return settleRuns(view, runs, role, turnId, signIn);
+  const settled = (id: string) => (signIn ? signedOutFailure(id, content, signIn, turnId) : settledMessage(id, role, content, turnId));
   if (turnId !== undefined) {
     const i = finalSegmentIndex(view.blocks, turnId);
     if (i >= 0) {
-      return dropBuildingPlan({ ...view, blocks: replaceAt(view.blocks, i, settledMessage(view.blocks[i].id, role, content, turnId)) }, turnId);
+      return dropBuildingPlan({ ...view, blocks: replaceAt(view.blocks, i, settled(view.blocks[i].id)) }, turnId);
     }
   }
-  return append(dropBuildingPlan(view, turnId), (id) => settledMessage(id, role, content, turnId));
+  return append(dropBuildingPlan(view, turnId), settled);
 }
 
 /**
@@ -170,7 +172,11 @@ function settleReply(view: ConversationView, { content, turnId, supervisor, runs
  * become part of it. Without a turn id (a reply a surface backfilled from the
  * transcript) the turn is the one the runs' segments streamed in.
  */
-function settleRuns(view: ConversationView, runs: readonly ReplyRun[], role: MessageRole, turnId: string | undefined): ConversationView {
+function settleRuns(view: ConversationView, runs: readonly ReplyRun[], role: MessageRole, turnId: string | undefined, signIn?: RunnerSignIn): ConversationView {
+  // A signed-out failure is the note written last, in the reply's place (writtenOver).
+  const failure = signIn ? runs.at(-1) : undefined;
+  const settle = (id: string, run: ReplyRun, turn: string | undefined) =>
+    (signIn && run === failure ? signedOutFailure(id, run.text, signIn, turn) : settledMessage(id, role, run.text, turn));
   const settled = new Map<number, ReplyRun>();
   let turn = turnId;
   for (const run of runs) {
@@ -183,13 +189,13 @@ function settleRuns(view: ConversationView, runs: readonly ReplyRun[], role: Mes
   const contained = new Set(runs.map((run) => run.segmentId));
   const blocks = view.blocks.flatMap((block, i) => {
     const run = settled.get(i);
-    if (run) return [settledMessage(block.id, role, run.text, turn)];
+    if (run) return [settle(view.blocks[i].id, run, turn)];
     return turn !== undefined && isUnsettledSegment(block, turn) && !contained.has(block.segmentId) ? [] : [block];
   });
   const streamed = new Set(settled.values());
   return runs
     .filter((run) => !streamed.has(run))
-    .reduce((next, run) => append(next, (id) => settledMessage(id, role, run.text, turn)), dropBuildingPlan({ ...view, blocks }, turn));
+    .reduce((next, run) => append(next, (id) => settle(id, run, turn)), dropBuildingPlan({ ...view, blocks }, turn));
 }
 
 // A retracted envelope takes the turn's plan display with it, or its retry

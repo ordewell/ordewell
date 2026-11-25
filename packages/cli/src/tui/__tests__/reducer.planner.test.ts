@@ -89,7 +89,8 @@ describe('/planner', () => {
     expect(stepperOf(state).items.find((i) => i.id === 'claude-code')?.detail).toMatch(/no API key/i);
   });
 
-  it('offers a signed-out agent, flags its row and names its own login', () => {
+  // ADR-0052: listed and flagged, below the choosable rows, and refused as a new pick.
+  it('lists a signed-out agent, flags its row and names its own login', () => {
     const { state } = run('/planner', {
       ...ready,
       runners: [
@@ -100,8 +101,11 @@ describe('/planner', () => {
     });
     const items = stepperOf(state).items;
     const claude = items.find((i) => i.id === 'claude-code');
-    expect(claude).toMatchObject({ warn: true, detail: 'Claude Code is not signed in. Sign in with /login claude-code, or run claude login.' });
-    expect(claude?.disabled).toBeUndefined();
+    expect(claude).toMatchObject({
+      warn: true, disabled: true, detail: 'Signed out · /login claude-code',
+      refusal: 'Claude Code is not signed in. Sign in with /login claude-code, or run claude login. Then pick it again.',
+    });
+    expect(items.map((i) => i.id).indexOf('claude-code')).toBeGreaterThan(items.map((i) => i.id).indexOf('opencode'));
     expect(items.find((i) => i.id === 'codex')).toMatchObject({ detail: expect.stringMatching(/no API key/i) });
     expect(items.find((i) => i.id === 'codex')?.warn).toBeUndefined();
   });
@@ -115,7 +119,8 @@ describe('/planner', () => {
       }],
     });
     expect(stepperOf(state).items.find((i) => i.id === 'qwen-code')).toMatchObject({
-      warn: true, detail: 'Qwen Code is not signed in. Run /key-set and choose OpenRouter to hand it a key.',
+      warn: true, detail: 'Signed out · /key-set',
+      refusal: 'Qwen Code is not signed in. Run /key-set and choose OpenRouter to hand it a key. Then pick it again.',
     });
   });
 
@@ -174,9 +179,11 @@ describe('/planner', () => {
     expect(out.effects).toEqual([saved('claude-code', 'opus', 'low', 'Planner: Claude Code · Claude Opus 5.5 · Low effort')]);
   });
 
-  it('confirms a signed-out pick at error level, with the same words', () => {
+  it('confirms a pick on the signed-out planner in effect at error level, with the same words', () => {
     const out = choose(run('/planner', {
       ...ready,
+      plannerProvider: 'claude-code',
+      orchestratorModel: '',
       runners: [
         { id: 'claude-code', name: 'Claude Code', enabled: true, auth: { state: 'signed-out', loginCommand: ['claude', 'auth', 'login'] } },
         { id: 'codex', name: 'Codex', enabled: true, auth: { state: 'signed-in' } },
@@ -480,7 +487,7 @@ describe('planner and task pickers: sign-in words and effort counts', () => {
     const items = plannerItems(state);
     expect(items.find((i) => i.id === 'claude-code')?.detail).toMatch(/^\(current\) .*\/login claude-code/);
     expect(items.find((i) => i.id === 'codex')?.detail).toContain('signed in');
-    expect(items.find((i) => i.id === 'opencode')?.detail).toContain('sign-in not checked');
+    expect(items.find((i) => i.id === 'opencode')?.detail).toContain('Sign-in not checked');
   });
 
   it('counts the effort rows it offers: levels plus the default row', () => {

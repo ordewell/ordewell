@@ -50,8 +50,8 @@ import type { OrchestratorObserver, StartAdmission } from './TaskOrchestrator';
 import { KeptWorkError, type ExecutionBackend, type OpenLease, type ReservedLease } from './executionLease';
 import type { BudgetHold, NodeBudget } from './TreeLedger';
 import { BUILTIN_MANIFESTS } from '../plugins/builtin';
-import { recordRunnerAuth, signedOutFromFailure } from './runnerAuth';
-import { describeSignIn, TERMINAL_UI_SIGN_IN } from './signInHint';
+import { recordRunnerAuth, signedOutAuth, signedOutFromFailure } from './runnerAuth';
+import { describeSignIn, RunnerSignedOutError, TERMINAL_UI_SIGN_IN } from './signInHint';
 import { compactionStartOf } from './compactionStart';
 import { modeRefusalOf, modeRefusedReason } from './modeRefusal';
 
@@ -1042,11 +1042,12 @@ export class Attempts {
    * agent shows signed out wherever its login is read (ADR-0052). Only the
    * phrase its manifest declares counts, so no other failure becomes a login.
    */
-  private signedOut(attempt: TaskAttempt, said: string): string | null {
+  private signedOut(attempt: TaskAttempt, said: string, err?: unknown): string | null {
     if (attempt.script || attempt.delegated || !said) return null;
     const manifest = this.deps.registry?.get(attempt.runner)?.manifest ?? BUILTIN_MANIFESTS.find((m) => m.name === attempt.runner);
     if (!manifest) return null;
-    const auth = signedOutFromFailure(manifest, said, { ...process.env, ...attempt.env });
+    // An agent's protocol refusal (#49 F2) is typed; only a turn's words are read.
+    const auth = err instanceof RunnerSignedOutError ? signedOutAuth(err.signIn) : signedOutFromFailure(manifest, said, { ...process.env, ...attempt.env });
     if (!auth) return null;
     recordRunnerAuth(attempt.runner, auth, this.deps.workspaceRoot());
     return describeSignIn(auth.signIn, TERMINAL_UI_SIGN_IN);
@@ -1120,7 +1121,7 @@ export class Attempts {
     if (err instanceof UnsealedScriptError) {
       return failed({ leaves: 'failed', summary: summarizeOutput(message, ''), keepWorktree: false, notice: { level: 'error', text: message } });
     }
-    const signedOut = this.signedOut(attempt, message);
+    const signedOut = this.signedOut(attempt, message, err);
     if (err instanceof McpAttachError || err instanceof RunnerStartupExit) {
       const said = signedOut ? withSignIn(signedOut, message) : message;
       return failed({ leaves: 'failed', summary: summarizeOutput(said, message), keepWorktree: true, notice: { level: 'error', text: said } });

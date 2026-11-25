@@ -60,6 +60,8 @@ export { lastServedModel } from './models/TaskLog';
 export { scriptTaskText } from './models/ScriptTask';
 // The VS Code webview words a signed-out agent from the verdict it is handed (ADR-0052).
 export { describeRunnerSignIn, describeSignIn, describeSignInWays, signInAction, signInOfVerdict, TERMINAL_UI_SIGN_IN, type RunnerSignIn, type SignInSyntax } from './services/signInHint';
+// The one readiness-to-choice rule (ADR-0052), for a webview's planner and runner pickers.
+export { orderByChoice, runnerChoice, runnerChoiceRefusal, runnerEntryChoice, runnerEntryReadiness, runnerReadiness, type RunnerChoice, type RunnerReadiness, type RunnerReadinessFields, type RunnerRecoveryKind } from './services/runnerChoice';
 export { daemonWaitLine, daemonStillWaitingLine, DAEMON_STILL_WAITING_MS, DETECTING_AGENTS, DETECTING_AGENTS_DETAIL } from './services/startupWait';
 // The vendors' labels and key variables, pure data a webview may hold: the key entry names the vendor it is for.
 export { VENDORS, PROVIDER_PRIORITY, endpointUrlProblem, type ProviderRegistration } from './services/apiProviders';

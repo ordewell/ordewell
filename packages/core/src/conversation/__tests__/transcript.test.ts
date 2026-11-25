@@ -64,6 +64,31 @@ describe('fromTranscript', () => {
     expect(unkeyed(live.blocks).at(-1)).toEqual(failure);
   });
 
+  // ADR-0052: the runner's manifest named the failure a sign-out, so the surfaces offer that agent's way in from data.
+  it('draws a planner turn that ended signed out as one failure with its sign-in, live and on reload, after its narration', () => {
+    const signIn = { runner: 'claude-code', label: 'Claude Code', login: ['claude', 'auth', 'login'] };
+    const failed = 'Claude Code is not signed in. Sign in with /login claude-code, or run claude auth login. Then try again.\n\nNot logged in · Please run /login';
+    const runs = [
+      { segmentId: 's1', text: 'Reading the repo first.', startedAt: '2026-10-11T10:00:01Z' },
+      { segmentId: 's2', text: failed, startedAt: '2026-10-11T10:00:04Z' },
+    ];
+    const history: ConversationMessage[] = [
+      { role: 'user', content: 'build it', timestamp: '2026-10-11T10:00:00Z' },
+      { role: 'assistant', content: `Reading the repo first.\n\n${failed}`, timestamp: '2026-10-11T10:00:05Z', runs, signIn },
+    ];
+    const expected = [
+      { type: 'message', role: 'user', text: 'build it', streaming: false },
+      { type: 'message', role: 'planner', text: 'Reading the repo first.', streaming: false },
+      { type: 'message', role: 'error', text: failed, streaming: false, signIn },
+    ];
+
+    expect(unkeyed(fromTranscript(history, []).blocks)).toEqual(expected);
+    const live = reduceConversation(fromTranscript(history.slice(0, 1), []), { type: 'planner_message', content: history[1].content, timestamp: history[1].timestamp, runs, signIn });
+    expect(unkeyed(live.blocks)).toEqual(expected);
+    const unrun = reduceConversation(fromTranscript(history.slice(0, 1), []), { type: 'planner_message', content: failed, timestamp: history[1].timestamp, signIn });
+    expect(unkeyed(unrun.blocks).at(-1)).toEqual(expected.at(-1));
+  });
+
   it('shows pending inputs after the landed transcript, with skill notices and run updates in arrival order', () => {
     const view = fromTranscript([
       { role: 'assistant', content: 'Ready.', timestamp: '2026-10-11T10:00:00Z' },

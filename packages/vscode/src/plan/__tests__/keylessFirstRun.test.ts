@@ -155,7 +155,7 @@ describe('VS Code keyless first-run process boundary', () => {
     chatProvider.postMessage = (message) => { messages.push(message); };
     const runner: IRunner = { activeCount: 0, spawn: vi.fn(), stop: vi.fn(), stopAll: vi.fn() };
     const registry = new RunnerRegistry();
-    const modelResolver = { getCachedRunnerModels: () => [], modelsForRunners: async () => ({}), plannerCatalog: async () => [] } as unknown as ModelResolver;
+    const modelResolver = { getCachedRunnerModels: () => [], getRunnerUnlisted: () => ({}), modelsForRunners: async () => ({}), plannerCatalog: async () => [] } as unknown as ModelResolver;
     const session = createSession({
       config, runner, registry, modelResolver,
       notifications: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), confirm: async () => undefined },
@@ -323,7 +323,7 @@ describe('VS Code keyless first-run process boundary', () => {
   });
 
   function selectionFor(h: ReturnType<typeof harness>) {
-    const modelResolver = { plannerCatalog: async () => [] } as unknown as ModelResolver;
+    const modelResolver = { getRunnerUnlisted: () => ({}), plannerCatalog: async () => [] } as unknown as ModelResolver;
     return new PlannerSelection({
       config: h.config, modelResolver,
       plannerModelMemory: new PlannerModelMemory(new SettingsService()),

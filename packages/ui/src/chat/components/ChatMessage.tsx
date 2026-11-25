@@ -1,5 +1,6 @@
 import React, { useCallback, useContext, useId, useMemo, useState } from 'react';
 import MarkdownContent from './MarkdownContent';
+import ErrorSignIn from './ErrorSignIn';
 import TaskHandoff from './TaskHandoff';
 import ReportBody from './ReportBody';
 import type {
@@ -60,6 +61,7 @@ export default function ChatMessage({ block }: { block: MessageBlock }) {
     return (
       <div className={`chat-msg chat-msg-${block.role}`}>
         <span className="chat-msg-content">{block.text}</span>
+        {block.role === 'error' && block.signIn && <ErrorSignIn signIn={block.signIn} />}
       </div>
     );
   }

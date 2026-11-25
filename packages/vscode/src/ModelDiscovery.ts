@@ -1,6 +1,6 @@
 import type * as vscode from 'vscode';
 import {
-  codexSandboxNotice, detectInstalledPlanner, endpointUrlProblem, getProviderMeta, inProcessProvider, isProviderRunner, ModelResolver, PROVIDER_PRIORITY, PROVIDER_SHORT_LABEL, runnerForProvider,
+  codexSandboxNotice, detectInstalledPlanner, endpointUrlProblem, getProviderMeta, inProcessProvider, isProviderRunner, ModelResolver, PROVIDER_PRIORITY, PROVIDER_SHORT_LABEL, runnerForProvider, runnerReadiness,
   type AiProvider, type PlannerBackendId, type CodexSandboxAvailability, type DiscoveredModel, type RunnerInstallation, type RunnerRegistry,
 } from '@ordewell/core';
 import type { ChatViewProvider } from './providers/ChatViewProvider';
@@ -56,6 +56,9 @@ export class ModelDiscovery {
 
   private async push(): Promise<void> {
     const d = this.deps;
+    // A key saved, replaced or removed from Desktop or the TUI since the last
+    // look is read here, and handled as a key saved in this window would be.
+    if (d.config.reloadSavedCredentials()) await d.onApiKeySaved();
     d.modelResolver.refreshRunnerModels();
     // The runner list is being refreshed, so the host is asked again: a user
     // who fixed it while the window was open sees the modes come back.
@@ -119,11 +122,17 @@ export class ModelDiscovery {
     this.warnDegradedDiscovery(degraded.filter((r) => !inProcess.has(r)), degraded.flatMap((r) => inProcess.get(r) ?? []));
 
     const installedRunners = allRunners.filter((p) => installedIds.has(p.manifest.name));
-    const runnerList = installedRunners.map((p) => ({
+    // Each runner's readiness rides along (ADR-0052), read after discovery
+    // answered, so a catalog that listed nothing is told from one still asked.
+    const unlisted = d.modelResolver.getRunnerUnlisted();
+    const runnerList = await Promise.all(installedRunners.map(async (p) => ({
       id: p.manifest.name,
       displayName: p.manifest.displayName,
-    }));
+      readiness: runnerReadiness(await d.runnerInstallation.runnerUsability(p.manifest.name), unlisted[p.manifest.name]),
+    })));
     d.chatProvider.setRunnerList(runnerList);
+    // The planner pills went out before discovery; their readiness reads its answers too.
+    void d.refreshPlannerState().catch((err) => d.log(`Planner state refresh failed: ${err}`));
     // Read again rather than reusing `enabled`: a runner switched on or off
     // while the CLIs answered is saved already, and a list from before it would
     // undo the pill the user just clicked.

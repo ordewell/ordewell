@@ -7,6 +7,8 @@ interface PlannerLoginActionProps {
   className: string;
   ariaLabel?: string;
   title?: string;
+  /** The idle words: "Log in" beside an agent's name, "Sign in" where an error offers it. */
+  label?: string;
 }
 
 /**
@@ -19,7 +21,7 @@ interface PlannerLoginActionProps {
  * `.planner-login` carries that shared look; the caller's class only chooses
  * where it sits (a pill segment or a row's action).
  */
-export default function PlannerLoginAction({ onLogIn, pending, className, ariaLabel, title }: PlannerLoginActionProps) {
+export default function PlannerLoginAction({ onLogIn, pending, className, ariaLabel, title, label = 'Log in' }: PlannerLoginActionProps) {
   return (
     <button
       type="button"
@@ -33,7 +35,7 @@ export default function PlannerLoginAction({ onLogIn, pending, className, ariaLa
       <span className="planner-login-state">
         {pending
           ? <><span className="planner-login-spinner" aria-hidden="true" /><span className="planner-login-pending-label">Signing in…</span></>
-          : 'Log in'}
+          : label}
       </span>
     </button>
   );

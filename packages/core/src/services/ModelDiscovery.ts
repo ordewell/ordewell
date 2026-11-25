@@ -12,6 +12,8 @@ import { withHostCredentials } from './hostCredentials';
 import { discoverAppServerModels, type AppServerModel } from './harness/appServerModels';
 import { discoverAcpModels, type AcpModelsAnswer } from './harness/acpModels';
 import { discoverProviderModels } from './harness/ordewell/models';
+import { recordRunnerAuth, runnerAuthClock, runnerSignIn, signedOutAuth } from './runnerAuth';
+import { RunnerCredentialRefusal } from './signInHint';
 
 export type { AppServerModel } from './harness/appServerModels';
 
@@ -76,16 +78,40 @@ export const defaultAcpClient: AcpClientImpl = (command, args, options) =>
   discoverAcpModels(command, args, { timeout: options?.timeout, env: options?.env });
 
 /**
+ * Why a runner's last discovery listed nothing (ADR-0060, R9; #46 F6), or
+ * `pending` while it is still being asked. `signed-out` and `no-credential`
+ * are blockers: the agent refused, or its credential hook found no key to
+ * start it with, and a refresh alone cannot fill the list. `no-choice` is an
+ * agent that answered with no model to choose, so a planner on it runs on the
+ * agent's own default model. `no-answer` is an ask that got nothing back (a
+ * timeout, a failed start, a fallback-only answer), which says nothing about
+ * the sign-in. `no-models` is a discovery that finished and listed nothing,
+ * from a runner with no default of its own to run on.
+ */
+export type UnlistedReason = 'pending' | 'signed-out' | 'no-credential' | 'no-choice' | 'no-answer' | 'no-models';
+
+/** What one ACP ask said, before the manifest's other methods answer. */
+type AcpOutcome =
+  | { kind: 'signed-in' | 'signed-out' | 'no-choice' | 'no-answer' }
+  | { kind: 'no-credential'; refused: string | null };
+
+/**
  * The environment an ACP agent is asked under: the runner's, then what its
  * profile starts it with, then the key its credential hook reads for this one
- * start (ADR-0060, R9). Null when the hook finds no key, so nothing is spawned.
+ * start (ADR-0060, R9). A refusal when the hook finds no key, so nothing is
+ * spawned, carrying the hook's own words only when it refused in the shared
+ * type: any other throw could quote what it read.
  */
-async function acpStartEnv(acp: NonNullable<RunnerManifest['modelDiscovery']['acp']>, env: RunnerEnv): Promise<RunnerEnv | null> {
+async function acpStartEnv(acp: NonNullable<RunnerManifest['modelDiscovery']['acp']>, env: RunnerEnv): Promise<{ env: RunnerEnv } | { refused: string | null }> {
   const started = { ...env, ...acp.env };
-  if (!acp.credentials) return started;
-  // The hook reads the variables the agent would have without the profile's, as at a task's start.
-  const credential = await acp.credentials({ env }).catch(() => undefined);
-  return credential === undefined ? null : { ...started, ...credential };
+  if (!acp.credentials) return { env: started };
+  try {
+    // The hook reads the variables the agent would have without the profile's, as at a task's start.
+    const credential = await acp.credentials({ env });
+    return { env: { ...started, ...credential } };
+  } catch (err) {
+    return { refused: err instanceof RunnerCredentialRefusal ? err.message : null };
+  }
 }
 
 function effortVariant(effort: string): { id: string; label: string } {
@@ -467,9 +493,13 @@ export class ModelDiscovery {
    * surface shows the way to sign in rather than an empty list that a refresh
    * cannot fill (ADR-0060, R9).
    */
-  private unlisted: Map<string, 'signed-out'> = new Map();
+  private unlisted: Map<string, Exclude<UnlistedReason, 'pending'>> = new Map();
+  /** The credential hook's own refusal, for a runner unlisted as `no-credential`. */
+  private refusals: Map<string, string> = new Map();
   /** Bumped by every `clear()`: a discovery begun before one answers its own lookups but fills no cache. */
   private generation = 0;
+  /** Bumped per runner by {@link forget}, as `generation` is for every runner. */
+  private forgotten: Map<string, number> = new Map();
   private registry: RunnerRegistry;
   private execImpl: ExecImpl;
   private fetchImpl?: typeof fetch;
@@ -478,6 +508,7 @@ export class ModelDiscovery {
   private readFileImpl: (path: string) => string | null;
   private now: () => number;
   private env: () => Promise<RunnerEnv>;
+  private workspace: () => string | undefined;
 
   constructor(
     registry: RunnerRegistry,
@@ -488,7 +519,10 @@ export class ModelDiscovery {
     now: () => number = Date.now,
     env: () => Promise<RunnerEnv> = async () => process.env,
     acpClient: AcpClientImpl = defaultAcpClient,
+    /** The workspace whose account `env` is, under which an ACP answer is recorded as the sign-in verdict (ADR-0052). */
+    workspace: () => string | undefined = () => undefined,
   ) {
+    this.workspace = workspace;
     this.registry = registry;
     this.execImpl = execImpl;
     this.fetchImpl = fetchImpl;
@@ -573,23 +607,49 @@ export class ModelDiscovery {
     }
 
     const generation = this.generation;
+    const forgotten = this.forgotten.get(runner) ?? 0;
+    // Captured as the ask begins: the folder can move while the agent answers,
+    // and a login or recheck since makes its answer stale (ADR-0052).
+    const workspace = this.workspace();
+    const asOf = runnerAuthClock();
     // Every runner is asked under the environment it is launched with: its
     // account, its home and its own files can all move with it.
     const env = await this.env().catch(() => process.env);
     const found = await this.discoverFromSources(manifest, env);
     const models = this.withSettingsModels(found.models, manifest, env);
+    this.recordSignIn(manifest, found.acp, workspace, asOf);
     // Asked before a refresh: what the runner says now is the next lookup's to learn.
-    if (generation !== this.generation) return models;
-    if (found.signedOut && models.length === 0) this.unlisted.set(runner, 'signed-out');
-    else this.unlisted.delete(runner);
+    if (generation !== this.generation || forgotten !== (this.forgotten.get(runner) ?? 0)) return models;
+    this.refusals.delete(runner);
+    if (models.length > 0 || found.acp?.kind === 'signed-in') this.unlisted.delete(runner);
+    // With no handshake to say why: a cacheable answer is the runner's own
+    // complete, empty catalog; any other is a degraded one, which says nothing.
+    else if (!found.acp) this.unlisted.set(runner, found.cacheable ? 'no-models' : 'no-answer');
+    else {
+      this.unlisted.set(runner, found.acp.kind);
+      if (found.acp.kind === 'no-credential' && found.acp.refused) this.refusals.set(runner, found.acp.refused);
+    }
     if (found.cacheable && models.length > 0) this.cache.set(runner, models);
     else this.misses.set(runner, { models, at: this.now() });
     return models;
   }
 
-  private async discoverFromSources(manifest: RunnerManifest, env: RunnerEnv): Promise<{ models: DiscoveredModel[]; cacheable: boolean; signedOut?: true }> {
+  /**
+   * What discovery's own ACP handshake says of the sign-in, recorded as a
+   * turn's would be (#46 F5): an auth-required answer or a hook with no key
+   * is signed out, and a session the agent opened is signed in. An ask that
+   * got no answer says nothing.
+   */
+  private recordSignIn(manifest: RunnerManifest, acp: AcpOutcome | undefined, workspace: string | undefined, asOf: number): void {
+    if (!acp || acp.kind === 'no-answer') return;
+    const options = { source: 'discovery' as const, asOf };
+    if (acp.kind === 'signed-in' || acp.kind === 'no-choice') recordRunnerAuth(manifest.name, { state: 'signed-in' }, workspace, options);
+    else recordRunnerAuth(manifest.name, signedOutAuth(runnerSignIn(manifest), acp.kind === 'no-credential' ? 'no provider key' : undefined), workspace, options);
+  }
+
+  private async discoverFromSources(manifest: RunnerManifest, env: RunnerEnv): Promise<{ models: DiscoveredModel[]; cacheable: boolean; acp?: AcpOutcome }> {
     let cacheable = true;
-    let signedOut: true | undefined;
+    let acp: AcpOutcome | undefined;
     const discovery = manifest.modelDiscovery;
 
     // An in-process runner (ADR-0070) offers its own provider's catalog, on
@@ -615,15 +675,17 @@ export class ModelDiscovery {
     // 0b. ACP discovery: the agent's own session options. A signed-out or
     //     silent agent offers nothing; the remaining methods answer instead.
     if (discovery.method === 'acp' && discovery.acp) {
-      const acpEnv = await acpStartEnv(discovery.acp, env);
+      const started = await acpStartEnv(discovery.acp, env);
       const command = runnerCommand(manifest);
-      const answer = acpEnv && command ? await this.acpClient(command, discovery.acp.args, { env: acpEnv }) : null;
-      if (Array.isArray(answer) && answer.length > 0) return { models: mergeCanonicalAliases(answer, manifest), cacheable: true };
+      const answer = 'env' in started && command ? await this.acpClient(command, discovery.acp.args, { env: started.env }) : null;
+      if (Array.isArray(answer) && answer.length > 0) return { models: mergeCanonicalAliases(answer, manifest), cacheable: true, acp: { kind: 'signed-in' } };
       // No answer (signed out, timeout, failed start) is transient and must
       // not be cached behind a working fallback; an agent that answered with
       // no model choice is a stable answer, so the fallback may be cached.
       if (!Array.isArray(answer)) cacheable = false;
-      if (answer === 'signed-out') signedOut = true;
+      acp = 'refused' in started ? { kind: 'no-credential', refused: started.refused }
+        : answer === 'signed-out' ? { kind: 'signed-out' }
+          : Array.isArray(answer) ? { kind: 'no-choice' } : { kind: 'no-answer' };
     }
 
     // 1. Try API discovery first (e.g. Anthropic Models API for Claude Code).
@@ -632,7 +694,7 @@ export class ModelDiscovery {
     if (discovery.apiDiscovery) {
       const apiModels = await discoverFromApi(manifest, discovery.apiDiscovery, env, this.fetchImpl);
       if (apiModels && apiModels.length > 0) {
-        return { models: applyVariants(mergeCanonicalAliases(apiModels, manifest), manifest), cacheable, signedOut };
+        return { models: applyVariants(mergeCanonicalAliases(apiModels, manifest), manifest), cacheable, acp };
       }
     }
 
@@ -642,9 +704,9 @@ export class ModelDiscovery {
       // A fallback-only result means the CLI wasn't reachable — don't cache
       // it, so a transient failure (PATH, network, cold start) heals on the
       // next lookup instead of persisting until an explicit refresh.
-      return { models: result.models, cacheable: cacheable && !result.fromFallback, signedOut };
+      return { models: result.models, cacheable: cacheable && !result.fromFallback, acp };
     }
-    return { models: buildFallbackModels(manifest), cacheable, signedOut };
+    return { models: buildFallbackModels(manifest), cacheable, acp };
   }
 
   /**
@@ -676,13 +738,39 @@ export class ModelDiscovery {
     this.cache.clear();
     this.misses.clear();
     this.unlisted.clear();
+    this.refusals.clear();
     // A refresh asks again at once; it must not join a run that began before it.
     this.inflight.clear();
   }
 
-  /** Why each runner whose last discovery listed nothing did, where it is known; never triggers discovery. */
-  whyUnlisted(): Record<string, 'signed-out'> {
-    return Object.fromEntries(this.unlisted);
+  /**
+   * Forget one runner's catalog and why it listed nothing, so its next lookup
+   * asks it again: a user's recheck of its sign-in (ADR-0052), never a
+   * periodic refresh, which leaves a catalog cached until `clear()`.
+   */
+  forget(runner: string): void {
+    this.forgotten.set(runner, (this.forgotten.get(runner) ?? 0) + 1);
+    this.cache.delete(runner);
+    this.misses.delete(runner);
+    this.unlisted.delete(runner);
+    this.refusals.delete(runner);
+    this.inflight.delete(runner);
+  }
+
+  /**
+   * Why each runner whose last discovery listed nothing did, where it is
+   * known, and `pending` for one still being asked with nothing held; never
+   * triggers discovery.
+   */
+  whyUnlisted(): Record<string, UnlistedReason> {
+    const why: Record<string, UnlistedReason> = Object.fromEntries(this.unlisted);
+    for (const runner of this.inflight.keys()) if (!this.cache.has(runner)) why[runner] = 'pending';
+    return why;
+  }
+
+  /** The credential hook's own refusal for a runner unlisted as `no-credential`, credential-free by its type. */
+  credentialRefusal(runner: string): string | undefined {
+    return this.refusals.get(runner);
   }
 
   /** Whatever `discover()` has already cached for `runner` — never triggers discovery. */

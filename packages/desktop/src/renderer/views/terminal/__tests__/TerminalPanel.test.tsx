@@ -142,7 +142,8 @@ describe('the terminal panel', () => {
     expect(screen.getByRole('tab', { name: /Codex login/ })).toBeInTheDocument();
 
     act(() => w.ptys[0]?.emit({ kind: 'exit', exitCode: 0 }));
-    await expect(login.ended).resolves.toBeUndefined();
+    // With the login's own exit code, which decides whether the host rechecks its sign-in (ADR-0052).
+    await expect(login.ended).resolves.toBe(0);
   });
 
   it('shows the shell\'s output and sends what is typed to that shell', async () => {

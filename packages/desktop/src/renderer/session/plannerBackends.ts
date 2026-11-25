@@ -29,7 +29,12 @@ export function plannerBackendsFor(
         ? { usable: false, reason: entry.reason ?? HARNESS_PLANNER_UNAVAILABLE_REASON, ...(entry.auth ? { auth: entry.auth } : {}) }
         : { usable: true, ...(entry.auth ? { auth: entry.auth } : {}) };
   }
-  const backends: PlannerBackend[] = builtinPlannerBackends(usability, providers);
+  // The daemon's readiness rides on each agent's row, read from the same
+  // record and discovery answer it judges a pick by (ADR-0052).
+  const backends: PlannerBackend[] = builtinPlannerBackends(usability, providers).map((backend) => {
+    const readiness = backend.kind === 'harness' ? installed.get(backend.runner ?? backend.id)?.readiness : undefined;
+    return readiness ? { ...backend, readiness } : backend;
+  });
   // An agent the daemon says can plan is still offered when core's catalog,
   // which names the shipped agents, does not. A runner that cannot plan is no
   // harness planner: a provider runner above all, whose id is a vendor planner's
@@ -45,6 +50,7 @@ export function plannerBackendsFor(
       usable: runner.usable !== false,
       ...(runner.usable === false ? { reason: runner.reason ?? HARNESS_PLANNER_UNAVAILABLE_REASON } : {}),
       ...(runner.auth ? { auth: runner.auth } : {}),
+      ...(runner.readiness ? { readiness: runner.readiness } : {}),
     });
   }
   return backends;

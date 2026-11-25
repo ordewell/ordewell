@@ -7,8 +7,10 @@ import {
   NoPlanError,
   PlanEditError,
   PlannerNotReadyError,
+  RunnerSignedOutError,
   PlannerTurnDiscardedError,
   PlannerTurnStoppedError,
+  RunnerNotReadyError,
   SessionHeldError,
   SessionNotFoundError,
   TaskControlError,
@@ -81,6 +83,10 @@ function classify(err: unknown): Classified | undefined {
   if (err instanceof WorkspaceNotFoundError) return { status: 400, code: 'workspace_not_found' };
   // 409: the request is fine; the machine is not set up to serve it yet.
   if (err instanceof PlannerNotReadyError) return { status: 409, code: 'planner_not_ready' };
+  // 409: the pick is fine; the runner is not ready to take it (ADR-0052).
+  if (err instanceof RunnerNotReadyError) return { status: 409, code: 'runner_not_ready' };
+  // 409 too: the agent's own answer that its user is signed out, which the user's sign-in ends (ADR-0052).
+  if (err instanceof RunnerSignedOutError) return { status: 409, code: 'runner_signed_out' };
   // 409, not 5xx: the turn ending is what the user asked for (or a plan they
   // dropped), and a 5xx would log a stack for every Stop.
   if (err instanceof PlannerTurnStoppedError) return { status: 409, code: 'planner_turn_stopped' };
@@ -134,6 +140,8 @@ export function failure(
     error: (err instanceof Error && err.message) || message,
     ...(classified ? { code: classified.code } : {}),
     ...(err instanceof PlannerNotReadyError ? { plannerNotReady: err.reason } : {}),
+    ...(err instanceof RunnerNotReadyError ? { runnerNotReady: { runner: err.runner, readiness: err.readiness } } : {}),
+    ...(err instanceof RunnerSignedOutError ? { signIn: err.signIn } : {}),
     ...(err instanceof SessionHeldError ? { sessionHeld: err.held } : {}),
     ...(err instanceof UserGitError && err.detail.held ? { landingBranchHeld: err.detail.held } : {}),
     ...(err instanceof UserGitError && err.detail.difference ? { confirmStale: err.detail.difference } : {}),

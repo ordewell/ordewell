@@ -1,5 +1,5 @@
 import type * as vscode from 'vscode';
-import { augmentedPath, describeSignInWays, inProcessProvider, providerRunnerLoginNote, runnerForProvider, TERMINAL_UI_SIGN_IN, withPath, workspaceEnvOf, type INotification, type PlannerBackendId, type RunnerInstallation, type RunnerRegistry } from '@ordewell/core';
+import { augmentedPath, checksSignInByHandshake, describeSignInWays, inProcessProvider, providerRunnerLoginNote, recheckRunnerSignIn, runnerForProvider, TERMINAL_UI_SIGN_IN, withPath, workspaceEnvOf, type INotification, type ModelResolver, type PlannerBackendId, type RunnerInstallation, type RunnerRegistry } from '@ordewell/core';
 import type { HostToWebview } from '@ordewell/ui/protocol';
 
 const POLL_MS = 2_000;
@@ -13,7 +13,9 @@ const TERMINAL_LOST_MESSAGE = 'The login terminal stopped before sign-in finishe
 const PROBE_FAILED_MESSAGE = "The sign-in could not be checked: the agent's status probe failed.";
 
 export interface PlannerLoginDeps {
-  runnerInstallation: Pick<RunnerInstallation, 'runnerUsability' | 'refresh'>;
+  runnerInstallation: Pick<RunnerInstallation, 'runnerUsability' | 'refresh'> & Partial<Pick<RunnerInstallation, 'recheck'>>;
+  /** The workspace's catalog, whose ACP handshake rechecks an agent with no status command (ADR-0052). */
+  modelResolver?: Pick<ModelResolver, 'rediscoverRunner'>;
   /** Only to name the agent and refuse an id the host does not know. */
   runnerRegistry: Pick<RunnerRegistry, 'getManifest'>;
   config: { readonly aiProvider: PlannerBackendId };
@@ -217,11 +219,14 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
         break;
       }
     }
+    const ended = closed || terminal.exitStatus !== undefined;
     outcome = signedIn
       ? { ok: true }
       : probeFailed
         ? { ok: false, message: PROBE_FAILED_MESSAGE }
-        : { ok: false, message: closed || terminal.exitStatus !== undefined ? CLOSED_MESSAGE : TIMEOUT_MESSAGE };
+        : ended && checksSignInByHandshake(manifest)
+          ? await recheckAfterLogin(deps, runner, label)
+          : { ok: false, message: ended ? CLOSED_MESSAGE : TIMEOUT_MESSAGE };
   } catch (err) {
     // A terminal disposed between create and send must still end the attempt:
     // the webview clears its pending button only on `plannerLoginEnded`, and
@@ -232,4 +237,39 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
     closedListener.dispose();
   }
   await end(outcome.ok, outcome.message);
+}
+
+/**
+ * An agent with no status command never reads signed in on a poll, so the
+ * terminal closing is the user's word that the login is done: it is rechecked
+ * once, the record forgotten and the agent asked by its own handshake, and
+ * only that answer is the verdict (ADR-0052, #46 F7). The login runs inside a
+ * shell, so its exit status is not known here; a cancelled login is caught by
+ * the handshake's refusal, which records the blocker again.
+ */
+async function recheckAfterLogin(deps: PlannerLoginDeps, runner: string, label: string): Promise<{ ok: boolean; message?: string }> {
+  const installation = deps.runnerInstallation;
+  if (!installation.recheck) return { ok: false, message: CLOSED_MESSAGE };
+  const recheck = installation.recheck.bind(installation);
+  let state: string | undefined;
+  try {
+    state = (await recheckRunnerSignIn(runner, {
+      installation: { refresh: () => installation.refresh(), recheck, runnerUsability: (r) => installation.runnerUsability(r) },
+      ...(deps.modelResolver ? { resolver: deps.modelResolver } : {}),
+      manifests: deps.runnerRegistry,
+    })).auth?.state;
+  } catch (err) {
+    deps.log?.(`The ${label} recheck after login failed: ${err instanceof Error ? err.message : String(err)}`);
+    return { ok: false, message: PROBE_FAILED_MESSAGE };
+  }
+  if (state === 'signed-in') return { ok: true };
+  // What the recheck recorded changed what both roles show, signed in or not.
+  try {
+    await deps.sendState();
+  } catch (err) {
+    deps.log?.(`Planner state refresh after the ${label} recheck failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return state === 'signed-out'
+    ? { ok: false, message: `${label} still reports not logged in.` }
+    : { ok: false, message: `The login finished, but ${label} cannot say whether it is signed in. Send again to try it.` };
 }

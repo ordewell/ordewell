@@ -65,7 +65,7 @@ describe('a signed-out planner', () => {
     expect(pill().title).toBe('Claude Code is not signed in. Sign in with /login claude-code, or run claude auth login.');
   });
 
-  it('keeps a signed-out agent pickable', () => {
+  it('keeps a signed-out agent listed, after the ready ones, and refuses a new pick of it (ADR-0052)', () => {
     post({
       type: 'setPlannerBackends',
       backends: [signedOutClaude, { id: 'openrouter', label: 'OpenRouter', kind: 'vendor', usable: true }],
@@ -73,9 +73,11 @@ describe('a signed-out planner', () => {
     });
     api.post.mockClear();
 
-    fireEvent.click(pill());
+    expect([...document.querySelectorAll('.planner-pill')].map((p) => p.textContent)).toEqual(['OpenRouter', 'Claude Code']);
+    fireEvent.click(pill('Claude Code'));
 
-    expect(api.post).toHaveBeenCalledWith({ type: 'setPlanner', provider: 'claude-code', requestId: expect.any(String) });
+    expect(pill('Claude Code').getAttribute('aria-disabled')).toBe('true');
+    expect(api.post).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'setPlanner' }));
   });
 
   it('does not flag a signed-in pill', () => {
@@ -141,10 +143,13 @@ describe('a signed-out planner', () => {
   });
 
   it('names the agent a pending planner switch lands on, first in the list', () => {
+    // Codex is picked while it reads signed in, and has signed out by the time
+    // the host lists it again: the switch is still with the host.
+    post({ type: 'setPlannerBackends', backends: [signedOutClaude, { ...signedOutCodex, auth: { state: 'signed-in', loginCommand: ['codex', 'login'] } }], provider: 'claude-code', runner: 'claude-code' });
+    fireEvent.click(pill('Codex'));
     post({ type: 'setPlannerBackends', backends: [signedOutClaude, signedOutCodex], provider: 'claude-code', runner: 'claude-code' });
     // The host has not answered the switch yet: the empty state already names
     // Codex, while the saved config still points at Claude Code.
-    fireEvent.click(pill('Codex'));
     expect(authRows()[0].dataset.runner).toBe('codex');
     expect(authRow('codex')?.querySelector('.planner-auth-warning-text')?.textContent).toBe('Codex is not signed in. Sign in with /login codex, or run codex login.');
     api.post.mockClear();
@@ -165,12 +170,12 @@ describe('a signed-out planner', () => {
     // The shared class is what gives both placements one look.
     expect(segments[1].className).toContain('planner-login');
     expect(segments[0].textContent).toBe('Claude Code');
-    expect(segments[1].textContent).toBe('Log in');
+    expect(segments[1].textContent).toBe('Sign in');
     // The login is still the agent's own action, not a second way to select it.
-    expect(segments[1].getAttribute('aria-label')).toBe('Log in to Claude Code');
+    expect(segments[1].getAttribute('aria-label')).toBe('Sign in to Claude Code');
   });
 
-  it('keeps the capsule login to the "Log in" width and spins alone while pending', () => {
+  it('keeps the capsule login to the "Sign in" width and spins alone while pending', () => {
     post({ type: 'setPlannerBackends', backends: [signedOutClaude], provider: 'claude-code', runner: 'claude-code' });
     const style = document.createElement('style');
     style.textContent = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf8');
@@ -331,7 +336,7 @@ describe('a signed-out runner', () => {
     expect(codex.className).toContain('signed-out');
     expect(codex.querySelector('.planner-auth-dot')).not.toBeNull();
     expect(codex.title).toBe('Codex is not signed in. Sign in with /login codex, or run codex login.');
-    expect(runnerLogin('Codex')?.getAttribute('aria-label')).toBe('Log in to Codex');
+    expect(runnerLogin('Codex')?.getAttribute('aria-label')).toBe('Sign in to Codex');
     api.post.mockClear();
 
     fireEvent.click(runnerLogin('Codex')!);

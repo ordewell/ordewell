@@ -204,6 +204,11 @@ export interface PickerItem {
    * which cannot be chosen at all.
    */
   warn?: boolean;
+  /**
+   * A new pick of this row is refused with these words, its way back in: a
+   * blocked runner (ADR-0052). Enter, or ticking it on, says them instead.
+   */
+  refusal?: string;
 }
 
 /** What the runtime should do with the item(s) the user picks. */
@@ -423,6 +428,12 @@ export function newestRemovable(tv: TaskLogState): number {
 /** What a force send took out of the queue and the composer, glued into the one message it sent. */
 export interface ForcedPrompt {
   text: string;
+}
+
+/** A turn failure drawn ahead of its saved copy: its text, and the id of the user line the turn answered (null before any). */
+export interface FailureAhead {
+  text: string;
+  afterUser: string | null;
 }
 
 /**
@@ -677,6 +688,12 @@ export interface TuiState {
    * It holds what the send took, so a send that itself fails can give it back.
    */
   forceSendPending: ForcedPrompt | null;
+  /**
+   * A turn's failure this view drew from the call's answer before the daemon's
+   * saved copy of it arrived on the stream: the text, and the user line the
+   * turn answered (see `reducers/turnFailure.ts`).
+   */
+  failureAhead: FailureAhead | null;
   toast: string;
   rows: number;
   cols: number;
@@ -930,6 +947,7 @@ export const STATE_SCOPE = {
   stopArmToken: 'screen',
   stopRequested: 'session',
   forceSendPending: 'session',
+  failureAhead: 'session',
   toast: 'screen',
   rows: 'screen',
   cols: 'screen',
@@ -1034,6 +1052,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     stopArmToken: 0,
     stopRequested: false,
     forceSendPending: null,
+    failureAhead: null,
     toast: '',
     rows: 24,
     cols: 80,
