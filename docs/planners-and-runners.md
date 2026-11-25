@@ -363,7 +363,12 @@ history, which `/key-set` avoids. `/key` still opens the same key entry.
 
 VS Code keeps keys in its secret storage, through `/key-set` or **Ordewell: Configure API
 Key**. Without one there, it reads its API key settings, such as
-`ordewell.openAiApiKey`, and then exported variables. Custom's endpoint goes in the
+`ordewell.openAiApiKey`, then exported variables, and last the keys the other surfaces
+saved to `~/.ordewell/.env`. It reads that file when the window starts and again on each
+model refresh, so a key saved, replaced or removed there shows the next time the model
+list refreshes. A key from that file goes only to the endpoint saved with it, or to the
+provider's default: a workspace setting or a project's `.ordewell/env` cannot send it
+elsewhere. VS Code never copies it into its secret storage. Custom's endpoint goes in the
 `ordewell.openaiCompatibleBaseUrl` user setting, which a workspace cannot set, since
 the endpoint is sent your key.
 
