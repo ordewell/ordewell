@@ -71,18 +71,19 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   card over it names the wait ("Starting Ordewell's daemon on port 3742…");
   five seconds in, it adds where the daemon's log is, in the line `ordewell
   tui` prints. The Sessions sidebar says the daemon is starting, not that it
-  is "back". Nothing becomes usable any sooner or later: every control still
-  waits for the daemon.
-- **The desktop app learns its daemon is up without probing a closed port.**
-  While the daemon it started comes up, the app reads the PID file the daemon
-  writes once it listens, then asks it once over HTTP. Before, it probed the
-  port every 250 ms, and on Windows each probe before the daemon listened was
-  refused only after about a second. Giving up after 15 seconds, a port
-  another program holds, a daemon someone else started and a refused token end
-  as they did.
-- **Checking which coding agents are installed and signed in, and which
-  models they offer, no longer flashes a console window on Windows** when the
-  daemon runs without one, as the desktop app's does.
+  is "back". Nothing becomes usable any sooner or later: what waited for the
+  daemon still does.
+- **The desktop app waits for the daemon it started on its PID file.** While
+  that daemon comes up, the app reads the PID file the daemon writes once it
+  listens, every 50 ms, then asks it once over HTTP. Before, it asked over
+  HTTP every 250 ms, so it can now learn the daemon is up up to about one
+  such interval sooner. Giving up after 15 seconds, a port another program
+  holds, a daemon someone else started and a refused token end as they did.
+- **Checking whether coding agents are installed and signed in, listing
+  models through an agent's command line, and reading a workspace's direnv no
+  longer flash a console window on Windows** when the daemon runs without
+  one, as the desktop app's does. Codex's and ACP agents' model lists, read
+  from a long-running agent process, still spawn as before.
 
 ## [0.14.12] - 2026-11-25
 

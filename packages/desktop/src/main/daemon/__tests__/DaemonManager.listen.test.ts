@@ -27,7 +27,7 @@ interface Child extends OwnedProcess {
  * A port, the PID file beside it, and the children forked onto it. A child
  * holds the port only once the test says it listens, as a starting daemon
  * does; until then every probe is a connection refused, which `refused`
- * counts: on Windows each one costs about a second.
+ * counts.
  */
 function world(options: { pidFile?: { read(): Promise<number | undefined>; write(pid: number): void } } = {}) {
   let holder: DaemonProbe = { kind: 'unreachable' };

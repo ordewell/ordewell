@@ -7,9 +7,11 @@ import { defaultDeps as workspaceEnvDeps } from '../workspaceEnv';
 
 /**
  * The agent probes a daemon runs at startup (is it installed, is it signed
- * in, which models, the workspace's direnv) each spawn a console program. On
- * Windows a GUI host, the desktop app's daemon, would flash a console window
- * for every one of them unless the spawn asks for none. Each probe is run
+ * in, which models its command line lists, the workspace's direnv) each
+ * spawn a console program. Codex's and ACP agents' model lists go through
+ * RunnerProcess instead, which this does not cover. On Windows a GUI host,
+ * the desktop app's daemon, would flash a console window for every one of
+ * them unless the spawn asks for none. Each probe is run
  * here through its real default against a recording child_process, so the
  * option is pinned with the ones the spawn already passed.
  */

@@ -24,8 +24,8 @@ export interface DaemonManagerDeps {
   /**
    * The PID the port's PID file names, or undefined when it names none. The
    * daemon writes that file only once it listens (web `daemon.ts`), so a
-   * start waits on it rather than on refused connections, which on Windows
-   * take about a second each. Absent, a start is polled over HTTP throughout.
+   * start waits on it and then asks over HTTP once, rather than polling the
+   * port. Absent, a start is polled over HTTP throughout.
    */
   pidFileOwner?: (port: number) => Promise<number | undefined>;
   /** Defaults to setTimeout; a test drives it by hand. */
