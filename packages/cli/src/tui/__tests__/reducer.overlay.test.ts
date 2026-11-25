@@ -848,7 +848,7 @@ describe('plain confirms', () => {
 
     expect(state.overlay).toBeNull();
     expect(state.sessionId).toBeNull();
-    expect(effects).toEqual([{ type: 'closeSession', sessionId: 's1' }]);
+    expect(effects).toEqual([{ type: 'closeSession', sessionId: 's1' }, { type: 'loadIsolationPreview' }]);
   });
 
   it('escape cancels without an effect', () => {

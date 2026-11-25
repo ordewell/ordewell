@@ -27,7 +27,7 @@ import { classifyTurn, newestSession, plannerApprovals, replyLanded } from './li
 import { REDACTED, redactJson, redactor } from './lib/redact.mjs';
 import { citedOnly, questionsFor, rubricPrompt } from './lib/rubric.mjs';
 import { applyPatches, ensureTemplate, fixtureOf, linkTree, treeHash, workParent } from './lib/target.mjs';
-import { cliMain, controlSha, ensureBuild, resolveRef } from './lib/builds.mjs';
+import { cliMain, controlSha, ensureBuild, installEnv, resolveRef } from './lib/builds.mjs';
 import { ptyCommand, shellQuote, stripAnsi, typed } from './lib/tui.mjs';
 
 const goals = loadGoals();
@@ -839,7 +839,20 @@ describe('where the run data goes', () => {
 });
 
 describe('a build outside the repository', () => {
-  it('is a worktree of the checkout, found again by the next run', async () => {
+  it('keeps an allow-scripts list npm run exported out of a nested install, in either spelling', () => {
+    const env = installEnv({ PATH: 'p', npm_config_allow_scripts: 'a', 'NPM_CONFIG_ALLOW-SCRIPTS': 'b', npm_config_cache: 'c' });
+    assert.deepEqual(env, { PATH: 'p', npm_config_cache: 'c' });
+  });
+
+  it('is a worktree of the checkout, found again by the next run', async (t) => {
+    // As `npm run test:bench` exports it from a user's .npmrc, which npm then
+    // refuses in a project install, so every host proves the build keeps it out.
+    const exported = process.env.npm_config_allow_scripts;
+    process.env.npm_config_allow_scripts = 'fixture-allowed';
+    t.after(() => {
+      if (exported === undefined) delete process.env.npm_config_allow_scripts;
+      else process.env.npm_config_allow_scripts = exported;
+    });
     const root = tmp();
     const source = path.join(root, 'source');
     const git = (...args) => execFileSync('git', args, { cwd: source, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -850,7 +863,10 @@ describe('a build outside the repository', () => {
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: `@fixture/${pkg}`, version: '1.0.0', scripts: { build: `node -e "require('fs').mkdirSync('dist',{recursive:true});${pkg === 'cli' ? "require('fs').writeFileSync('dist/main.js','ok')" : ''}"` } }));
     }
-    execFileSync('npm', ['install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: source, stdio: 'ignore', shell: process.platform === 'win32' });
+    const lock = spawnSync('npm', ['install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund'], {
+      cwd: source, encoding: 'utf8', env: installEnv(process.env), shell: process.platform === 'win32',
+    });
+    assert.equal(lock.status, 0, `npm install exited ${lock.status}: ${lock.stderr}${lock.error?.message ?? ''}`);
     git('init', '-q');
     git('-c', 'user.email=t@t', '-c', 'user.name=t', 'add', '-A');
     git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'fixture');

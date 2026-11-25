@@ -233,7 +233,13 @@ a user message during a wake-up turn is held as a queued prompt.
   without holding the run: an edit is checked against the tasks as they stand
   when it applies, so a task that started meanwhile refuses it.
 - **Pending turns are persisted on the plan**, so a daemon restart neither
-  loses a user's message nor a wake-up batch not yet delivered.
+  loses a user's message nor a wake-up batch not yet delivered. The
+  conversation's opening goal is one from the moment the planner gate admits
+  it, the opening's own turn's to land and no other's: the session is saved,
+  and listed on every surface, while its first turn runs, and an opening that
+  fails or is stopped keeps the goal in the transcript, with the failure after
+  it, for the next message to answer. A goal refused before any turn starts
+  (the planner not ready) was never sent and saves nothing.
 
 ### Reads
 
@@ -904,3 +910,4 @@ until #30 exists.
 - 2026-11-22 — a wake-up turn's call that fails on the network is retried on E1's backoff; what happens once the run is unsupervised is kept rather than dropped; the stop notice says the setting reads Off and names `/settings`; a usage limit after the turn's change, with its reset known, waits for it instead of ending supervision; and the user's level set again catches the supervisor up (ADR-0030). Seen live: two wake-up turns failed on `EAI_AGAIN`, a check then failed with four tasks waiting, and nothing reached the supervisor once Act was set again.
 - 2026-11-23 — a fresh retry's answer names the integration tip it starts from and the branch holding the earlier attempt's unlanded work, and a stop's answer names the continue that keeps that work (ADR-0018, K1). Seen live: a fresh retry's note told the new attempt to build on commits that were on a preserved branch.
 - 2026-11-23 — a run end that follows the one the supervisor was just told, from a run its own turn continued (a skip or retry) with nothing gathered in between and the same summary, is not told again: it woke the supervisor twice in a row with the same line. A retried task failing or passing again is gathered, so its end is told. A reload keeps the wake policy as decided: it is restored, and what it held goes out into the waiting inputs, so the saved policy is empty after it.
+- 2026-11-24 — the opening's goal waits on the plan from its admission, so a session is saved and listed while its first turn runs, and one whose first turn fails or is stopped keeps its goal and the failure. Before it, the file was first written when that turn landed, and a first turn that failed saved nothing.

@@ -98,6 +98,8 @@ export interface ConversationRequest {
    * not offered it). Absent: nowhere to show one, so none is raised.
    */
   notice?: (level: 'info' | 'warn' | 'error', message: string) => void;
+  /** Whether the session holds a plan now, read as a turn ends: only a turn that leaves none was kept from planning. */
+  holdsPlan?: () => boolean;
   /**
    * The session's usage ledger, for what a harness planner's agent spends with
    * no turn open: a turn Claude Code opens itself to relay a backgrounded

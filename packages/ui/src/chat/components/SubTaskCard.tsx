@@ -267,7 +267,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
         {/* The run's word on this subtask, as on a top-level card. */}
         {row.waitsForApproval && (
           <span className="task-isolation-badge approval"
-            title="Added after you approved the plan, so it does not start on its own. Approve it, or Approve all, and it starts once its dependencies finish.">
+            title="Added after you ran the plan, so it does not start on its own. Approve it, or Approve all, and it starts once its dependencies finish.">
             {row.waitsForApproval}
           </span>
         )}

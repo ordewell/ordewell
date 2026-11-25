@@ -2,15 +2,17 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { CliAgentAiService, type CliAgentAiServiceDeps } from '../harness/CliAgentAiService';
+import { CliAgentAiService, toolsFailedNotice, type CliAgentAiServiceDeps } from '../harness/CliAgentAiService';
+import { OrdewellMcpServer } from '../mcp';
 import { createAiService } from '../AiService';
 import { fakeConfig, fakeFileSystem } from '../../testing';
 import type { IConfig } from '../../interfaces/IConfig';
 import type { ConversationRequest, PlannerToolsOffer } from '../AiService';
 import type { GuaranteeReport } from '../executionLease';
 import { TurnBudgets } from '../PlannerBudgets';
+import { daemonLogPath } from '../../utils/daemonProcess';
 import type { PlannerNativeSession, ResearchProgress, ResearchStep } from '../../models/Task';
-import { fakeMcpServer, fakeSpawn, fixture, flagFile, openCodeFixture, planJson, scriptedAdapter, sseResponse, type FakeAgentProcess, type FakeMcpServer, type FakeSpawnOptions, type ScriptedReply } from './harnessTestKit';
+import { codexPastToolDeadline, codexToolTimeoutError, fakeMcpServer, fakeSpawn, fixture, flagFile, openCodeFixture, planJson, scriptedAdapter, sseResponse, type FakeAgentProcess, type FakeMcpServer, type FakeSpawnOptions, type ScriptedReply } from './harnessTestKit';
 import type { McpToolReply, SubmitPlanArgs } from '../mcp/tools';
 import type { SkillLookup } from '../taskSkills';
 import type { SkillInfo } from '../SkillsService';
@@ -1237,6 +1239,193 @@ describe('CliAgentAiService — Codex', () => {
     expect(threadStart.method).toBe('thread/start');
     expect(threadStart.params.sandbox).toBe('read-only');
     expect(threadStart.params.approvalPolicy).toBe('on-request');
+  });
+
+  // Codex's tool deadline is a fixed 300s that no progress notification
+  // resets (codex-cli 0.171.0), and a planner's run_command can wait on a
+  // person's approval inside the call (ADR-0022 T5).
+  it('shows an item type it does not know as activity rather than dropping it', async () => {
+    const line = (value: unknown) => `${JSON.stringify(value)}\n`;
+    const at = { threadId: 'thr-codex-1', turnId: 'turn-1' };
+    const turn = [
+      line({ jsonrpc: '2.0', method: 'turn/started', params: at }),
+      line({ jsonrpc: '2.0', method: 'item/started', params: { ...at, item: { id: 'item_s1', type: 'sleep' } } }),
+      line({ jsonrpc: '2.0', method: 'item/completed', params: { ...at, item: { id: 'item_s1', type: 'sleep' } } }),
+      line({ jsonrpc: '2.0', method: 'item/completed', params: { ...at, item: { id: 'item_f1', type: 'functionCallOutput', name: 'exec', namespace: null, output: 'Script running with cell ID 3' } } }),
+      line({ jsonrpc: '2.0', method: 'item/completed', params: { ...at, item: { id: 'item_m1', type: 'agentMessage', text: 'Still looking.' } } }),
+      line({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId: 'thr-codex-1', turn: { id: 'turn-1', status: 'completed', items: [] } } }),
+    ].join('');
+    const { svc } = service('codex', [...codexHandshake(), turn]);
+    const { events, onProgress } = collector();
+    await svc.startConversation(request({ onProgress, runners: ['codex'] }));
+
+    const calls = events.filter((e) => e.type === 'tool_call').map((e) => [e.toolCallId, e.toolLabel ?? e.tool]);
+    expect(calls).toEqual([['item_s1', expect.stringContaining('sleep')], ['item_f1', expect.stringContaining('exec')]]);
+    expect(events.filter((e) => e.type === 'tool_result').map((e) => e.toolCallId)).toEqual(['item_s1', 'item_f1']);
+  });
+
+  describe('a turn whose Ordewell tools all failed', () => {
+    const line = (value: unknown) => `${JSON.stringify(value)}\n`;
+    const at = { threadId: 'thr-codex-1', turnId: 'turn-1' };
+    // How codex-cli 0.171.0 completes a failed call, as its app-server sent them: a call past
+    // its tool deadline carries an error object and no result, and a reply Ordewell marked
+    // isError carries that reply as its result, with no error.
+    type Failure = { timedOut: true } | { replied: string };
+    const timedOut: Failure = { timedOut: true };
+    const replied = (text: string): Failure => ({ replied: text });
+    const ended = (tool: string, failure?: Failure) => {
+      if (!failure) return { status: 'completed', result: { content: [{ type: 'text', text: 'codex, claude-code' }], structuredContent: null, _meta: null }, error: null };
+      if ('timedOut' in failure) return { status: 'failed', result: null, error: { message: codexToolTimeoutError(tool, 300) } };
+      return { status: 'failed', result: { content: [{ type: 'text', text: failure.replied }], structuredContent: null, _meta: null }, error: null };
+    };
+    const call = (id: string, tool: string, failure?: Failure) => [
+      line({ jsonrpc: '2.0', method: 'item/started', params: { ...at, item: { id, type: 'mcpToolCall', server: 'ordewell', tool, status: 'inProgress', arguments: {} } } }),
+      line({ jsonrpc: '2.0', method: 'item/completed', params: { ...at, item: { id, type: 'mcpToolCall', server: 'ordewell', tool, arguments: {}, ...ended(tool, failure) } } }),
+    ].join('');
+    const turnOf = (calls: string, reply: string) => [
+      line({ jsonrpc: '2.0', method: 'turn/started', params: at }),
+      calls,
+      line({ jsonrpc: '2.0', method: 'item/completed', params: { ...at, item: { id: 'item_m1', type: 'agentMessage', text: reply } } }),
+      line({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId: 'thr-codex-1', turn: { id: 'turn-1', status: 'completed', items: [] } } }),
+    ].join('');
+
+    it('says the tools failed, where the log is, and what to try', async () => {
+      const turn = turnOf(call('c1', 'run_command', timedOut) + call('c2', 'list_runners', timedOut), 'The workspace tool timed out, so I could not inspect hello.py.');
+      const { svc } = service('codex', [...codexHandshake(), turn]);
+      const notices: string[] = [];
+      await svc.startConversation(request({ runners: ['codex'], notice: (_level, message) => notices.push(message) }));
+
+      expect(notices).toHaveLength(1);
+      expect(notices[0]).toMatch(/planner's tools failed/);
+      expect(notices[0]).toContain(daemonLogPath());
+      expect(notices[0]).toMatch(/send the goal again/i);
+      expect(notices[0]).toMatch(/another planner/);
+    });
+
+    // VS Code runs the session in its extension host, whose console has the per-call lines, and its user has no /planner.
+    it('names the log of each process that can own the session, and a next step every surface has', async () => {
+      const turn = turnOf(call('c1', 'list_runners', timedOut), 'I could not list the runners.');
+      const { svc } = service('codex', [...codexHandshake(), turn]);
+      const notices: string[] = [];
+      await svc.startConversation(request({ runners: ['codex'], notice: (_level, message) => notices.push(message) }));
+
+      expect(notices[0]).toContain('extension host');
+      expect(notices[0]).not.toMatch(/\/planner in the terminal/);
+    });
+
+    it('says nothing when one of them answered', async () => {
+      const turn = turnOf(call('c1', 'run_command', timedOut) + call('c2', 'list_runners'), 'Which runner should run the tests?');
+      const { svc } = service('codex', [...codexHandshake(), turn]);
+      const notices: string[] = [];
+      await svc.startConversation(request({ runners: ['codex'], notice: (_level, message) => notices.push(message) }));
+
+      expect(notices).toEqual([]);
+    });
+
+    // A Codex planner's own shell is off, so every command it runs is a run_command: a command that exits
+    // non-zero is the command's answer, not Ordewell's tools failing, and the planner may well go on to ask.
+    it('says nothing when the only call was a command that exited non-zero', async () => {
+      const turn = turnOf(call('c1', 'run_command', replied('Command exited 1: cat: missing.txt: No such file or directory')), 'There is no missing.txt here: which file did you mean?');
+      const { svc } = service('codex', [...codexHandshake(), turn]);
+      const notices: string[] = [];
+      await svc.startConversation(request({ runners: ['codex'], notice: (_level, message) => notices.push(message) }));
+
+      expect(notices).toEqual([]);
+    });
+
+    it('keeps the reply and shows each call failed when Codex gave up on them at its deadline', async () => {
+      const turn = turnOf(call('c1', 'run_command', timedOut), 'The workspace tool timed out, so I could not inspect hello.py.');
+      const { svc } = service('codex', [...codexHandshake(), turn]);
+      const { events, onProgress } = collector();
+      const reply = await svc.startConversation(request({ onProgress, runners: ['codex'] }));
+
+      expect(reply).toMatchObject({ kind: 'message', text: 'The workspace tool timed out, so I could not inspect hello.py.' });
+      const result = events.find((e) => e.type === 'tool_result');
+      expect(result?.step?.outcome).toBe('failure');
+      expect(result?.step?.result).toContain('timed out awaiting tools/call after 300s');
+    });
+
+    it('says so when every call was refused in Ordewell\'s own reply', async () => {
+      const turn = turnOf(
+        call('c1', 'submit_plan', replied('The plan was not accepted: task #1 names no runner.')) + call('c2', 'list_models', replied('No runner named "gpt".')),
+        'I could not submit the plan.',
+      );
+      const { svc } = service('codex', [...codexHandshake(), turn]);
+      const { events, onProgress } = collector();
+      const notices: string[] = [];
+      await svc.startConversation(request({ onProgress, runners: ['codex'], notice: (_level, message) => notices.push(message) }));
+
+      expect(events.filter((e) => e.type === 'tool_result').map((e) => e.step?.outcome)).toEqual(['failure', 'failure']);
+      expect(notices).toEqual([toolsFailedNotice()]);
+    });
+
+    // A refused control is Ordewell answering, and the plan the refusal is about is there to run.
+    it('says nothing when the session already holds a plan', async () => {
+      const turn = turnOf(
+        call('c1', 'run_task', replied('The user has not run this plan yet: they run it themselves (/run). Ask them to.')),
+        'I could not start it myself.',
+      );
+      const { svc } = service('codex', [...codexHandshake(), turn]);
+      const notices: string[] = [];
+      await svc.startConversation(request({ runners: ['codex'], holdsPlan: () => true, notice: (_level, message) => notices.push(message) }));
+
+      expect(notices).toEqual([]);
+    });
+  });
+
+  // The regression for a Codex planner whose tools all timed out (0.14.11): the
+  // calls reach the real server over HTTP and Codex gives up on each.
+  it('logs, shows and explains a turn whose every Ordewell call ran past Codex\'s tool deadline', async () => {
+    const lines: string[] = [];
+    const keep = (...args: unknown[]) => { lines.push(args.map(String).join(' ')); };
+    vi.spyOn(console, 'log').mockImplementation(keep);
+    vi.spyOn(console, 'warn').mockImplementation(keep);
+    const mcp = new OrdewellMcpServer();
+    const aborted: string[] = [];
+    const hang = (tool: string) => (_args: unknown, { signal }: { signal: AbortSignal }) => new Promise<McpToolReply>((resolve) => {
+      signal.addEventListener('abort', () => { aborted.push(tool); resolve({ text: 'stopped', isError: true }); }, { once: true });
+    });
+    let spawnedEnv = (): NodeJS.ProcessEnv => ({});
+    const { svc, spawned } = service('codex', [
+      ...codexHandshake(),
+      codexPastToolDeadline(() => spawnedEnv(), { tools: { run_command: { command: 'cat hello.py' }, list_runners: {} }, deadlineMs: 150, reply: 'The workspace tool timed out, so I could not inspect hello.py.' }),
+    ], {}, {}, mcp as FakeMcpServer);
+    spawnedEnv = () => spawned.lastEnv();
+    const { events, onProgress } = collector();
+    const notices: string[] = [];
+    try {
+      const turn = await svc.startConversation(request({
+        onProgress, runners: ['codex'], notice: (_level, message) => notices.push(message),
+        plannerTools: { sessionId: 's1', handler: { runCommand: hang('run_command'), listRunners: hang('list_runners') } },
+      }));
+
+      expect(turn).toMatchObject({ kind: 'message', text: expect.stringContaining('timed out') });
+      // Each call showed in flight before it failed, under Ordewell's name for it.
+      expect(events.filter((e) => e.type === 'tool_call').map((e) => e.toolLabel)).toEqual(['mcp__ordewell__run_command', 'mcp__ordewell__list_runners']);
+      expect(events.filter((e) => e.type === 'tool_result').map((e) => e.step?.outcome)).toEqual(['failure', 'failure']);
+      // The server saw each call arrive and its caller give up on it.
+      // A cancellation is a request of its own, which may land after the turn has ended.
+      await vi.waitFor(() => expect(aborted).toEqual(['run_command', 'list_runners']));
+      await vi.waitFor(() => {
+        const logged = lines.filter((l) => l.startsWith('[ordewell-mcp]'));
+        for (const tool of ['run_command', 'list_runners']) {
+          expect(logged).toContainEqual(expect.stringMatching(new RegExp(`planner call ${tool} started \\(session s1\\)`)));
+          expect(logged).toContainEqual(expect.stringMatching(new RegExp(`planner call ${tool} cancelled after \\d+\\.\\ds \\(session s1\\)`)));
+        }
+      });
+      expect(notices).toEqual([toolsFailedNotice()]);
+    } finally {
+      vi.restoreAllMocks();
+      await mcp.dispose();
+    }
+  });
+
+  it("gives the planner thread's Ordewell server a tool deadline a person's approval fits in", async () => {
+    const { svc, spawned } = service('codex', [...codexHandshake(), fixture('codex', 'tools')]);
+    await svc.startConversation(request({ runners: ['codex'] }));
+
+    const threadStart = JSON.parse(spawned.processes[0].written[1]);
+    expect(threadStart.params.config.mcp_servers.ordewell).toMatchObject({ tool_timeout_sec: 3600, default_tools_approval_mode: 'approve' });
   });
 
   // The policy decides Codex's own search once, as its thread starts (ADR-0027).

@@ -81,7 +81,7 @@ describe('deleting a session', () => {
     expect(state.sessionId).toBeNull();
     expect(state.tasks).toEqual([]);
     expect(state.status).toBe('idle');
-    expect(effects).toEqual([{ type: 'closeSession', sessionId: 'old' }]);
+    expect(effects).toEqual([{ type: 'closeSession', sessionId: 'old' }, { type: 'loadIsolationPreview' }]);
   });
 
   it('keeps the view when another session was deleted', () => {

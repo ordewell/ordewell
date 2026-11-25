@@ -448,7 +448,7 @@ export function composeCompactionNudge(task: Pick<Task, 'title' | 'prompt'>, opt
   return [
     '(Ordewell) Your context was just compacted. Your task is:',
     `${task.title}${brief ? `\n\n${brief}` : ''}`,
-    `If what the brief asks is done, ${opts.lands ? 'commit and call' : 'call'} \`${TASK_COMPLETE_TOOL}\` now. Work beyond the brief belongs to other tasks: leave it, and name it in your handoff.`,
+    `If what the brief asks is done, ${opts.lands ? 'commit and call' : 'call'} \`${TASK_COMPLETE_TOOL}\` now. Work beyond the brief belongs to other tasks: leave it, and name it in your handoff. Leave content the brief does not name as it is; if you removed any, say so in your handoff.`,
   ].join('\n\n');
 }
 

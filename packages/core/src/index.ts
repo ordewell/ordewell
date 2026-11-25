@@ -79,6 +79,7 @@ export type { HttpWebFetcherOptions, WebResponse, WebTransport } from './service
 export { startVersionCheck, VERSION_CHECK_URL, VERSION_CHECK_NOTICE } from './services/VersionCheck';
 export type { PingFetch, VersionCheck, VersionCheckOptions } from './services/VersionCheck';
 export { claimFirstRunFeedback, type FirstRunFeedbackOptions } from './services/FirstRunFeedback';
+export { claimTrailerDisclosure, TRAILER_DISCLOSURE, type TrailerDisclosureOptions } from './services/TrailerDisclosure';
 export { FIRST_RUN_FEEDBACK, FEEDBACK_DISCUSSION_URL, REPOSITORY_URL, type FeedbackAction } from './services/feedbackNotice';
 export type { ApprovalMode, ApprovalModeSetting, ApprovalPolicyOptions, ApprovalSource } from './services/ApprovalPolicy';
 export { DEFAULT_PLANNER_ALLOWLIST, parseAllowlist, commandAllowedBy, toolAllowed, scopeAllowed } from './services/plannerAllowlist';

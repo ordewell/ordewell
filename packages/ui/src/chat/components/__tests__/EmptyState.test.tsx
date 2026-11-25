@@ -143,7 +143,7 @@ describe('EmptyState — plan approval', () => {
 
   it('says it while autorun is off, as the same row in neutral grey', () => {
     const { container } = render(<EmptyState runSettings={withAutorun(false)} />);
-    expect(container.textContent).toContain('Nothing runs until you approve the plan.');
+    expect(container.textContent).toContain('Nothing runs until you run the plan.');
     const row = container.querySelector('.plan-approval-note');
     expect(row?.getAttribute('data-autorun')).toBe('off');
     expect(row?.classList.contains('warn')).toBe(false);

@@ -911,8 +911,8 @@ describe.skipIf(!hasGit)('WorktreeIsolation never deletes work that has not land
     expect(git(root, 'show', `${branch}:README.md`)).toBe('edited');
     expect(git(root, 'log', '-1', '--format=%s', branch)).toBe('WIP: Stopped mid-work');
     expect(branches(root)).toEqual([]);
-    // The state dir's own ignore file is meant to be committed (it carves out .ordewell/skills); nothing else may show.
-    expect(git(root, 'status', '--porcelain', '--untracked-files=all')).toBe('?? .ordewell/.gitignore');
+    // The state dir's own ignore file ignores itself, so nothing may show.
+    expect(git(root, 'status', '--porcelain', '--untracked-files=all')).toBe('');
   });
 
   it('keeps the commits only a task branch carries, even once its worktree is gone', async () => {

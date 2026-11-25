@@ -58,6 +58,8 @@ function repo(root: string, opts: { stateIgnoreCommitted?: boolean } = {}): stri
     writeFileSync(join(root, '.ordewell', '.gitignore'), STATE_DIR_IGNORE);
   }
   git(root, 'add', '-A');
+  // The file ignores itself, so a project that commits it does so on purpose.
+  if (opts.stateIgnoreCommitted) git(root, 'add', '-f', '.ordewell/.gitignore');
   git(root, 'commit', '-q', '-m', 'initial');
   return root;
 }

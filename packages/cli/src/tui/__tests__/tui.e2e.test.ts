@@ -600,7 +600,7 @@ describe('TUI end to end', () => {
     await vi.waitFor(() => expect(h.app.getState().status).toBe('idle'));
   });
 
-  it('plan approval round-trips: sign-off request paints, /approve re-launches execution', async () => {
+  it('plan approval round-trips: sign-off request paints, /run re-launches execution', async () => {
     const h = harness();
     h.type('Build the login flow');
     h.type('\r');
@@ -626,20 +626,20 @@ describe('TUI end to end', () => {
     h.type('\r');
     await vi.waitFor(() => {
       expect(h.transcript()).toContain('Task #1 asks: Route added');
-      expect(h.transcript()).toContain('Plan needs your sign-off: /approve to continue.');
+      expect(h.transcript()).toContain('Plan needs your sign-off: /run to continue.');
       expect(h.transcript()).toContain('Added a hardening task.');
-      expect(h.transcript()).toContain('Plan approved.');
     });
+    // Running the plan is the Run, so no line names an approve (one verb).
+    expect(h.transcript()).not.toContain('Plan approved');
     // The mid-run plan rewrite reached the task pane.
     expect(h.app.getState().tasks.map((t) => t.id)).toEqual(['t1', 't2', 't3']);
 
-    h.type('/approve');
+    h.type('/run');
     h.type('\r');
     await vi.waitFor(() => {
       expect(h.screen()).toContain('Execution finished: 2/2 tasks complete.');
     });
     expect(h.daemon.mocks.executePlan).toHaveBeenCalledTimes(2);
-    expect(h.app.getState().planApproved).toBe(true);
   });
 
   it('task commands round-trip through the daemon and re-sync the plan', async () => {
@@ -717,6 +717,12 @@ describe('TUI end to end', () => {
   it('a failed planner turn reports in the transcript, clears the session, and the TUI keeps working', async () => {
     const h = harness();
     h.daemon.mocks.startConversation.mockRejectedValueOnce(new DaemonRefusal('planner exploded', 500));
+    // The daemon never registered the session: a first turn it kept would keep its session (effects.test.ts).
+    const saved = h.daemon.mocks.getSession.getMockImplementation()!;
+    h.daemon.mocks.getSession.mockImplementation(async (...args: unknown[]) => {
+      if (args[0] === 'session-1') throw new DaemonRefusal('Session not found', 404, { code: 'session_not_found' });
+      return saved();
+    });
 
     h.type('Build the login flow');
     h.type('\r');

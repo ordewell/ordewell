@@ -167,6 +167,22 @@ describe('discovered skill suggestions', () => {
     fireEvent.mouseDown(screen.getByText('/grilling'));
     expect(onSend).toHaveBeenCalledWith('/grilling');
   });
+
+  it('lists a built-in once when a skill shares its name or an alias, and leaves no stale row', () => {
+    const { container } = renderInput({ skills: [
+      { name: 'help', description: 'A skill named help' },
+      { name: 'model', description: 'A skill named model' },
+      { name: 'shared-name', description: 'A skill of its own' },
+    ] });
+    const rows = (): string[] => [...container.querySelectorAll('.slash-suggestion-item .slash-suggestion-label')].map((el) => el.textContent ?? '');
+    type('/he');
+    expect(rows()).toEqual(['/help']);
+    expect(screen.queryByText('A skill named help')).toBeNull();
+    type('/mo');
+    expect(rows()).toEqual(['/model']);
+    type('/sh');
+    expect(rows()).toEqual(['/shared-name']);
+  });
 });
 
 describe('mid-prompt skill suggestions', () => {

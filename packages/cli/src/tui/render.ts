@@ -15,7 +15,7 @@ import {
 } from './layout';
 import { chatEditorRoomFor, chatPromptLabel } from './geometry';
 import { currentHandoff, diffRoom, handoffActions } from './handoff';
-import { capConflictFiles, elapsedSince, handoffBaseLine, handoffBranchName, isRepoGroup, repoResultLines, taskLogCommands, titledTaskRef, titledTaskRefOf, type RunnerCommand } from '@ordewell/core';
+import { capConflictFiles, changeText, elapsedSince, handoffBaseLine, handoffBranchName, isRepoGroup, repoResultLines, taskLogCommands, titledTaskRef, titledTaskRefOf, type RunnerCommand } from '@ordewell/core';
 import { matchingItems, scriptTaskView, rootFrame, viewOnly, visibleItems, type Overlay, type PickerItem, type PickerState, type TuiState } from './state';
 import type { StepperState } from './reducers/stepper';
 import { DELEGATION_OFFERED, SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
@@ -603,7 +603,9 @@ function renderHandoff(
       const repaired = task.repairedFiles?.length
         ? style.yellow(`: repaired (${capConflictFiles(task.repairedFiles)})`)
         : '';
-      return `  ${style.green('✓')} ${titledTaskRefOf(state.tasks, task.taskId) ?? titledTaskRef(task)}${repaired}`;
+      // Ordewell's count from git of what it landed, never its runner's words of it.
+      const change = changeText(task);
+      return `  ${style.green('✓')} ${titledTaskRefOf(state.tasks, task.taskId) ?? titledTaskRef(task)}${change ? `, ${change}` : ''}${repaired}`;
     });
   const actions = handoffActions(handoff).map((action, index) => {
     const active = index === overlay.index;
@@ -725,7 +727,8 @@ function pickerRows(list: PickerRowList, room: number, inner: number): string[] 
   const digits = String(items.length).length;
   const prefixWidth = 2 + (numbered ? digits + 2 : 0) + (chosen ? 4 : 0);
   const rowWidth = Math.max(1, inner - prefixWidth);
-  const isCurrent = (item: PickerItem): boolean => !chosen && item.selected === true;
+  // A warn row never wears the green check, which reads as 'ready': its detail says '(current)'.
+  const isCurrent = (item: PickerItem): boolean => !chosen && item.selected === true && !item.warn;
   const widest = Math.max(0, ...items.map((item) => width(item.label) + (isCurrent(item) ? 2 : 0)));
   // The label column gives way first: a detail squeezed into a few columns
   // stops reading as a sentence, while a long label still reads cut short.

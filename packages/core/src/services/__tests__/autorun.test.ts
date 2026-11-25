@@ -154,7 +154,7 @@ const lines = (env: Pick<FullEnv, 'session'>) => (env.session.planState?.convers
 const cards = (env: Pick<FullEnv, 'messages'>) => env.messages.flatMap((m) => (m.type === 'approval_request' && m.kind === 'task_start' ? [m] : []));
 const reason = (reply: { text: string }) => (JSON.parse(reply.text) as { reason?: string }).reason;
 const push = [['git', 'push', 'origin', 'main']];
-const NOT_APPROVED = `The user has not approved this plan yet: they approve it themselves (${SURFACE_CONTROLS.unknown.approvePlan}). Ask them to.`;
+const NOT_APPROVED = `The user has not run this plan yet, and they run it themselves (${SURFACE_CONTROLS.unknown.runPlan}). Ask them to.`;
 
 describe('in Full with autorun on, the planner needs no approval for anything', () => {
   it('submit_plan then run_task in one reply: dependents start, script tasks run and run_plan works', async () => {
@@ -261,7 +261,7 @@ describe('in Full with autorun on, the planner needs no approval for anything', 
 
     const joined = await env.planner.tools().runPlan!({}, ctx);
 
-    expect((JSON.parse(joined.text) as { result: string }).result).toBe('The plan is running: task #1 "Task a" is already running, and each approved task starts as its dependencies finish.');
+    expect((JSON.parse(joined.text) as { result: string }).result).toBe('The plan is running: task #1 "Task a" is already running, and each task in the run starts as its dependencies finish.');
     expect(env.session.waitsForApproval('b')).toBe(false);
     env.planner.calls[1].finish(prose('Running.'));
     await settled();
@@ -378,7 +378,7 @@ describe('anywhere else, a first plan is the user\'s to start, as before', () =>
     const { planned } = await replySubmitted(env, [ai('a'), pushes('s', ['a'])]);
 
     expect(reason(await env.planner.tools().runPlan!({}, ctx))).toBe(NOT_APPROVED);
-    expect(reason(await env.planner.tools().runTask!({ task: 'a' }, ctx))).toBe(`The user has not approved task #1 "Task a": they approve the plan themselves (${SURFACE_CONTROLS.unknown.approvePlan}), or a task by starting it (${SURFACE_CONTROLS.unknown.forceStart}). Ask them to.`);
+    expect(reason(await env.planner.tools().runTask!({ task: 'a' }, ctx))).toBe(`The user has not run this plan yet, so task #1 "Task a" does not start: they start it by running the plan themselves (${SURFACE_CONTROLS.unknown.runPlan}), or by starting the task (${SURFACE_CONTROLS.unknown.forceStart}). Ask them to.`);
     const reply = env.planner.tools().runScript!({ title: 'Push main', commands: push }, ctx);
     await until(() => cards(env).length === 1);
     env.session.resolveApproval(cards(env)[0].id, false);
@@ -393,13 +393,13 @@ describe('anywhere else, a first plan is the user\'s to start, as before', () =>
   it('in Guarded with an Act supervisor and autorun: its wake-up is refused a plan the user has not approved', async () => {
     const env = await handStartWokenUp({ settings: { supervisorLevel: 'act', autorun: true }, config: { autonomousMode: false } });
 
-    expect(reason(await env.planner.tools().runPlan!({}, ctx))).toMatch(/^The user has not approved this plan yet/);
+    expect(reason(await env.planner.tools().runPlan!({}, ctx))).toMatch(/^The user has not run this plan yet/);
   });
 
   it('in Full with an Act supervisor and autorun off: its wake-up is refused a plan the user has not approved', async () => {
     const env = await handStartWokenUp({ settings: { supervisorLevel: 'act', autorun: false }, config: { autonomousMode: true } });
 
-    expect(reason(await env.planner.tools().runPlan!({}, ctx))).toMatch(/^The user has not approved this plan yet/);
+    expect(reason(await env.planner.tools().runPlan!({}, ctx))).toMatch(/^The user has not run this plan yet/);
   });
 });
 
@@ -498,6 +498,6 @@ describe('switching autorun or Full off takes effect at once', () => {
 
     const cache = env.session.planTasks.find((t) => t.title === 'Add a cache')!;
     expect(env.session.waitsForApproval(cache.id)).toBe(true);
-    expect(reason(await env.planner.tools().runTask!({ task: cache.id }, ctx))).toBe('Task #2 "Add a cache" was added after the user approved the plan, so it is not approved to run. Ask the user to start it, or to execute the plan, which approves it.');
+    expect(reason(await env.planner.tools().runTask!({ task: cache.id }, ctx))).toBe('Task #2 "Add a cache" was added after the user ran the plan, so it waits for them. Ask the user to start it, or to run the plan again.');
   });
 });

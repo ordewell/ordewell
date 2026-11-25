@@ -10,6 +10,8 @@ import type { HostToWebview } from '../shared/protocol';
 
 const FLUSH_MS = 30;
 
+const isUserMessage = (block: DisplayBlock): boolean => block.type === 'message' && block.role === 'user';
+
 export type SavedConversation = Pick<SurfacePlan, 'conversationHistory' | 'researchLog' | 'plannerUsage' | 'pendingTurns'> | Pick<LegacyPlanState, 'conversationHistory' | 'researchLog' | 'plannerUsage' | 'pendingTurns'>;
 
 /**
@@ -94,12 +96,15 @@ export class ConversationViewHost {
    * Everything held, as the one message the next turn answers: the prompts
    * glued in the order typed. Asked by whoever owns the host's turn once it
    * has fully ended — the `planner_turn_ended` event comes while the turn is
-   * still unwinding, too early to start the next one.
+   * still unwinding, too early to start the next one. The webview is told
+   * they went, since it did not send them itself: a Try Again still offered
+   * for the turn before would draw that turn's message a second time.
    */
   nextPrompt(): string | undefined {
     const all = unsendAll(this.held);
     if (!all) return undefined;
     this.showHeld(all.rest);
+    this.post({ type: 'heldPromptsSent' });
     return all.text;
   }
 
@@ -123,6 +128,43 @@ export class ConversationViewHost {
    */
   giveBack(text: string): void {
     if (text.trim()) this.post({ type: 'promptUnsent', text });
+  }
+
+  /**
+   * A message the planner refused before any turn started (planner_not_ready):
+   * it was never sent, so it is taken back off the chat rather than left drawn
+   * as the user's, and goes back to the composer with what was held behind it,
+   * above anything typed since, so none of it is sent into the same refusal
+   * and nothing has to be typed again (as the TUI's giveBackUnsent does).
+   */
+  unsent(text: string): void {
+    const { blocks } = this.view;
+    let at = blocks.length - 1;
+    while (at >= 0 && !isUserMessage(blocks[at])) at--;
+    const drawn = blocks[at];
+    if (drawn?.type === 'message' && drawn.text === text) this.show({ ...this.view, blocks: [...blocks.slice(0, at), ...blocks.slice(at + 1)] });
+    const held = unsendAll(this.held);
+    if (held) this.showHeld(held.rest);
+    this.giveBack(held ? aheadOfDraft(text, held.text) : text);
+  }
+
+  /**
+   * Try Again: `text`, drawn already as the newest message, is sent again. The
+   * failed turn that answered it lets the line go, with the skill loads drawn
+   * under it, so the turn answering it now takes that line over instead of
+   * drawing it a second time.
+   */
+  resend(text: string): void {
+    const { blocks } = this.view;
+    let at = blocks.length - 1;
+    while (at >= 0 && !isUserMessage(blocks[at])) at--;
+    const drawn = blocks[at];
+    if (drawn?.type !== 'message' || drawn.text !== text || drawn.turnId === undefined) return;
+    let end = at + 1;
+    for (let next = blocks[end]; next?.type === 'skill_load' && next.turnId === drawn.turnId; next = blocks[end]) end++;
+    const line = { ...drawn };
+    delete line.turnId;
+    this.show({ ...this.view, blocks: [...blocks.slice(0, at), line, ...blocks.slice(end)] });
   }
 
   /**

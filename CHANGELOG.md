@@ -8,8 +8,116 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **Finished tasks show what they changed.** Each task that lands now shows
+  how many files and lines it changed, counted from git, in the task row, the
+  handoff, the list of landings before a merge and VS Code's handoff card. A
+  task landed by a later repair or resolver shows the count on the plan but
+  not yet in its log's handoff block. The runner's task contract gains a
+  sentence: leave content the brief does not name as it is, and say so in the
+  handoff if you remove any (ADR-0047).
+- **The Codex planner's tool calls are logged, and the status line shows the
+  one in flight.** Each call the planner makes to Ordewell writes a start and
+  an end line, with its outcome, to the log of the process that runs the
+  session (the daemon's, or VS Code's extension host), never its content. The
+  terminal UI's status line reads, for example, `Planning… 1m 12s ·
+  run_command running 58s`, or says how long nothing has arrived. A turn
+  whose Ordewell calls all failed now ends with a notice naming the log; a
+  command that ran and exited non-zero is not counted as a failed call
+  (ADR-0022). The status line detail is terminal-only for now; the desktop and
+  VS Code show the plain planning state.
+- **Typing `/` in the desktop app lists the workspace's skills**, as VS Code
+  does, and its task cards show them.
+- **The first merge that writes the `Planned-with: Ordewell` line says so
+  once.** Its confirmation gains a sentence naming the line and
+  `ordewell trailer off`; with automatic merging the sentence appears once as
+  a notice. It is shown once per machine (ADR-0030).
+
+### Changed
+
+- **The default planner skips a coding agent that is signed out.** When
+  Claude Code is installed but signed out and Codex is signed in, Codex plans.
+  If every installed agent is signed out the first is still chosen. A refusal
+  to plan now names an agent that is signed in and `/planner` (or
+  `ordewell planner <id>`) to switch (ADR-0076).
+- **A signed-out agent is not offered to the planner.** It stays enabled and
+  is flagged to you, but the planner no longer lists, models or assigns it,
+  and is told why; it is offered again once it reads as signed in. A goal is
+  refused, with the reasons, when every enabled agent is signed out
+  (ADR-0052).
+- **The first screen and the pickers say what they mean.** A signed-out agent
+  reads `signed out · /login <id>` without relying on colour and never wears
+  the check mark; an installed agent that cannot be used gets a grey line
+  saying why; the planner picker's row reads `signed in · no API key needed`
+  or `sign-in not checked · no API key needed`; effort counts read `N effort
+  levels + default`.
+- **One gate, one verb: run.** With autorun off, the planner now submits the
+  plan in the same reply as its outline instead of asking you to confirm the
+  outline first, and tells you the draft waits for you to run it, naming your
+  surface's run control. No surface names a separate approve step, and
+  running a plan no longer prints "Plan approved.": the desktop's button reads **Run plan** and
+  its card **Plan ready to run**, and the VS Code walkthrough step is **Run
+  the plan**. `/approve` and `ordewell approve` still work and say they are
+  now `/run` and `ordewell run`, but are listed nowhere; VS Code's **Approve
+  Plan** command is removed. A plan that was run reads *started* in the
+  terminal UI's `/sessions` and the desktop's session lists, not *approved*,
+  and *settled* once every task in it is done or skipped.
+  A run on a plan that is already running no longer
+  records a second "You started the plan." (ADR-0030).
+- **A session is saved when its first message is admitted.** It appears in the
+  list while the planner works and keeps your goal if the first turn fails or
+  you stop it, with an error entry saying it went unanswered; the desktop
+  lists it as *No plan yet*. Stop now reaches the
+  daemon during the first turn on the desktop (ADR-0029).
+- **A message the planner refuses because it is not ready comes back.** The
+  text returns to the composer, with anything queued behind it, instead of
+  staying drawn as sent. A Send during a running turn that is refused this way
+  still leaves its bubble drawn.
+- **The planner's end-of-run wrap-up no longer counts as waiting on you.** A
+  reply to the "run finished" wake-up alone creates no planner entry in
+  Needs you; a reply after a failure still does, and your merge, run, retry
+  or skip clears it (ADR-0053).
+- **A merge says `Merged` once.** The terminal UI drew the daemon's notice
+  and its own reply's line for the same merge; now only the notice shows, and
+  the reply speaks only on a failure. Your own merge's "You merged the run's
+  work into your branch." line is no longer drawn beside it.
+- **A planner's catalog reads no longer wait on one runner's hung model
+  list.** `list_runners` discovers nothing, `list_models` only its own runner,
+  and other reads wait at most 10 seconds, so one CLI that hangs while
+  listing its models no longer stalls planning past Codex's tool deadline.
+  The planning agent's own model list is still waited on in full, and a hung
+  CLI is still spawned again in the background (ADR-0022).
+- **A Codex planner's tool calls may last an hour.** The planner thread sets
+  `tool_timeout_sec` to 3600, since Codex otherwise ends any call at a fixed
+  300 seconds that progress does not extend. A Codex task's checkpoint, which
+  waits on a person, still ends at 300 seconds.
+
 ### Fixed
 
+- **The "tools failed on every call" notice is said only when it is true.**
+  It ignores a Codex planner's `run_command` whose command ran and exited
+  non-zero, and a turn whose calls were refused while the session holds a plan
+  (a planner asking to start the run itself). It names the log of the process
+  that runs the session and the planner picker on every surface (ADR-0022).
+- **A Codex planner's failed tool calls read as failed.** codex-cli 0.171's
+  shape for a reply Ordewell marked as an error showed it as answered, and a
+  call Codex ended at its tool deadline failed the whole turn with
+  a `TypeError`; both now show as a failed call, and the
+  planner's reply is kept.
+- **The desktop app's first turn.** A failed turn's error shows once, after
+  its message, and Try Again sends the message again without drawing or
+  saving it a second time; a message queued behind the failed one closes
+  the error once it goes, Try Again with it. While the planner works
+  on the first message the session reads *Planning*. Typing `/` lists a
+  skill that shares a built-in command's name once, as the built-in.
+- **The terminal UI's welcome names the current base commit after a merge**
+  and on `/new`, not the one it read at launch.
+- **`.ordewell/.gitignore` no longer shows up in `git status`.** Its rules
+  un-ignored their own file, so a fresh project listed `.ordewell/`. The file
+  now ignores itself: do not commit it, each machine writes its own. The
+  previous text is upgraded in place unless git tracks the file or you edited
+  it (ADR-0013).
 - **`ordewell run --unattended` returns when a manual task holds the run.** A
   pending manual task that every task left needs used to leave it following
   for good, with no exit status, and so did a second one on the same session.

@@ -191,7 +191,8 @@ export type Action =
   /** A plan the daemon broadcast, not one a call of this surface returned. */
   | { type: 'planBroadcast'; plan: unknown; sessionId: string }
   /** One planner message from the session, as it came: core's conversation view decides what it shows. */
-  | { type: 'sessionMessage'; message: SessionMessage; sessionId?: string }
+  /** `at`: when it arrived here (ISO), set by whoever reads the socket, so the reducer reads no clock. */
+  | { type: 'sessionMessage'; message: SessionMessage; sessionId?: string; at?: string }
   /** The next events of a structured task's attempt, live (ADR-0018, P1). */
   | { type: 'accountLimits'; limits: readonly AccountLimitSnapshot[]; sessionId: string }
   | { type: 'taskLog'; position?: StreamStamp; taskId: string; attempt: number; events: TaskLogEvent[]; sessionId?: string }
@@ -258,8 +259,10 @@ export type Action =
    * ends the turn; anything else failing mid-turn leaves it running. A turn's
    * failure names the session it was for, as every other turn result does, and
    * so does an approval answer's: once that session is off screen it is dropped.
+   * `unsent` is the user's message a refusal before any turn started (409
+   * planner_not_ready) kept from being sent: it goes back to the composer.
    */
-  | { type: 'failed'; message: string; code?: DaemonErrorCode; turn?: true; sessionId?: string }
+  | { type: 'failed'; message: string; code?: DaemonErrorCode; turn?: true; sessionId?: string; unsent?: string }
   /** The daemon refused an opening and has been revived: the reducer decides whether the opening is still the one on screen to retry. */
   | { type: 'openingRevived'; sessionId: string; goal: string }
   /**

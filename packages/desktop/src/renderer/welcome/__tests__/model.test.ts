@@ -79,6 +79,10 @@ describe('sessionLook', () => {
     expect(sessionLook('unknown').word).toBe('Unknown');
     expect(sessionLook('paused').word).toBe('paused');
   });
+
+  it('calls a plan that was run Started, never Approved: no plan-level approve is shown (one verb)', () => {
+    expect(sessionLook('approved')).toEqual({ status: 'not-started', word: 'Started' });
+  });
 });
 
 describe('needsYouCount', () => {

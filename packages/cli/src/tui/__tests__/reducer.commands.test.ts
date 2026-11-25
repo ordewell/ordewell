@@ -512,7 +512,8 @@ describe('sessions', () => {
     expect(confirmed.state.sessionId).toBeNull();
     expect(confirmed.state.tasks).toEqual([]);
     expect(messagesOf(confirmed.state)).toEqual([]);
-    expect(confirmed.effects).toEqual([{ type: 'closeSession', sessionId: 'session-1' }]);
+    // The welcome it opens onto names the commit runs fork from, which may have moved since launch.
+    expect(confirmed.effects).toEqual([{ type: 'closeSession', sessionId: 'session-1' }, { type: 'loadIsolationPreview' }]);
   });
 
   it('/new cancelled with escape leaves the session untouched', () => {
@@ -526,7 +527,7 @@ describe('sessions', () => {
   it('/new resets immediately when there is nothing to lose', () => {
     const { state, effects } = run('/new');
     expect(state.sessionId).toBeNull();
-    expect(effects).toEqual([]);
+    expect(effects).toEqual([{ type: 'loadIsolationPreview' }]);
   });
 });
 
@@ -541,10 +542,10 @@ describe('execution', () => {
     expect(lastMessage(state)?.role).toBe('error');
   });
 
-  it('/approve marks the plan approved and starts it', () => {
+  it('/approve still starts the plan, as /run does, and says it is now /run', () => {
     const { state, effects } = run('/approve', planned);
-    expect(state.planApproved).toBe(true);
     expect(effects).toEqual([{ type: 'execute', sessionId: 'session-1' }]);
+    expect(lastMessage(state)).toMatchObject({ role: 'system', text: '`/approve` is now `/run`.' });
   });
 
   it('/stop halts the run', () => {

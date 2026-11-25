@@ -255,9 +255,14 @@ export const NATIVE_SHELL_GUIDE = [
 export const AUTORUN_ON =
   'AUTORUN is on: a plan you submit starts when your reply ends, without the user\'s review. When ready, write the outline in your reply as the plan\'s summary and submit the plan in the same reply; do not wait for the user to confirm it, and do not start its tasks yourself. Still ask first what WORKFLOW step 2 says to ask.';
 
-/** A turn where the user turned autorun off: the outline gate is back. */
+/**
+ * What autorun off asks of the planner, in the opening prompt and in a turn
+ * where the user turned it off. The user's one gate is running the plan, which
+ * is what approves it (ADR-0035): an outline confirmed first was a second gate
+ * the user could not tell apart from the first.
+ */
 export const AUTORUN_OFF =
-  'AUTORUN is off now: show the outline and wait for the user to confirm it before you submit a plan.';
+  'AUTORUN is off: a plan you submit stays a draft, and nothing runs until the user runs it. When ready, write the outline in your reply as the plan\'s summary and submit the plan in the same reply: do not hold it back for a reply to the outline, since the user reviews the draft itself. Then say the plan waits for them to run it, naming their control to run the plan from SURFACE AND SETTINGS. Still ask first what WORKFLOW step 2 says to ask.';
 
 export interface ConversationVariant {
   /**
@@ -705,7 +710,7 @@ function buildConversationBody(
     '2. Ask clarifying questions grounded in your findings. When the goal is vague, or a decision would materially change the outcome (storage engine, library choice, scope, API shape), ask the user before planning rather than assume: a silent guess is built into every task.',
     '3. Choose a strategy for the goal (STRATEGY below).',
     '4. When the strategy calls for a plan and you have enough context, produce a prose outline.',
-    autorun ? `5. Write the outline in your reply, then ${submit} in the same reply.` : `5. After the user confirms the outline, ${submit}.`,
+    `5. Write the outline in your reply, then ${submit} in the same reply.`,
     '',
     ...strategySection(variant.execution ?? false),
     ...whoExploresSection(agents),
@@ -720,16 +725,11 @@ function buildConversationBody(
       ]
       : [
         'OUTLINE PHASE:',
-        `- When you are ready to propose a plan, show a prose outline first, not ${tools ? 'submit_plan' : 'JSON'}: the user corrects an outline more cheaply than a plan.`,
+        `- ${AUTORUN_OFF}`,
       ]),
     '- Format: a numbered list of the plan\'s tasks in order, each with what it does and what it changes or reports. For a build, each item is a vertical tracer-bullet slice, with the files/layers it touches.',
     '- Example, for a build: "1. Set up database schema (src/db/schema.ts) — creates tables for users and sessions\n2. Add auth middleware (src/auth/middleware.ts) — validates JWTs on protected routes"',
-    ...(autorun
-      ? []
-      : [
-        '- The user may reply with adjustments. Revise the outline and re-present it.',
-        tools ? '- When the user confirms the outline, submit the plan with submit_plan.' : '- When the user confirms the outline, emit the task plan JSON.',
-      ]),
+    ...(autorun ? [] : [`- The user may reply with adjustments before they run it: revise the plan ${tools ? 'with edit_plan' : 'in a task-ops reply'} and say what changed.`]),
     '',
     'PLAN FORMAT:',
     tools ? 'submit_plan takes {"tasks": [...]}, every task in this shape:' : 'Generate a task plan using this JSON format:',
@@ -791,7 +791,7 @@ function buildConversationBody(
     ...(tools
       ? [
         '- Submit the plan only through submit_plan: JSON written in your reply is never read as a plan.',
-        ...(autorun ? [] : ['- Show the outline before submitting. Do not skip the outline.']),
+        ...(autorun ? [] : ['- Write the outline in the same reply that calls submit_plan. Do not skip the outline.']),
       ]
       : [
         '- When committing the plan, output only the JSON object, with no markdown code block around it: anything else fails to parse.',

@@ -276,8 +276,9 @@ describe.skipIf(!hasGit)('WorktreeIsolation bootstrap', () => {
     for (const name of ['.venv', '.claude', '.env', 'node_modules']) {
       expect(committed.filter((file) => file === name || file.startsWith(`${name}/`)), name).toEqual([]);
     }
-    // Nothing the user had untracked is hidden from them.
-    expect(git(root, 'status', '--porcelain')).toBe(before);
+    // Nothing the user had untracked is hidden from them; only Ordewell's own state folder is, by the ignore file it writes there.
+    expect(before).toBe('?? .envrc\n?? .ordewell/');
+    expect(git(root, 'status', '--porcelain')).toBe('?? .envrc');
   });
 
   it('leaves what a link leads to when it removes the worktree of a workspace below the repository top', async () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { replayTaskLog, type Escalation, type TaskLogEvent } from '@ordewell/core';
+import { replayTaskLog, type Escalation, type SessionMessage, type TaskLogEvent } from '@ordewell/core';
 import { stripAnsi } from '../ansi';
 import { initialState, reduce, type Action } from '../reducer';
 import { render } from '../render';
@@ -207,5 +207,30 @@ describe('the elapsed time on the activity line (#81)', () => {
     const row = frame(state).split('\n').find((l) => l.includes('Running Bash')) ?? '';
     expect(row.length).toBeLessThanOrEqual(60);
     expect(row).toContain('… 42s · ctrl-x to stop');
+  });
+});
+
+describe('the status row while a planner turn runs', () => {
+  const T0 = Date.parse('2026-11-24T10:00:00.000Z');
+  const at = (seconds: number) => new Date(T0 + seconds * 1000).toISOString();
+  const heard = (state: TuiState, message: SessionMessage, seconds: number): TuiState =>
+    reduce(state, { type: 'sessionMessage', message, sessionId: 's1', at: at(seconds) }).state;
+  const planning = (): TuiState => heard(
+    initialState({ sessionId: 's1', rows: 30, cols: 120, focus: 'chat', planner: 'planning' }),
+    { type: 'planner_turn_started', turnId: 'turn-1', startedAt: at(0) },
+    0,
+  );
+  const statusRow = (state: TuiState, seconds: number): string =>
+    render({ ...state, now: T0 + seconds * 1000 }).map(stripAnsi).find((line) => line.includes('Planning')) ?? '';
+
+  it('names the tool call in flight and how long it has run, beside the turn time', () => {
+    const calling = heard(planning(), { type: 'research_step', tool: 'agent_tool', toolLabel: 'mcp__ordewell__list_runners', args: '{}', toolCallId: 'c1', turnId: 'turn-1' }, 10);
+    expect(statusRow(calling, 259)).toContain('Planning… 4m 19s · list_runners running 4m 09s');
+  });
+
+  it('says how long nothing has arrived once the planner has been silent a while', () => {
+    const thought = heard(planning(), { type: 'planner_thinking_delta', turnId: 'turn-1', text: 'Looking at hello.py' }, 5);
+    expect(statusRow(thought, 30)).not.toContain('nothing received');
+    expect(statusRow(thought, 180)).toContain('Planning… 3m 00s · nothing received for 2m 55s');
   });
 });

@@ -95,7 +95,7 @@ export function plannerModelItems(state: TuiState, provider: string, selectedId:
       label: m.label,
       detail: [
         m.provider,
-        m.variants?.length ? `${m.variants.length} effort level${m.variants.length === 1 ? '' : 's'}` : 'runner default effort',
+        m.variants?.length ? effortCount(m.variants.length) : 'runner default effort',
       ].filter(Boolean).join(' · '),
       selected: m.id === selectedId,
     }));
@@ -128,6 +128,16 @@ export function plannerEffortItems(state: TuiState, provider: string, modelId: s
   ];
 }
 
+/**
+ * A saved plan's status as a session row says it. A plan the user ran keeps
+ * 'approved' after its run stops, ends or merges, and there is no approving a
+ * plan (one verb: Run), so it reads as started; the desktop sidebar says the same.
+ */
+const SESSION_STATUS_WORD: Readonly<Record<string, string>> = {
+  approved: 'started',
+  completed: 'settled',
+};
+
 export function pickerItemsFor(state: TuiState, action: PickerState['action']): PickerItem[] {
   if (action.kind === 'rewind') {
     if (state.rewindTargets === null) return [];
@@ -140,7 +150,7 @@ export function pickerItemsFor(state: TuiState, action: PickerState['action']): 
     return state.sessions.map((s) => ({
       id: s.id,
       label: s.goal || s.id,
-      detail: `${s.taskCount} ${s.taskCount === 1 ? 'task' : 'tasks'} · ${s.status}`,
+      detail: `${s.taskCount} ${s.taskCount === 1 ? 'task' : 'tasks'} · ${SESSION_STATUS_WORD[s.status] ?? s.status}`,
     }));
   }
   if (action.kind === 'set-allowlist') {
@@ -219,7 +229,7 @@ export function pickerItemsFor(state: TuiState, action: PickerState['action']): 
       label: model.label,
       detail: [
         model.provider,
-        model.variants?.length ? `${model.variants.length} effort level${model.variants.length === 1 ? '' : 's'}` : 'runner default effort',
+        model.variants?.length ? effortCount(model.variants.length) : 'runner default effort',
       ].filter(Boolean).join(' · '),
       selected: model.id === task.assignedModel?.modelId,
     }));
@@ -240,6 +250,14 @@ export function pickerItemsFor(state: TuiState, action: PickerState['action']): 
     ];
   }
   return [];
+}
+
+/** A signed-out row never carries the check mark, so the current pick is said in words. */
+const signedOutDetail = (line: string, current: boolean): string => (current ? `(current) ${line}` : line);
+
+/** '6 effort levels' or '6 levels + default': what the effort list offers, the agent's own default row included. */
+function effortCount(variants: number): string {
+  return `${variants} effort level${variants === 1 ? '' : 's'} + default`;
 }
 
 /**
@@ -288,10 +306,11 @@ export function plannerItems(state: TuiState): PickerItem[] {
     // row flags it and names its own way in so it can be fixed without switching.
     const signedOut = entry.kind === 'harness' && entry.auth?.state === 'signed-out';
     const row = installed.get(entry.runner ?? entry.id);
+    const way = row && runnerSignInLine(row);
     return {
       id: entry.id,
       label: entry.label,
-      detail: signedOut ? (row && runnerSignInLine(row)) ?? `${entry.label} is not signed in.` : entry.reason,
+      detail: signedOut ? signedOutDetail(way ?? `${entry.label} is not signed in.`, state.plannerProvider === entry.id) : entry.reason,
       selected: state.plannerProvider === entry.id,
       ...(signedOut ? { warn: true } : {}),
     };

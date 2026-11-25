@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
-import { SessionCatalog, type SessionCatalogDeps } from '../SessionCatalog';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { DISCOVERY_WAIT_MS, SessionCatalog, type SessionCatalogDeps } from '../SessionCatalog';
 import { resolveAssignments } from '../TaskAssignment';
 import { createTask, type DiscoveredModel, type RunnerId } from '../../models/Task';
 import type { PlannerBackendId } from '../../interfaces/IConfig';
@@ -16,6 +16,7 @@ function setup(opts: {
   planRunners?: RunnerId[];
   aiProvider?: PlannerBackendId;
   held?: SessionCatalogDeps['held'];
+  withheld?: SessionCatalogDeps['withheld'];
 } = {}) {
   let settings = opts.settings ?? { enabledRunners: ['claude-code'] };
   let planRunners = opts.planRunners ?? [];
@@ -33,6 +34,7 @@ function setup(opts: {
     settings: () => settings,
     planRunners: () => planRunners,
     ...(opts.held ? { held: opts.held } : {}),
+    ...(opts.withheld ? { withheld: opts.withheld } : {}),
   });
   return {
     catalog,
@@ -120,6 +122,29 @@ describe('SessionCatalog of a child, held to its mandate (ADR-0056 M3)', () => {
   });
 });
 
+describe('SessionCatalog of a signed-out agent (ADR-0052)', () => {
+  it('leaves it out of what a planner may assign, says why, and keeps it in the user\'s scope', async () => {
+    let signedOut = true;
+    const { catalog } = setup({
+      settings: { enabledRunners: ['claude-code', 'codex'] },
+      discovered: { 'claude-code': [model('sonnet')], codex: [model('gpt-5')] },
+      withheld: (runner) => (runner === 'codex' && signedOut ? 'signed out' : undefined),
+    });
+    expect(catalog.offeredRunners()).toEqual(['claude-code']);
+    expect(catalog.runnersFor('plan')).toEqual(['claude-code']);
+    expect(catalog.runnersFor('edit')).toEqual(['claude-code']);
+    const live = await catalog.live();
+    expect(live.runners).toEqual(['claude-code']);
+    expect(live.withheld).toEqual([{ runner: 'codex', reason: 'Codex: signed out, not offered until signed in' }]);
+    // The user enabled it: a task on it is not flagged as switched off.
+    expect(catalog.scope().enabledRunners).toEqual(['claude-code', 'codex']);
+
+    signedOut = false;
+    expect(catalog.offeredRunners()).toEqual(['claude-code', 'codex']);
+    expect(catalog.current().withheld).toBeUndefined();
+  });
+});
+
 describe('SessionCatalog discovery cache', () => {
   it('merges a later discovery into what is known instead of replacing it', async () => {
     const { catalog } = setup({ discovered: { 'claude-code': [model('sonnet')], codex: [model('gpt-5')] } });
@@ -163,6 +188,61 @@ describe('SessionCatalog discovery cache', () => {
 
     expect(catalog.models()).toEqual({});
     expect(catalog.known('claude-code')).toEqual([]);
+  });
+});
+
+/**
+ * One enabled CLI that hangs while listing its models (as a cold or broken
+ * `opencode` did, for minutes) must not hold a planner's read or planning's
+ * start: what the others offer is answered after the wait, and what the slow
+ * one finds is kept when it lands.
+ */
+describe('SessionCatalog while one runner\'s discovery hangs', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  function hungOpencode() {
+    const { catalog, resolver } = setup({ settings: { enabledRunners: ['codex', 'opencode'] }, aiProvider: 'codex' });
+    let land: (models: DiscoveredModel[]) => void = () => {};
+    const hung = new Promise<DiscoveredModel[]>((resolve) => { land = resolve; });
+    resolver.modelsForRunners.mockImplementation(async (runners: RunnerId[]) => Object.fromEntries(await Promise.all(runners.map(async (r) => [r, r === 'opencode' ? await hung : [model('gpt-5')]] as const))));
+    return { catalog, land };
+  }
+
+  async function settledWithin<T>(promise: Promise<T>, ms: number): Promise<boolean> {
+    let settled = false;
+    void promise.then(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(ms);
+    return settled;
+  }
+
+  it('answers a read of every runner after the wait, with what the others offer, and keeps the slow one\'s models once found', async () => {
+    vi.useFakeTimers();
+    const { catalog, land } = hungOpencode();
+
+    const read = catalog.live();
+    expect(await settledWithin(read, DISCOVERY_WAIT_MS - 1)).toBe(false);
+    expect(await settledWithin(read, 1)).toBe(true);
+    const live = await read;
+    expect(live.runners).toEqual(['codex', 'opencode']);
+    expect(ids(live.models.codex)).toEqual(['gpt-5']);
+    expect(live.models.opencode).toBeUndefined();
+    expect(live.discovering).toEqual(['opencode']);
+
+    land([model('opencode/big-pickle')]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ids(catalog.current().models.opencode)).toEqual(['opencode/big-pickle']);
+    expect(catalog.current().discovering).toBeUndefined();
+  });
+
+  it('starts planning after the wait with what the others offer', async () => {
+    vi.useFakeTimers();
+    const { catalog } = hungOpencode();
+
+    const planning = catalog.planning(['codex', 'opencode']);
+    expect(await settledWithin(planning, DISCOVERY_WAIT_MS)).toBe(true);
+    const { modelsByRunner, runnerModes } = await planning;
+    expect(Object.keys(modelsByRunner)).toEqual(['codex']);
+    expect(Object.keys(runnerModes)).toEqual(['codex', 'opencode']);
   });
 });
 

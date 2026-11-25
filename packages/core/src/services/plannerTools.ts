@@ -36,8 +36,11 @@ export interface PlannerToolsHost {
   /** The open planner turn's id: a call commits its plan or edit only in the turn it was made in. */
   turnId(): string | undefined;
   recordSkillLoad(skill: SkillLoad): boolean;
-  /** Enabled runners, their modes and their allowlisted models, as of now. */
-  liveCatalog(): Promise<TaskQueryCatalog>;
+  /**
+   * Offered runners, their modes and their allowlisted models, as of now,
+   * discovering the models of `runners` (every offered one unless named).
+   */
+  liveCatalog(runners?: readonly RunnerId[]): Promise<TaskQueryCatalog>;
   /** A submitted plan held to the one check of a plan change (`PlanChangeCheck`), against the live catalog. */
   checkPlan(tasks: unknown): Promise<CheckedChange>;
   /**
@@ -91,6 +94,9 @@ export interface PlannerToolsHost {
  * that never asked for it.
  */
 export const PLANNER_TURN_ENDED = 'The planning turn this call was made in has ended, so nothing was changed.';
+
+/** What `list_models` adds for a runner whose models discovery has not found yet (ADR-0022 L4). */
+export const STILL_DISCOVERING = 'Ordewell is still listing this runner\'s models: call list_models again shortly for them.';
 
 /** Refused by a child whose report is taken: its plan and work stay as that report describes them (ADR-0055 D7). */
 export const NODE_REPORTED = 'This child plan has reported, so nothing starts here and its plan takes no more edits.';
@@ -189,17 +195,20 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
     },
 
     async listRunners() {
-      const catalog = await host.liveCatalog();
+      // It answers no models, so it waits on no runner's discovery.
+      const catalog = await host.liveCatalog([]);
       return answer({
         autonomy: autonomyLevelLabel(catalog.autonomousDefault),
         // No mode names: the planner says only whether a task is read-only (ADR-0031).
         runners: catalog.runners.map((id) => ({ id, readOnly: readOnlyMode(catalog.modes[id]) !== undefined })),
+        // Why an enabled one is missing, so the planner neither assigns it nor asks the user to enable it (ADR-0052).
+        ...notOffered(catalog),
       });
     },
 
     async listModels({ runner }) {
-      const catalog = await host.liveCatalog();
-      if (!catalog.runners.includes(runner)) return notEnabled(runner, catalog.runners);
+      const catalog = await host.liveCatalog([runner]);
+      if (!catalog.runners.includes(runner)) return notEnabled(runner, catalog);
       return answer({
         runner,
         models: (catalog.models[runner] ?? []).map((m) => ({
@@ -207,6 +216,7 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
           modelLabel: m.modelLabel,
           variants: (m.variants ?? []).map((v) => ({ id: v.id, label: v.label })),
         })),
+        ...(catalog.discovering?.includes(runner) ? { discovering: STILL_DISCOVERING } : {}),
       });
     },
 
@@ -222,7 +232,8 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
         // A rule a task breaks names what would be accepted; a skill is the skill catalog's, which is not the runners'.
         const skills = outcome.errors.every((e) => e.field === 'skills');
         const runners = skills ? undefined : outcome.runners;
-        return { isError: true, text: JSON.stringify({ ok: false, errors: outcome.errors.map(planErrorReply), ...(runners ? { enabledRunners: runners } : {}) }) };
+        const withheld = runners ? notOffered(await host.liveCatalog()) : {};
+        return { isError: true, text: JSON.stringify({ ok: false, errors: outcome.errors.map(planErrorReply), ...(runners ? { enabledRunners: runners } : {}), ...withheld }) };
       }
       // What reading its JSON warned of, and what committing it did: a skill checked at both says so once.
       const warnings = [...new Set([...(checked.ok ? checked.warnings : []), ...outcome.warnings ?? []])];
@@ -437,6 +448,7 @@ function catalogDetail(catalog: TaskQueryCatalog) {
         readOnly: readOnlyMode(catalog.modes[id]) !== undefined,
       };
     }),
+    ...notOffered(catalog),
   };
 }
 
@@ -448,7 +460,14 @@ function answer(body: unknown): McpToolReply {
   return { text: JSON.stringify(body) };
 }
 
-function notEnabled(runner: string, enabled: RunnerId[]): McpToolReply {
-  return { isError: true, text: `Runner "${runner}" is not enabled. Enabled runners: ${enabled.join(', ') || '(none)'}.` };
+function notEnabled(runner: string, catalog: TaskQueryCatalog): McpToolReply {
+  const withheld = catalog.withheld?.find((w) => w.runner === runner);
+  if (withheld) return { isError: true, text: `Runner "${runner}" is not offered: ${withheld.reason}. Offered runners: ${catalog.runners.join(', ') || '(none)'}.` };
+  return { isError: true, text: `Runner "${runner}" is not enabled. Enabled runners: ${catalog.runners.join(', ') || '(none)'}.` };
+}
+
+/** The enabled runners a planner is not offered, as the reasons it is told; nothing when every one is. */
+function notOffered(catalog: TaskQueryCatalog): { notOffered?: string[] } {
+  return catalog.withheld?.length ? { notOffered: catalog.withheld.map((w) => w.reason) } : {};
 }
 

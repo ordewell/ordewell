@@ -40,6 +40,12 @@ export interface MergePort {
    * session switched to while a question is open is not sent the yes.
    */
   mergeCall(): MergeCall;
+  /**
+   * The line that names the `Planned-with` trailer, once per machine
+   * (ADR-0030): core's `claimTrailerDisclosure` decides, so call it only
+   * where the confirmation is about to be asked. Absent, nothing is said.
+   */
+  trailerDisclosure?(): string | undefined;
   /** Ask in the surface's real dialog; a dismissal is read as no. */
   ask<C extends string>(request: ConfirmationRequest<C>): Promise<C | null | undefined>;
 }
@@ -64,7 +70,7 @@ export class MergeAll {
     const { port } = this;
     const handoff = port.handoff();
     const rule = handoff ? checkoutRule(handoff) : '';
-    if (await port.ask(mergeAllConfirmation(this.target(), rule, port.isExecuting())) !== 'merge') return false;
+    if (await port.ask(mergeAllConfirmation(this.target(), rule, port.isExecuting(), port.trailerDisclosure?.())) !== 'merge') return false;
     return this.merge();
   }
 

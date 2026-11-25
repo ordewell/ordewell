@@ -70,15 +70,17 @@ describe('runNotice', () => {
 
   describe('the plan awaiting review', () => {
     it('asks for the sign-off, pointing at the surface\'s own way to give it', () => {
-      expect(runNotice({ type: 'review_needed', tasks: [] }, EMPTY_RUN, { approveWith: '/approve' })).toBe('Plan needs your sign-off: /approve to continue.');
+      expect(runNotice({ type: 'review_needed', tasks: [] }, EMPTY_RUN, { runWith: '/run' })).toBe('Plan needs your sign-off: /run to continue.');
     });
 
     it('stops at the ask on a surface whose button needs no pointing at', () => {
       expect(runNotice({ type: 'review_needed', tasks: [] }, EMPTY_RUN)).toBe('Plan needs your sign-off.');
     });
 
-    it('says the plan was approved', () => {
-      expect(runNotice({ type: 'review_approved' }, EMPTY_RUN)).toBe('Plan approved.');
+    // Running a draft is the user's Run (one verb): the timeline's "You started the plan." says it, and no line names an approve.
+    it('earns no line when the plan is run, so nothing says it was approved', () => {
+      expect(runNotice({ type: 'review_approved' }, EMPTY_RUN)).toBeNull();
+      expect(runNotice({ type: 'review_approved' }, EMPTY_RUN, { runWith: '/run' })).toBeNull();
     });
   });
 

@@ -348,8 +348,8 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     expect(git(root, 'symbolic-ref', '--short', 'HEAD')).toBe('main');
     expect(existsSync(join(root, 'a.txt'))).toBe(false);
     expect(existsSync(join(root, 'b.txt'))).toBe(false);
-    // The state dir's own ignore file is meant to be committed (it carves out .ordewell/skills); nothing else may show.
-    expect(git(root, 'status', '--porcelain', '--untracked-files=all')).toBe('?? .ordewell/.gitignore');
+    // The state dir's own ignore file ignores itself, so nothing may show.
+    expect(git(root, 'status', '--porcelain', '--untracked-files=all')).toBe('');
     expect(git(root, 'worktree', 'list', '--porcelain').split('\n').filter((l) => l.startsWith('worktree '))).toHaveLength(1);
   });
 
@@ -543,7 +543,8 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     expect(session.planTasks.map((t) => t.status)).toEqual(['completed', 'completed']);
     expect(sawPredecessor.t2).toBe(true);
     const handoff = messages.find((m): m is Extract<SessionMessage, { type: 'isolation_handoff' }> => m.type === 'isolation_handoff')!;
-    const both = [{ taskId: 't1', order: 1, title: 'Add a' }, { taskId: 't2', order: 2, title: 'Add b' }];
+    // t1 landed under 0.4.23, which counted no change; t2 lands now, its change counted from git.
+    const both = [{ taskId: 't1', order: 1, title: 'Add a' }, { taskId: 't2', order: 2, title: 'Add b', change: { files: 1, added: 1, removed: 0, binary: 0 } }];
     expect(handoff).toEqual({ type: 'isolation_handoff', repos: [{ path: '.', integrationBranch: integration, baseRef: base, baseBranch: 'main', landed: both }], landed: both });
     expect(git(root, 'show', `${integration}:a.txt`)).toBe('written by t1');
     expect(git(root, 'show', `${integration}:b.txt`)).toBe('written by t2');

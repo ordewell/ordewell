@@ -182,6 +182,12 @@ export class PlanTurns {
   /** A saved report's wake-up after a load, which waits for the load to finish. */
   private reportWake: ReturnType<typeof setTimeout> | null = null;
   private seq = 0;
+  /**
+   * The id of the goal the conversation's opening answers, while the opening
+   * holds it: saved on the plan so the session is listed from the moment it
+   * was sent, but the opening's own turn's to settle, never the queue's.
+   */
+  private openingGoal: string | null = null;
   private readonly resend: PlannerResend;
 
   constructor(private readonly host: PlanTurnsHost, private readonly holdTimeoutMs = START_HOLD_TIMEOUT_MS) {
@@ -230,19 +236,57 @@ export class PlanTurns {
   }
 
   /**
-   * The conversation's opening paused on the planner's context: its goal
-   * waits with the pause, ahead of what was sent behind it, whose senders are
-   * answered now as any sent during a pause are.
+   * The conversation's opening was admitted: its goal waits on the plan, and
+   * is saved now, as any message is once it is sent, so the session exists
+   * before the planner's first turn ends. The opening lands it
+   * ({@link openingTaken}), or ends with it ({@link openingEnded}).
    */
-  waitOnPause(input: PlanTurnInput): void {
+  opened(input: PlanTurnInput): void {
+    const plan = this.host.plan();
+    if (!plan) return;
+    const goal = this.pending(input, false);
+    this.openingGoal = goal.id;
+    plan.pendingTurns = [goal, ...(plan.pendingTurns ?? [])];
+    this.host.persist();
+  }
+
+  /** The opening landed an answer to its goal: it leaves the list. Call inside the mutation that lands it, so the save that carries the goal in the transcript is the one that drops it here. */
+  openingTaken(): void {
+    const plan = this.host.plan();
+    if (plan && this.openingGoal) this.take(plan, new Set([this.openingGoal]));
+    this.openingGoal = null;
+  }
+
+  /** The opening ended without landing its goal: the goal, taken off the list for the caller to keep elsewhere; undefined when it was already taken. */
+  openingEnded(): PendingPlanTurn | undefined {
+    const plan = this.host.plan();
+    const id = this.openingGoal;
+    this.openingGoal = null;
+    const goal = plan?.pendingTurns?.find((t) => t.id === id);
+    if (plan && goal) this.take(plan, new Set([goal.id]));
+    return goal;
+  }
+
+  /** What waits for this module's turns: all but the goal an opening still holds. */
+  private queued(plan: LegacyPlanState): PendingPlanTurn[] {
+    const pending = plan.pendingTurns ?? [];
+    return this.openingGoal === null ? pending : pending.filter((t) => t.id !== this.openingGoal);
+  }
+
+  /**
+   * The conversation's opening paused on the planner's context: its goal,
+   * saved when it was admitted, waits with the pause, ahead of what was sent
+   * behind it, whose senders are answered now as any sent during a pause are.
+   */
+  waitOnPause(): void {
     const plan = this.host.plan();
     const pause = plan?.plannerContextPause;
+    const goal = this.openingGoal;
+    this.openingGoal = null;
     if (!plan || !pause) return;
-    const goal = this.pending(input, false);
-    plan.pendingTurns = [goal, ...(plan.pendingTurns ?? [])];
-    pause.inputs = [goal.id, ...pause.inputs];
+    if (goal && plan.pendingTurns?.some((t) => t.id === goal)) pause.inputs = [goal, ...pause.inputs.filter((id) => id !== goal)];
     this.host.persist();
-    for (const t of plan.pendingTurns) if (t.source === 'user') this.settle(t.id, (w) => w.resolve(plan));
+    for (const t of plan.pendingTurns ?? []) if (t.source === 'user') this.settle(t.id, (w) => w.resolve(plan));
   }
 
   /** Whether the planner is paused on its context. */
@@ -296,16 +340,20 @@ export class PlanTurns {
   }
 
   /**
-   * The conversation's opening ended on the planner's usage limit: its goal
-   * waits with the limit, ahead of what was sent behind it, whose senders are
-   * answered now as any sent during the wait are.
+   * The conversation's opening ended on the planner's usage limit: its goal,
+   * saved when it was admitted, waits with the limit, ahead of what was sent
+   * behind it, whose senders are answered now as any sent during the wait
+   * are. One its own submit_plan already answered (`answered`) is not sent
+   * again to be planned twice (ADR-0022 P2), so it leaves the list.
    */
-  waitOnLimit(input: PlanTurnInput): void {
+  waitOnLimit(answered: boolean): void {
     const plan = this.host.plan();
+    const goal = this.openingGoal;
+    this.openingGoal = null;
     if (!plan) return;
-    plan.pendingTurns = [this.pending(input, false), ...(plan.pendingTurns ?? [])];
+    if (answered && goal) this.take(plan, new Set([goal]));
     this.host.persist();
-    for (const t of plan.pendingTurns) if (t.source === 'user') this.settle(t.id, (w) => w.resolve(plan));
+    for (const t of plan.pendingTurns ?? []) if (t.source === 'user') this.settle(t.id, (w) => w.resolve(plan));
   }
 
   /**
@@ -340,7 +388,8 @@ export class PlanTurns {
     // A landed pause's inputs are in the transcript: dropping them loses nothing.
     const pause = this.host.plan()?.plannerContextPause;
     const landed = new Set(pause?.landed ? pause.inputs : []);
-    return (this.host.plan()?.pendingTurns ?? []).filter((t) => t.source === 'user' && !landed.has(t.id) && !this.waiters.has(t.id) && !this.running?.ids.has(t.id));
+    const plan = this.host.plan();
+    return (plan ? this.queued(plan) : []).filter((t) => t.source === 'user' && !landed.has(t.id) && !this.waiters.has(t.id) && !this.running?.ids.has(t.id));
   }
 
   /** Whether a turn this module opened is in flight. */
@@ -493,7 +542,7 @@ export class PlanTurns {
    * forced input, the rest would otherwise wait for a pump nothing calls.
    */
   private refuse(plan: LegacyPlanState, err: unknown): void {
-    const waiting = plan.pendingTurns ?? [];
+    const waiting = this.queued(plan);
     const heard = new Set(waiting.filter((t) => t.source === 'user' && this.waiters.has(t.id)).map((t) => t.id));
     if (this.take(plan, heard)) this.host.persist();
     for (const t of waiting) this.settle(t.id, (w) => w.reject(err));
@@ -528,7 +577,7 @@ export class PlanTurns {
     const atGate = this.detecting || this.awaitingSlot;
     if (!plan || (!atGate && !this.running && !this.host.conversationBusy())) return false;
     const live = this.running?.ids;
-    const waiting = (plan.pendingTurns ?? []).filter((t) => !live?.has(t.id));
+    const waiting = this.queued(plan).filter((t) => !live?.has(t.id));
     const stopped = atGate ? waiting : waiting.filter((t) => t.source === 'user');
     if (stopped.length < waiting.length) this.quiet = true;
     if (stopped.length === 0) return false;
@@ -563,6 +612,7 @@ export class PlanTurns {
    * conversation's to abandon; whatever it settles lands nothing here.
    */
   abandon(): void {
+    this.openingGoal = null;
     this.resend.reset();
     if (this.reportWake) clearTimeout(this.reportWake);
     this.reportWake = null;
@@ -591,7 +641,7 @@ export class PlanTurns {
       this.host.persist();
       for (const t of stopped) this.settle(t.id, (w) => w.reject(new PlannerTurnStoppedError()));
     }
-    const live = plan.pendingTurns ?? [];
+    const live = this.queued(plan);
     if (live[0]?.forced) return [live[0]];
     if (live.some((t) => t.source === 'user')) return live;
     if (this.quiet) return [];

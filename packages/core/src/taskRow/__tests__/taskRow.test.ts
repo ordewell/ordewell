@@ -261,6 +261,14 @@ describe('the compact handoff a row shows (ADR-0047)', () => {
     expect(taskRowView(subject()).handoff).toBeNull();
   });
 
+  it('says what a done task\'s landing changed, as Ordewell counted it, and nothing once it is not done with it', () => {
+    const handoff = { summary: 'Only added lines.', findings: [], findingCount: 0, change: { files: 1, added: 1, removed: 1, binary: 0 } };
+
+    expect(taskRowView(subject({ status: 'completed', handoff })).handoff?.change).toBe('1 file, +1 -1');
+    expect(taskRowView(subject({ status: 'pending', handoff })).handoff).not.toHaveProperty('change');
+    expect(taskRowView(subject({ status: 'completed', handoff: { summary: 's', findings: [], findingCount: 0 } })).handoff).not.toHaveProperty('change');
+  });
+
   it('carries the saved patch its attempt kept, when it saved one (ADR-0050)', () => {
     const patch = { kind: 'patch' as const, path: '.ordewell/sessions/s1/tasks/t1/1.patch', attempt: 1, base: 'a'.repeat(40), files: 2, added: 9, removed: 1, binary: 0, bytes: 900, sha256: 'f'.repeat(64) };
     const row = taskRowView(subject({

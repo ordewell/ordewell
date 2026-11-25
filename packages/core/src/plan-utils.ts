@@ -41,9 +41,9 @@ export * from './conversation';
 export * from './taskRow';
 // A handoff's own wording (ADR-0047), shared by both task views so a severity
 // and a reference read the same wherever they are drawn.
-export { SEVERITY_LABEL, severityLabel, worstSeverity, handoffReferenceText, heldWords } from './models/Handoff';
+export { SEVERITY_LABEL, severityLabel, worstSeverity, handoffReferenceText, heldWords, changeText, patchLinesText } from './models/Handoff';
 export { onOneLine } from './models/lineBreaks';
-export type { FindingSeverity, HandoffArtifact, HandoffDigest, HandoffEvidence, HandoffFinding, StoredHandoff } from './models/Handoff';
+export type { FindingSeverity, HandoffArtifact, HandoffChange, HandoffDigest, HandoffEvidence, HandoffFinding, StoredHandoff } from './models/Handoff';
 export { taskOrderLabel, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, resolveTaskRef, resolveUserTaskRef } from './services/TaskRefs';
 export type { RefTask } from './services/TaskRefs';
 // The one runner default, shared with the webview so its initial state cannot

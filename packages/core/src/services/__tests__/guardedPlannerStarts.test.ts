@@ -55,7 +55,7 @@ describe('a Guarded planner start in the user\'s turn, of tasks the user has not
 
     expect(cards(env)[0]).toMatchObject({
       subject: 'Run the plan',
-      detail: 'The planner wants to start work. Allowing approves task #2 "Add a cache" and task #3 "Add a log", added since you approved the plan, and starts them with the rest. Each task runs on its runner, in the mode the plan set.',
+      detail: 'The planner wants to start work. Allowing approves task #2 "Add a cache" and task #3 "Add a log", added since you ran the plan, and starts them with the rest. Each task runs on its runner, in the mode the plan set.',
     });
     expect(env.run.spawnedIds()).toEqual(['t1']);
     env.session.resolveApproval(cards(env)[0].id, true);
@@ -94,7 +94,7 @@ describe('a Guarded planner start in the user\'s turn, of tasks the user has not
     await until(() => cards(env).length === 1);
     expect(cards(env)[0]).toMatchObject({
       subject: 'Start task #2 "Add a cache"',
-      detail: 'The planner wants to start work. Allowing approves task #2 "Add a cache", added since you approved the plan. It runs on claude-code in auto mode, as the plan set it.',
+      detail: 'The planner wants to start work. Allowing approves task #2 "Add a cache", added since you ran the plan. It runs on claude-code in auto mode, as the plan set it.',
     });
     env.session.resolveApproval(cards(env)[0].id, true);
 
@@ -183,7 +183,7 @@ describe('a planner start of a plan the user never executed', () => {
     const start = await env.planner.tools().runPlan!({}, ctx);
 
     expect(start.isError).toBe(true);
-    expect(answer(start).reason).toBe(`The user has not approved this plan yet: they approve it themselves (${SURFACE_CONTROLS.unknown.approvePlan}). Ask them to.`);
+    expect(answer(start).reason).toBe(`The user has not run this plan yet, and they run it themselves (${SURFACE_CONTROLS.unknown.runPlan}). Ask them to.`);
     env.planner.calls[0].finish(prose('Added it.'));
     await settled();
     expect(cards(env)).toEqual([]);

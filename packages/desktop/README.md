@@ -94,7 +94,7 @@ npm run test:desktop-e2e # the offline end-to-end walk, against bench/live's moc
 
 The end-to-end test launches the built app with Playwright's Electron support,
 against `bench/live/mock-provider.mjs` and `bench/pipeline`'s fake runner, with
-no API key and no network: it opens a workspace, plans, approves, runs, follows a
+no API key and no network: it opens a workspace, plans, runs, follows a
 task into its worktree, sends a line comment, answers a checkpoint and merges
 through the preflight. It runs once owning the daemon and once attached to a
 daemon the CLI started. It needs a display; on a headless Linux box use

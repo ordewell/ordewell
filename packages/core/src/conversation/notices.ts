@@ -26,10 +26,11 @@ export function taskStartedNotice(title: string, runner?: string): string {
 /** What a surface says differently from the others about the line a run message earns. */
 export interface RunNoticeOptions {
   /**
-   * How this surface approves a plan (the TUI's `/approve`). A surface that
-   * shows a button for it names nothing, and the line then stops at the ask.
+   * How this surface runs a plan (the TUI's `/run`), which is what signs it
+   * off (ADR-0035). A surface that shows a button for it names nothing, and
+   * the line then stops at the ask.
    */
-  approveWith?: string;
+  runWith?: string;
 }
 
 /**
@@ -44,16 +45,19 @@ export interface RunNoticeOptions {
  * once, and a second notice for it is a duplicate that slipped through (a
  * retry comes back through pending, so a genuine second start still speaks).
  */
-export function runNotice(message: SessionMessage, run: RunView, { approveWith }: RunNoticeOptions = {}): string | null {
+export function runNotice(message: SessionMessage, run: RunView, { runWith }: RunNoticeOptions = {}): string | null {
   switch (message.type) {
     case 'task_started': {
       const known = [...walkPlan(run.tasks)].find(({ task }) => task.id === message.taskId);
       return known && isTaskRunning(known.task) ? null : taskStartedNotice(message.title, message.runner);
     }
     case 'review_needed':
-      return approveWith ? `Plan needs your sign-off: ${approveWith} to continue.` : 'Plan needs your sign-off.';
+      return runWith ? `Plan needs your sign-off: ${runWith} to continue.` : 'Plan needs your sign-off.';
+    // Running a draft is the Run itself, and the timeline's own line ("You
+    // started the plan.") says so: a second line here once named an approve
+    // the user never gave, since there is one verb for it.
     case 'review_approved':
-      return 'Plan approved.';
+      return null;
     case 'execution_complete':
       return executionNotice('finished', message.summary);
     // A stop sends no tally, and defaulting it to zero reported a run halted

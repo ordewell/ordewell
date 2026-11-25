@@ -1,4 +1,4 @@
-import { NO_TURN, closeTurn, everyTaskPassed, fromTranscript, holdPrompt, runNotice, taskLogCommands, type ChildPlanView, type DecisionRecordEntry, type SerializedPlan } from '@ordewell/core';
+import { NO_TURN, closeTurn, everyTaskPassed, fromTranscript, holdPrompt, runNotice, taskLogCommands, type ChildPlanView, type DecisionRecordEntry, type ExecutionRecord, type SerializedPlan } from '@ordewell/core';
 import { bodyMode, chatEditorRoomFor } from './geometry';
 import { SPINNER_CYCLE, chatScrollGrowth, chatScrollMax } from './layout';
 import { activeToken, composerCompletions, findCommand, parseRunnerCommand, parseSlash, runnerCommandFor, type ParsedCommand } from './slash';
@@ -14,8 +14,9 @@ import { announceApprovals, announceCheckpoint, answerCheckpoint, continueTaskSt
 import { newSession, pickRewindTarget, runCommand, updatePlanned } from './reducers/commands';
 import { revertPreviewed } from './reducers/revert';
 import { adoptCompaction, followCompaction } from './reducers/compaction';
-import { disarmStop, drainQueue, forceSendPlanner, plannerEscape, queueToEditor, restoreForced } from './reducers/turnQueue';
+import { disarmStop, drainQueue, forceSendPlanner, giveBackUnsent, plannerEscape, queueToEditor, restoreForced } from './reducers/turnQueue';
 import { applySettings, foldRun, followSession, leaveSession, planSnapshot, withRun } from './reducers/incoming';
+import { pulseAfter } from './plannerPulse';
 import { refillPicker, reseedRunnerChoice } from './reducers/pickers';
 import { openStepperAt, refreshStepper } from './reducers/stepper';
 import { plannerStepper } from './reducers/plannerStepper';
@@ -247,7 +248,13 @@ function reduceAction(state: TuiState, action: Action): Step {
       if (stale(state, action.sessionId)) return step(state);
       if (action.message.type === 'planner_compaction') return followCompaction(state, action.message);
       if (action.message.type === 'planner_detection') return step({ ...state, plannerDetecting: action.message.waiting });
-      const next = followSession(state, action.message);
+      // The merge's own notice ("Merged … into your checked-out branch.") is the
+      // line a user's Merge all earns here; the timeline's "You merged …" would
+      // announce the same merge a second time.
+      if (action.message.type === 'execution_action' && isOwnMerge(action.message.record)) return step(state);
+      const followed = followSession(state, action.message);
+      const plannerPulse = pulseAfter(state.plannerPulse, followed.conversation, action.message, action.at);
+      const next = plannerPulse === followed.plannerPulse ? followed : { ...followed, plannerPulse };
       // A child's turns start on the daemon, so no call here has told the status.
       if (state.child && action.message.type === 'planner_turn_started') return step({ ...next, planner: 'joined' });
       const { sessionId } = state;
@@ -293,7 +300,8 @@ function reduceAction(state: TuiState, action: Action): Step {
     // only what is its own (below).
     case 'runMessage':
       if (stale(state, action.sessionId)) return step(state);
-      return step(runMessage(state, action.message));
+      // A landed merge moves the commit the welcome says runs fork from.
+      return step(runMessage(state, action.message), action.message.type === 'isolation_merge' && action.message.result.outcome === 'merged' ? [{ type: 'loadIsolationPreview' }] : []);
 
     case 'taskCheckpoint':
       if (stale(state, action.sessionId)) return step(state);
@@ -508,6 +516,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         if (action.code === 'planner_turn_stopped') return step({ ...state, forceSendPending: null, planner: plannerInFlight(state) ? 'planning' : 'idle' });
         state = restoreForced(state, action.code);
       }
+      if (action.unsent !== undefined) state = giveBackUnsent(state, action.unsent);
       const quiet = plannerInFlight(state) && state.stopRequested;
       // The daemon's own end for a compaction may have been lost with the call.
       const settled = state.planner === 'condensing' ? endRunningCompactions(state, quiet || action.code === 'planner_turn_stopped' ? 'stopped' : 'failed') : state;
@@ -607,6 +616,10 @@ function reduceAction(state: TuiState, action: Action): Step {
   }
 }
 
+function isOwnMerge({ command, actor, outcome }: ExecutionRecord): boolean {
+  return command === 'merge_all' && actor === 'user' && outcome === 'done';
+}
+
 /**
  * The overlay a merge or discard was confirmed from is closed with the handoff
  * it showed; one opened since (a picker, help) has nothing to do with the run.
@@ -622,7 +635,7 @@ function withoutHandoffOverlay(state: TuiState): TuiState {
  * handoff announcement and the overlay a merge closes.
  */
 function runMessage(state: TuiState, message: RunMessage): TuiState {
-  const notice = runNotice(message, state.run, { approveWith: '/approve' });
+  const notice = runNotice(message, state.run, { runWith: '/run' });
   const heard = notice === null ? state : say(state, 'system', notice);
   switch (message.type) {
     // A start the run already shows is a duplicate: it changes nothing here.

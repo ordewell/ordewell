@@ -318,7 +318,8 @@ const USERS_ONLY: Partial<Record<ExecutionCommandName, UserAction>> = {
   force_send_queued: 'forceSend',
   remove_queued: 'takeBackQueued',
   cancel_resume: 'cancelResume',
-  approve_review: 'approveReview',
+  // The review's sign-off is an older client's way to run the plan: the user's control for it is run.
+  approve_review: 'runPlan',
 };
 
 /**
@@ -333,7 +334,7 @@ function userTurnRefusals(controls: SurfaceControls, mergesByThemselves: boolean
     merge: mergesByThemselves
       ? 'Merging is the user\'s, and automatic merging is on: landed work merges by itself at its merge gate and at the end of the run. Do not ask the user to merge.'
       : `Merging the run's landed work is the user's: they are in this conversation, and merge it themselves (${controls.merge}). Tell them the work is ready to merge.`,
-    notApprovedYet: `The user has not approved this plan yet: they approve it themselves (${controls.approvePlan}). Ask them to.`,
+    notApprovedYet: `The user has not run this plan yet, and they run it themselves (${controls.runPlan}). Ask them to.`,
     checkpointIsUsers: `A checkpoint is the user's to answer in their own turn: they are in this conversation. ${checkpoint} Only the supervisor at Act answers one, in a wake-up turn.`,
     /** The supervisor's own refusal for a checkpoint, by the level that denies it: the general one says the user's reply applies a suggestion, which a checkpoint's cannot. */
     checkpointBelowAct: {
@@ -381,6 +382,8 @@ interface Located {
 interface Acted {
   message: string;
   payload?: CommandPayload;
+  /** It approved and started nothing, a run on a plan already running: the answer says so, and no start is recorded. */
+  startedNothing?: boolean;
 }
 
 /**
@@ -568,7 +571,7 @@ export class ExecutionCommands {
     // A Stop while the act awaited withdrew the start it reports, whichever verb it was: the claim under way
     // ended its attempt quietly, so only the seam's admission sees that the Stop came.
     if (stopped()) return this.refuse(command, actor, located, STOPPED_BEFORE_START);
-    this.keep(command, actor, located, 'done', doneDetail(command));
+    if (!acted.startedNothing) this.keep(command, actor, located, 'done', doneDetail(command));
     return { ok: true, message: acted.message, ...(acted.payload ? { payload: acted.payload } : {}) };
   }
 
@@ -583,7 +586,7 @@ export class ExecutionCommands {
    * running, when its end is owed to the planner as a report (ADR-0037, R2).
    */
   private async runScript(command: RunScript, actor: ExecutionActor, signal?: AbortSignal): Promise<CommandOutcome> {
-    if (!this.host.tasks()) return this.refuse(command, actor, undefined, `${NO_PLAN_FOR_SCRIPT} ${this.startsUnattended(actor) ? 'It starts when your reply ends.' : 'The user approves it by executing the plan.'}`);
+    if (!this.host.tasks()) return this.refuse(command, actor, undefined, `${NO_PLAN_FOR_SCRIPT} ${this.startsUnattended(actor) ? 'It starts when your reply ends.' : 'It starts when the user runs the plan.'}`);
     const consent = this.scriptConsent(actor, scriptBodyOf({ type: 'script', commands: command.commands, script: command.script, timeoutMs: command.timeoutMs }));
     if (consent.kind === 'refuse') return this.refuse(command, actor, undefined, consent.reason);
     const draft = this.host.draftScript(command, actor);
@@ -971,10 +974,12 @@ export class ExecutionCommands {
       if (actor.kind === 'user' || actor.kind === 'autorun') {
         return {
           act: async () => {
+            // A scheduled run already has every approved task, and readies no failure: with nothing waiting, the join starts nothing.
+            const startedNothing = waiting.length === 0 && this.orchestrator.scheduledRun;
             // The fresh chance is the user's to ask for: autorun's join leaves a failure as it is (ADR-0053).
             if (actor.kind === 'user') this.orchestrator.readyFailed();
             const joined = await this.host.joinRun(waiting.length, 0);
-            return { message: this.host.runBlocked() ? this.voiceOf(actor).blockedRun : joined };
+            return { message: this.host.runBlocked() ? this.voiceOf(actor).blockedRun : joined, ...(startedNothing ? { startedNothing } : {}) };
           },
         };
       }
@@ -983,16 +988,16 @@ export class ExecutionCommands {
       // under Full with autorun it approves what waits, since nobody is asked there.
       const unattended = this.startsUnattended(actor);
       if (!unattended && !this.approvals.planApproved) {
-        return { refusal: `${this.refusals().notApprovedYet} Tasks started with run_task are not a scheduled run, so their dependents start only once the user executes the plan.` };
+        return { refusal: `${this.refusals().notApprovedYet} Tasks started with run_task are not a scheduled run, so their dependents start only once the user runs the plan.` };
       }
       return {
         act: async () => {
           await (unattended ? this.host.joinRun(waiting.length, 0) : this.host.joinRun(0, waiting.length));
           if (this.host.runBlocked()) return { message: this.voiceOf(actor).blockedRun };
-          const held = unattended || waiting.length === 0 ? '' : ` ${capitalize(named(waiting))} ${waiting.length === 1 ? 'was' : 'were'} added after the user approved the plan, so ${waiting.length === 1 ? 'it waits' : 'they wait'} until they start ${waiting.length === 1 ? 'it' : 'them'} or execute the plan.`;
+          const held = unattended || waiting.length === 0 ? '' : ` ${capitalize(named(waiting))} ${waiting.length === 1 ? 'was' : 'were'} added after the user ran the plan, so ${waiting.length === 1 ? 'it waits' : 'they wait'} until they start ${waiting.length === 1 ? 'it' : 'them'} or run the plan again.`;
           const under = live.length === 0 ? '' : `${named(live)} ${live.length === 1 ? 'is' : 'are'} already running, and `;
           const limit = this.orchestrator.runHeld ? ' A usage limit holds the run, so nothing starts before its reset.' : '';
-          return { message: this.runningLine(actor, `The plan is running: ${under}each approved task starts as its dependencies finish.${limit}${held}`) };
+          return { message: this.runningLine(actor, `The plan is running: ${under}each task in the run starts as its dependencies finish.${limit}${held}`) };
         },
       };
     }
@@ -1010,7 +1015,7 @@ export class ExecutionCommands {
       approves = toRun.filter(({ task }) => !this.approvals.isApproved(task.id) && !(actor.kind === 'planner-turn' && task.status === 'failed'));
       if (approves.length > 0 && !this.asksToApprove(actor)) {
         const one = approves.length === 1;
-        return { refusal: `${capitalize(named(approves))} ${one ? 'was' : 'were'} added after the user approved the plan, so ${one ? 'it is' : 'they are'} not approved to run. Ask the user to execute the plan themselves, which approves ${one ? 'it' : 'them'}.` };
+        return { refusal: `${capitalize(named(approves))} ${one ? 'was' : 'were'} added after the user ran the plan, so ${one ? 'it waits' : 'they wait'} for them. Ask the user to run the plan again themselves.` };
       }
     }
     return {
@@ -1181,7 +1186,7 @@ export class ExecutionCommands {
         // The plan's own mark beside the record the seam keeps: planner starts read it (ADR-0029).
         this.approvals.approvePlan();
         await this.controls.approveReview('user');
-        return { message: this.host.runBlocked() ? USER_VOICE.blockedRun : 'Approved the plan: it runs, each task starting once its dependencies finish.' };
+        return { message: this.host.runBlocked() ? USER_VOICE.blockedRun : 'The plan runs: each task starts once its dependencies finish.' };
       },
     };
   }
@@ -1682,10 +1687,10 @@ export class ExecutionCommands {
     if (actor.kind === 'user' || actor.kind === 'autorun' || this.startsUnattended(actor) || this.approvals.isApproved(located.task.id)) return null;
     const label = describe(located);
     if (!this.approvals.planApproved) {
-      return { refusal: `The user has not approved ${label}: they approve the plan themselves (${this.host.userControls().approvePlan}), or a task by starting it (${this.host.userControls().forceStart}). Ask them to.` };
+      return { refusal: `The user has not run this plan yet, so ${label} does not start: they start it by running the plan themselves (${this.host.userControls().runPlan}), or by starting the task (${this.host.userControls().forceStart}). Ask them to.` };
     }
     if (this.asksToApprove(actor)) return { approves: [located] };
-    return { refusal: `${capitalize(label)} was added after the user approved the plan, so it is not approved to run. Ask the user to start it, or to execute the plan, which approves it.` };
+    return { refusal: `${capitalize(label)} was added after the user ran the plan, so it waits for them. Ask the user to start it, or to run the plan again.` };
   }
 
   /**
@@ -1707,8 +1712,8 @@ export class ExecutionCommands {
     const approving = command.command === 'run_script'
       ? ' Allowing approves it to run as shown; otherwise it stays in the plan, not approved, for you to start or remove.'
       : approves.length === 0 ? '' : command.command === 'run_plan'
-        ? ` Allowing approves ${named(approves)}, added since you approved the plan, and starts ${one ? 'it' : 'them'} with the rest.`
-        : ` Allowing approves ${named(approves)}, added since you approved the plan.`;
+        ? ` Allowing approves ${named(approves)}, added since you ran the plan, and starts ${one ? 'it' : 'them'} with the rest.`
+        : ` Allowing approves ${named(approves)}, added since you ran the plan.`;
     const wants = script ? 'wants to run a script task' : 'wants to start work';
     const body = script ? scriptBodyText(script) : scriptsShown(approves);
     return {
@@ -1745,7 +1750,7 @@ export class ExecutionCommands {
       case 'remove_queued': return `take back a queued message to ${label}`;
       case 'cancel_resume': return `cancel the scheduled resume of ${label}`;
       case 'answer_checkpoint': return `answer the checkpoint of ${label}`;
-      case 'approve_review': return 'approve the plan';
+      case 'approve_review': return 'run the plan';
       case 'run_script': return located ? `run script ${label}` : `run a script task "${command.title}"`;
     }
   }
@@ -2062,7 +2067,7 @@ function describeExecution(record: ExecutionRecord, command: ExecutionCommand, f
       remove_queued: `take back a queued message to ${label}`,
       cancel_resume: `cancel the scheduled resume of ${label}`,
       answer_checkpoint: `answer the checkpoint of ${label}`,
-      approve_review: 'approve the plan',
+      approve_review: 'run the plan',
       run_script: record.task ? `run script ${label}` : `run a script task${command.command === 'run_script' ? ` "${command.title}"` : ''}`,
     }[record.command];
     return record.outcome === 'declined'
@@ -2104,7 +2109,7 @@ function doneWords(record: ExecutionRecord, command: ExecutionCommand, label: st
     case 'force_send_queued': return { action: `force sent a queued message to ${label}`, tail: '.' };
     case 'remove_queued': return { action: `took back a queued message to ${label}`, tail: '.' };
     case 'cancel_resume': return { action: `cancelled the scheduled resume of ${label}`, tail: '.' };
-    case 'approve_review': return { action: 'approved the plan, which starts it', tail: '.' };
+    case 'approve_review': return { action: 'started the plan', tail: '.' };
     case 'answer_checkpoint': return command.answer === 'reject' ? { action: `rejected the checkpoint of ${label}`, tail: quoted } : { action: `approved the checkpoint of ${label}${command.raiseTokens === undefined ? '' : `, raising its budget by ${command.raiseTokens} tokens`}`, tail: '.' };
     case 'run_script': return record.result === 'gated'
       ? { action: `added script ${label}, to run once its merge gate opens`, tail: `${consentWords(record.consent)}.` }

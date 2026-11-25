@@ -77,6 +77,13 @@ export class ChatSessionHost {
     await this.answer(text, typed, runners);
   }
 
+  /** Try Again: the message of a turn that failed, shown in the conversation already, sent as it was. */
+  async sendAgain(text: string, runners?: readonly RunnerId[]): Promise<void> {
+    this.conversation.resend(text);
+    await this.port.converse(text, { now: false, ...(runners ? { runners } : {}) });
+    await this.turnEnded();
+  }
+
   /**
    * A prompt the chat held because it saw a turn in flight. Whether it is held
    * here is the surface's call; false means that turn has ended since, and the
@@ -164,8 +171,16 @@ export class ChatSessionHost {
   }
 
   private async answer(text: string, typed: boolean, runners?: readonly RunnerId[]): Promise<void> {
-    if (typed && text.trim()) this.conversation.note('user', text);
-    await this.port.converse(text, { now: false, ...(runners ? { runners } : {}) });
+    const shown = typed && text.trim() !== '';
+    if (shown) this.conversation.note('user', text);
+    const outcome = await this.port.converse(text, { now: false, ...(runners ? { runners } : {}) });
+    // Refused before any turn started, nothing was sent: the message, and what
+    // was held behind it, go back to the composer. A turn that started and
+    // then failed was sent, and keeps its place (ADR-0017 Q2).
+    if (shown && !outcome.ok && outcome.code === 'planner_not_ready') {
+      this.conversation.unsent(text);
+      return;
+    }
     await this.turnEnded();
   }
 }

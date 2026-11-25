@@ -4,7 +4,10 @@ import * as os from 'os';
 import * as path from 'path';
 import { SettingsService } from '../../services/SettingsService';
 import { getProviderMeta, PROVIDER_DETECT_PRIORITY } from '../../services/ProviderRegistry';
-import { recordInstalledPlanner, resetInstalledPlanner } from '../../services/InstalledPlanner';
+import { detectInstalledPlanner, recordInstalledPlanner, resetInstalledPlanner } from '../../services/InstalledPlanner';
+import { RunnerInstallation } from '../../services/RunnerInstallation';
+import type { RunnerRegistry } from '../../plugins/RunnerRegistry';
+import { CLAUDE_CODE_MANIFEST } from '../../plugins/builtin/claude-code.manifest';
 import { recordRunnerAuth, resetRunnerAuth } from '../../services/runnerAuth';
 import { describePlannerNotReady, plannerNotReadyFor, TERMINAL_UI_COMMANDS } from '../../services/plannerReadiness';
 import { BaseConfig } from '../BaseConfig';
@@ -194,6 +197,21 @@ describe('BaseConfig', () => {
       recordRunnerAuth('claude-code', { state: 'signed-out' });
       process.env.OPENAI_API_KEY = 'sk-openai';
       expect(detect()).toBe('openai');
+    });
+
+    it('a key\'s vendor plans when the agent was found signed out by a workspace-scoped installation, as every host records it', async () => {
+      // Production installations record each sign-in under their workspace
+      // (the daemon's, VS Code's), never unscoped.
+      const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-signin-'));
+      const registry = { getManifest: (id: string) => (id === 'claude-code' ? CLAUDE_CODE_MANIFEST : undefined) } as unknown as RunnerRegistry;
+      const installation = new RunnerInstallation(registry, async () => ({ stdout: '2.1.0' }), Date.now, {
+        authExec: async () => ({ code: 1, stdout: JSON.stringify({ loggedIn: false, authMethod: 'none' }), stderr: '' }),
+        launch: { platform: 'linux' },
+        workspace: () => workspace,
+      });
+      expect(await detectInstalledPlanner(installation)).toBe('claude-code');
+      process.env.OPENROUTER_API_KEY = 'sk-or';
+      expect(detect()).toBe('openrouter');
     });
 
     describe('unusedPlanningKey: the found key a detected agent plans past (ADR-0076)', () => {

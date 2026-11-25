@@ -68,10 +68,10 @@ describe('SessionView', () => {
       expect(screen.said()).toEqual(['Started "Add a parser" · Claude Code', 'Started "Add a parser" · Claude Code']);
     });
 
-    it('asks for the plan\'s sign-off without pointing at a command, since a button approves it here', () => {
+    it('asks for the plan\'s sign-off without pointing at a command, since a button runs it here, and names no approve once run', () => {
       send({ type: 'review_needed', tasks: [] }, { type: 'review_approved' });
 
-      expect(screen.said()).toEqual(['Plan needs your sign-off.', 'Plan approved.']);
+      expect(screen.said()).toEqual(['Plan needs your sign-off.']);
     });
 
     it('reports how a run ended', () => {
