@@ -10,6 +10,8 @@ import type { RunnerMode } from './components/TaskCard';
 export interface RunnerInfo {
   id: string;
   displayName: string;
+  /** The host's readiness for it (ADR-0052), which its pill words. */
+  readiness?: RunnerMeta['readiness'];
 }
 
 export interface ModelOption {
@@ -532,7 +534,7 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
       const list = action.runners ?? [];
       return {
         ...state,
-        runnerList: list.map((r: RunnerMeta) => ({ id: r.id, displayName: r.displayName })),
+        runnerList: list.map((r: RunnerMeta) => ({ id: r.id, displayName: r.displayName, ...(r.readiness ? { readiness: r.readiness } : {}) })),
         enabledRunnerIds: list.filter((r: RunnerMeta) => r.enabled).map((r: RunnerMeta) => r.id),
         runnersKnown: true,
         detectionError: null,

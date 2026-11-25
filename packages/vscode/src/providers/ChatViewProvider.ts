@@ -174,7 +174,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this._runnerNotice = notice;
     this.postMessage({ type: 'setModesByRunner', modesByRunner, notice });
   }
-  setRunnerList(runners: { id: string; displayName: string }[]): void {
+  setRunnerList(runners: Omit<RunnerMeta, 'enabled'>[]): void {
     this._runnerList = runners;
     this._emitConsolidatedRunners();
   }
@@ -221,7 +221,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _modesByRunner: Record<string, RunnerModeMeta[]> = {};
   private _runnerNotice: { line: string; docs: string } | null = null;
   /** The installed runners as discovery last listed them; null until it has, which the webview shows as detecting. */
-  private _runnerList: { id: string; displayName: string }[] | null = null;
+  private _runnerList: Omit<RunnerMeta, 'enabled'>[] | null = null;
   private _enabledRunnerIds: string[] = [];
   private _modelConfig: { orchestrator: string; orchestratorProvider?: string } | null = null;
   private _modelOptions: ModelOption[] = [];
@@ -289,6 +289,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       id: r.id,
       displayName: r.displayName,
       enabled: enabledSet.has(r.id),
+      ...(r.readiness ? { readiness: r.readiness } : {}),
     }));
     this.setRunners(runners);
   }

@@ -1486,7 +1486,9 @@ export class DaemonHost {
   private async setRunnerEnabled(runnerId: string, enabled: boolean, requestId: string): Promise<void> {
     let saved = !enabled;
     try {
-      await callDaemon('runners.setEnabled', { id: runnerId }, { enabled });
+      // This window's workspace: switching on is a new pick the daemon judges
+      // by that workspace's sign-in and catalog (ADR-0052).
+      await callDaemon('runners.setEnabled', { id: runnerId, workspace: this.workspace }, { enabled });
       // The write landed: a list that cannot be read leaves the click's own
       // state as the answer, never the state it asked to leave.
       saved = enabled;
