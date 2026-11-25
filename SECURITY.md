@@ -304,7 +304,7 @@ Planned, not yet built:
 ## What a task's agent can reach
 
 This section is about Ordewell's own parts: its daemon, its CLI and the tokens
-they use. It describes 0.14.11.
+they use. It describes 0.14.12.
 
 **In Full and in Guarded, a task's agent runs as you.** A change or ops task's
 runner starts with your environment, `HOME` and `PATH` included, so its agent

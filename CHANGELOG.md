@@ -8,6 +8,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.14.12] - 2026-11-25
+
 ### Added
 
 - **Finished tasks show what they changed.** Each task that lands now shows
@@ -23,12 +25,14 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   session (the daemon's, or VS Code's extension host), never its content. The
   terminal UI's status line reads, for example, `Planning… 1m 12s ·
   run_command running 58s`, or says how long nothing has arrived. A turn
-  whose Ordewell calls all failed now ends with a notice naming the log; a
+  whose Ordewell calls all failed, while the session holds no plan, now ends
+  with a notice naming the log and the planner picker on every surface; a
   command that ran and exited non-zero is not counted as a failed call
   (ADR-0022). The status line detail is terminal-only for now; the desktop and
   VS Code show the plain planning state.
 - **Typing `/` in the desktop app lists the workspace's skills**, as VS Code
-  does, and its task cards show them.
+  does, and its task cards show them. A skill that shares a built-in command's
+  name is listed once, as the built-in.
 - **The first merge that writes the `Planned-with: Ordewell` line says so
   once.** Its confirmation gains a sentence naming the line and
   `ordewell trailer off`; with automatic merging the sentence appears once as
@@ -67,9 +71,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   records a second "You started the plan." (ADR-0030).
 - **A session is saved when its first message is admitted.** It appears in the
   list while the planner works and keeps your goal if the first turn fails or
-  you stop it, with an error entry saying it went unanswered; the desktop
-  lists it as *No plan yet*. Stop now reaches the
-  daemon during the first turn on the desktop (ADR-0029).
+  you stop it, with an error entry saying it went unanswered. On the desktop
+  it reads *Planning* while the planner works on it, and is listed as *No
+  plan yet* if no plan came of it. Stop now reaches the daemon during the
+  first turn on the desktop (ADR-0029).
 - **A message the planner refuses because it is not ready comes back.** The
   text returns to the composer, with anything queued behind it, instead of
   staying drawn as sent. A Send during a running turn that is refused this way
@@ -95,11 +100,6 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
-- **The "tools failed on every call" notice is said only when it is true.**
-  It ignores a Codex planner's `run_command` whose command ran and exited
-  non-zero, and a turn whose calls were refused while the session holds a plan
-  (a planner asking to start the run itself). It names the log of the process
-  that runs the session and the planner picker on every surface (ADR-0022).
 - **A Codex planner's failed tool calls read as failed.** codex-cli 0.171's
   shape for a reply Ordewell marked as an error showed it as answered, and a
   call Codex ended at its tool deadline failed the whole turn with
@@ -108,9 +108,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **The desktop app's first turn.** A failed turn's error shows once, after
   its message, and Try Again sends the message again without drawing or
   saving it a second time; a message queued behind the failed one closes
-  the error once it goes, Try Again with it. While the planner works
-  on the first message the session reads *Planning*. Typing `/` lists a
-  skill that shares a built-in command's name once, as the built-in.
+  the error once it goes, Try Again with it.
 - **The terminal UI's welcome names the current base commit after a merge**
   and on `/new`, not the one it read at launch.
 - **`.ordewell/.gitignore` no longer shows up in `git status`.** Its rules
@@ -5404,7 +5402,8 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.11...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.12...HEAD
+[0.14.12]: https://github.com/ordewell/ordewell/compare/v0.14.11...v0.14.12
 [0.14.11]: https://github.com/ordewell/ordewell/compare/v0.14.10...v0.14.11
 [0.14.10]: https://github.com/ordewell/ordewell/compare/v0.14.9...v0.14.10
 [0.14.9]: https://github.com/ordewell/ordewell/compare/v0.14.8...v0.14.9
