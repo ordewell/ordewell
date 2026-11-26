@@ -125,6 +125,14 @@ describe('loginPlanner', () => {
   // #62 F1: typed into the user's own shell, the login's end was never seen:
   // the shell outlives it, so the spinner ran until the terminal was closed or
   // five minutes passed. The agent is the terminal's process now.
+  it('logs safe launch and exit diagnostics without arguments or environment values', async () => {
+    const h = harness({ aiProvider: 'cursor-agent', verdict: () => ({ state: 'signed-out', loginCommand: ['cursor-agent', 'secret-argument'] }), exitAfter: { polls: 1, code: 1 } });
+    await loginPlanner(h.deps);
+    expect(h.deps.log).toHaveBeenCalledWith('Login launch: runner=cursor-agent platform=linux');
+    expect(h.deps.log).toHaveBeenCalledWith('Login exit: runner=cursor-agent code=1');
+    expect(JSON.stringify(vi.mocked(h.deps.log!).mock.calls)).not.toMatch(/secret-argument|accounts\/other/);
+  });
+
   it("runs Cursor's login as the terminal's own process and rechecks it when that process exits", async () => {
     let rechecked = false;
     const h = harness({
@@ -508,7 +516,7 @@ describe('loginPlanner', () => {
   // A login that failed or was cancelled is no recheck (ADR-0052): its blocker
   // stays, and the send gate still asks the agent before the next turn.
   it.each([
-    [1, 'The Cursor login exited with code 1.'],
+    [1, 'The Cursor login exited with code 1. Run /login cursor-agent to retry and recheck sign-in.'],
     [undefined, 'The terminal closed before sign-in finished.'],
   ] as const)('ends a login that exits %s as a failure, keeping what was recorded', async (code, message) => {
     const h = harness({ aiProvider: 'cursor-agent', verdict: () => ({ state: 'signed-out', loginCommand: ['cursor-agent', 'login'] }), exitAfter: { polls: 2, code } });

@@ -188,6 +188,7 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
     deps.notifications.warn(message);
     return;
   }
+  deps.log?.(`Login launch: runner=${runner} platform=${platform}`);
   let terminal: vscode.Terminal;
   try {
     terminal = deps.window.createTerminal({
@@ -282,10 +283,11 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
       outcome = { ok: false, message: TIMEOUT_MESSAGE };
     } else {
       const code = terminal.exitStatus?.code;
+      deps.log?.(`Login exit: runner=${runner} code=${code ?? "unknown"}`);
       // Only a login that finished is a recheck (ADR-0052): one that failed or
       // was closed keeps the blocker it was started to clear.
       outcome = code === 0 ? await recheckAfterLogin(deps, runner, label)
-        : { ok: false, message: code === undefined ? CLOSED_MESSAGE : `The ${label} login exited with code ${code}.` };
+        : { ok: false, message: code === undefined ? CLOSED_MESSAGE : `The ${label} login exited with code ${code}. Run /login ${runner} to retry and recheck sign-in.` };
     }
   } catch (err) {
     // A terminal disposed between create and show must still end the attempt:
