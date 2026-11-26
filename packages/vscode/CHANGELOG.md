@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.14.14] - 2026-11-26
+
 ### Fixed
 
 - Signing in to Cursor or Cline no longer spins until the terminal is closed or
@@ -1997,7 +1999,8 @@ First public release.
 Full project changelog:
 https://github.com/ordewell/ordewell/blob/main/CHANGELOG.md
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.13...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.14...HEAD
+[0.14.14]: https://github.com/ordewell/ordewell/compare/v0.14.13...v0.14.14
 [0.14.13]: https://github.com/ordewell/ordewell/compare/v0.14.12...v0.14.13
 [0.14.12]: https://github.com/ordewell/ordewell/compare/v0.14.11...v0.14.12
 [0.14.11]: https://github.com/ordewell/ordewell/compare/v0.14.10...v0.14.11

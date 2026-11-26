@@ -6,7 +6,7 @@ and model assigned to each AI task. With worktree isolation enabled, code tasks
 run in separate worktrees; ops and script tasks run at the workspace root.
 Ordewell records task outcomes and combines code changes for review and merging.
 
-This README describes 0.14.13. See the [published releases](https://github.com/ordewell/ordewell/releases)
+This README describes 0.14.14. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
 
 ## Installation
