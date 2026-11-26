@@ -166,6 +166,32 @@ describe('the Settings view', () => {
     expect(screen.getByRole('textbox', { name: /Parallel tasks/ })).toHaveValue('3');
   });
 
+  it('offers an OpenCode planner model\'s thinking efforts, and none for a model without variants', async () => {
+    const opencodeModels = [
+      {
+        modelId: 'opencode-go/deepseek-v4.1-flash',
+        modelLabel: 'DeepSeek V4.1 Flash 1017',
+        variants: [{ id: 'low', label: 'Low' }, { id: 'high', label: 'High' }, { id: 'max', label: 'Max' }],
+      },
+      { modelId: 'opencode-go/mimo-v2.6-pro', modelLabel: 'MiMo-V2.6-Pro', variants: [] },
+    ];
+    await mount('dark', {
+      settings: { aiProvider: 'opencode', orchestratorModel: 'opencode-go/deepseek-v4.1-flash' },
+      runners: { runners: [...RUNNERS.runners, { id: 'opencode', name: 'OpenCode', enabled: true, usable: true }] },
+      models: { modelsByRunner: { ...MODELS_BY_RUNNER, opencode: opencodeModels } },
+    });
+
+    const model = await screen.findByRole('combobox', { name: 'Planner model' });
+    expect(model).toHaveValue('opencode-go/deepseek-v4.1-flash');
+    const effort = await screen.findByRole('combobox', { name: 'Thinking effort' });
+    expect(within(effort).getAllByRole('option').map((option) => option.getAttribute('value'))).toEqual(['', 'low', 'high', 'max']);
+
+    // A model with no levels still gets no effort control: nothing is invented.
+    fireEvent.change(model, { target: { value: 'opencode-go/mimo-v2.6-pro' } });
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Planner model' })).toHaveValue('opencode-go/mimo-v2.6-pro'));
+    expect(screen.queryByRole('combobox', { name: 'Thinking effort' })).not.toBeInTheDocument();
+  });
+
   // An agent with no model picked plans with its own default (F6): the select names that choice, not a blank.
   it('names an agent planner\'s missing model as the agent\'s own default', async () => {
     await mount('dark', { settings: { orchestratorModel: '' } });
