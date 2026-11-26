@@ -14,4 +14,7 @@ export {
   ChatBridgeContext, TaskLogBridgeContext, useChatBridge, useTaskLogBridge,
   type ChatBridge, type HostBridge, type TaskLogBridge,
 } from './bridge';
+// The plan panel's status filter: hosts that fold rows with CSS provide it, so
+// a row's disclosure button stays truthful while a filter shows descendants.
+export { PlanFilterActiveContext, usePlanFilterActive } from './chat/planFilter';
 export * from './protocol';

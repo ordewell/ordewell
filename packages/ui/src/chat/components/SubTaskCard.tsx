@@ -13,8 +13,13 @@ import { checkLabel, verdictSummary } from '../checkLabel';
 
 interface SubTaskCardProps {
   task: Task;
-  /** The subtask's parent, used to build its dotted order label (e.g. "2.1"). */
-  parentTask?: Task;
+  /** The subtask's parent, used to build its dotted order label (e.g. "2.1").
+   *  A parent below the top level carries its own full label, so a grandchild
+   *  reads "2.1.3" and not just "1.3" (core's `taskOrderLabel` reads `label`). */
+  parentTask?: Task & { label?: string };
+  /** This subtask's own subtasks, rendered as a nested tree so every counted
+   *  descendant is a discoverable card, not just the direct children. */
+  children?: React.ReactNode;
   /** The plan tree, which tells what a failure blocks and labels it. */
   tasks?: Task[];
   models: DiscoveredModel[];
@@ -61,7 +66,7 @@ const DEFAULT_MODES: RunnerMode[] = [
   { id: 'plan', label: 'Read-only', description: 'Ordewell commands; lands nothing' },
 ];
 
-export default function SubTaskCard({ task, parentTask, tasks, models, modes, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, runActive, run, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, runnerSignIn, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRevert, onRunTask, onOpenLog }: SubTaskCardProps) {
+export default function SubTaskCard({ task, parentTask, tasks, children, models, modes, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, runActive, run, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, runnerSignIn, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRevert, onRunTask, onOpenLog }: SubTaskCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState<string | null>(null);
 
@@ -302,6 +307,9 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
 
         <UsageLimitControls taskId={task.id} row={row} onResumeNow={onResumeNow} onCancelResume={onCancelResume} />
       </div>
+      {/* Descendants stay inside this card's subtree, so a status filter that
+          matches a grandchild finds its data-status under the top-level row. */}
+      {children}
     </div>
   );
 }

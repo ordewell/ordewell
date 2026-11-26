@@ -35,4 +35,15 @@ describe("the plan panel's status filter and folded subtasks", () => {
     // the folded subtasks are what :has() now finds for a nested running task.
     expect(css).toMatch(/\.frame-plan\[data-filter='running'\][^{]*\.task-list-rows > \[data-task-id\]:not\(:has\(\[data-status='running'\]\)\)/);
   });
+
+  it('keeps a :has() rule for every rail status, so a deep descendant matches any filter', () => {
+    // The recursion renders every descendant with data-status; each status filter
+    // must remain so a running grandchild is as discoverable as any other status.
+    const statuses = ['needs-you', 'failed', 'stalled', 'running', 'blocked', 'waiting-for-merge', 'not-started', 'passed', 'skipped'];
+    for (const status of statuses) {
+      expect(css, `no ${status} filter rule`).toContain(
+        `.frame-plan[data-filter='${status}'] .task-list-rows > [data-task-id]:not(:has([data-status='${status}']))`,
+      );
+    }
+  });
 });

@@ -14,6 +14,7 @@ import { lastLine } from '../taskOutput';
 import { useDelegationOffered } from '../delegationOffered';
 import { checkLabel, verdictSummary } from '../checkLabel';
 import { useFollowOutput } from '../followOutput';
+import { usePlanFilterActive } from '../planFilter';
 import { blockedByLabel, dependencyCandidates, capConflictFiles, cardEditable, handoffFindingsText, holdLabel, pausedOnLimit, scriptTaskText, skippedLabel, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, RunTask, TaskRowAction, TaskRowView, TaskStatusKind, AssignmentScope } from '@ordewell/core';
 
@@ -491,38 +492,54 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
   const [editingDeps, setEditingDeps] = useState(false);
   const [completedSteps, setCompletedSteps] = useState<Set<number>>(new Set());
   const [offeringResolve, setOfferingResolve] = useState(false);
-  const sortedSubtasks = [...task.subtasks].sort((a, b) => a.order - b.order);
+  // A rail filter reveals a collapsed row's descendants with CSS while its
+  // editor body stays closed; the heading must not read "collapsed" then.
+  const filterActive = usePlanFilterActive();
 
   // One block, drawn either inside the open card or, for a collapsed row, in a
   // folded container the frame's status filter can still search with :has().
-  const subtasksBlock = sortedSubtasks.length > 0 && (
-    <div className="subtasks">
-      {sortedSubtasks.map((sub) => {
-        // A subtask can run on a different runner than its parent, so its
-        // pickers must be scoped to ITS OWN assignedRunner, not the
-        // parent's — reusing the parent's `models`/`modes` here would
-        // show the wrong runner's catalog (or none at all).
-        const subRunner = sub.assignedRunner;
-        const subRunnerModels = subRunner ? modelsByRunner?.[subRunner] : undefined;
-        const subModels = subRunnerModels && subRunnerModels.length > 0 ? subRunnerModels : models;
-        const subModes = subRunner ? (modesByRunner?.[subRunner] ?? []) : [];
-        return (
-          <SubTaskCard key={sub.id} task={sub} parentTask={task} tasks={siblings} models={subModels}
-            modes={subModes} runners={runners} runnerScope={runnerScope} effectiveRunner={subRunner}
-            configuredProviders={configuredProviders} modelApiMapping={modelApiMapping}
-            isExecuting={isExecuting} runActive={runActive} run={runsByTask?.get(sub.id)}
-            onRunnerChange={onRunnerChange}
-            onModelChange={onModelChange} onModelsRefreshNeeded={onModelsRefreshNeeded} onModeChange={onModeChange}
-            taskSkills={taskSkills} onSkillsChange={onSkillsChange}
-            onRemoveTask={onRemoveTask} onPromptChange={onPromptChange}
-            onRetry={onRetry} runnerSignIn={runnerSignIn} onSkip={onSkip} onCancel={onCancel} onCancelResume={onCancelResume} onResumeNow={onResumeNow}
-            onForceStart={onForceStart} onMarkComplete={onMarkComplete}
-            onMarkIncomplete={onMarkIncomplete} onRevert={onRevert}
-            onRunTask={onRunTask} onOpenLog={onOpenLog} />
-        );
-      })}
-    </div>
-  );
+  // planProgress counts every descendant (core's walkPlan is recursive), so the
+  // block renders the whole subtree, not just direct children: a running
+  // grandchild must be as discoverable as a running child. Each descendant
+  // reads its own live-run status and its own runner's pickers, and is labelled
+  // by its full dotted path, so the tree reads the same at every depth.
+  const renderSubtasks = (subs: readonly Task[], parent: Task, parentLabel: string): React.ReactNode => {
+    const sorted = [...subs].sort((a, b) => a.order - b.order);
+    if (sorted.length === 0) return null;
+    return (
+      <div className="subtasks">
+        {sorted.map((sub) => {
+          const label = `${parentLabel}.${sub.order}`;
+          // A subtask can run on a different runner than its parent, so its
+          // pickers must be scoped to ITS OWN assignedRunner, not the
+          // parent's — reusing the parent's `models`/`modes` here would
+          // show the wrong runner's catalog (or none at all).
+          const subRunner = sub.assignedRunner;
+          const subRunnerModels = subRunner ? modelsByRunner?.[subRunner] : undefined;
+          const subModels = subRunnerModels && subRunnerModels.length > 0 ? subRunnerModels : models;
+          const subModes = subRunner ? (modesByRunner?.[subRunner] ?? []) : [];
+          return (
+            <SubTaskCard key={sub.id} task={sub} parentTask={{ ...parent, label: parentLabel }} tasks={siblings} models={subModels}
+              modes={subModes} runners={runners} runnerScope={runnerScope} effectiveRunner={subRunner}
+              configuredProviders={configuredProviders} modelApiMapping={modelApiMapping}
+              isExecuting={isExecuting} runActive={runActive} run={runsByTask?.get(sub.id)}
+              onRunnerChange={onRunnerChange}
+              onModelChange={onModelChange} onModelsRefreshNeeded={onModelsRefreshNeeded} onModeChange={onModeChange}
+              taskSkills={taskSkills} onSkillsChange={onSkillsChange}
+              onRemoveTask={onRemoveTask} onPromptChange={onPromptChange}
+              onRetry={onRetry} runnerSignIn={runnerSignIn} onSkip={onSkip} onCancel={onCancel} onCancelResume={onCancelResume} onResumeNow={onResumeNow}
+              onForceStart={onForceStart} onMarkComplete={onMarkComplete}
+              onMarkIncomplete={onMarkIncomplete} onRevert={onRevert}
+              onRunTask={onRunTask} onOpenLog={onOpenLog}>
+              {renderSubtasks(sub.subtasks ?? [], sub, label)}
+            </SubTaskCard>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const subtasksBlock = renderSubtasks(task.subtasks, task, String(task.order));
 
   // The run's word on this task: absent until the host has folded a run, and
   // then authoritative over the plan for everything status-only.
@@ -603,6 +620,10 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
     && !!onSendMessage && !!onSendMessageNow;
 
   const asRow = variant === 'row';
+  // A filter folds the editor body but still shows every descendant, so the
+  // disclosure button reports expanded even while `expanded` is false. The
+  // body, keyboard fold and controls still follow `expanded` alone.
+  const ariaExpanded = expanded || (asRow && filterActive && !!subtasksBlock);
   // A force start: core approves it, and never starts it before its dependencies finish.
   const approveButton = row.waitsForApproval && onForceStart && (
     <button type="button" className={asRow ? 'task-row-action primary' : 'task-log-open-btn'}
@@ -629,7 +650,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
   return (
     <div className={`task-with-controls task-with-controls-top${asRow ? ' task-row-item' : ''}${asRow && expanded ? ' expanded' : ''}`}>
       <div className={`task-card task-${task.type} ${expanded ? 'expanded' : ''}${asRow ? ' task-row-card' : ''}`}>
-        <TaskSummary task={task} row={row} expanded={expanded} onToggle={() => setExpanded(!expanded)}
+        <TaskSummary task={task} row={row} expanded={expanded} ariaExpanded={ariaExpanded} onToggle={() => setExpanded(!expanded)}
           onOpenChat={onOpenLog && (() => onOpenLog(task.id))} badges={asRow}
           density={asRow ? 'row' : undefined} idleSince={idleSince} status={statusLook}>
           {delegated && onOpenChild && <button type="button" className={asRow ? 'task-row-action' : undefined} onClick={(e) => { e.stopPropagation(); onOpenChild(task.id); }}>Open subplanner</button>}

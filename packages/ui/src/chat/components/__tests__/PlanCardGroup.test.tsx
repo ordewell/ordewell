@@ -2,6 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import PlanCardGroup from '../PlanCardGroup';
+import { PlanFilterActiveContext } from '../../planFilter';
 
 import type { Task, DiscoveredModel } from '@ordewell/core';
 import { EMPTY_RUN } from '@ordewell/core/plan-utils';
@@ -386,5 +387,74 @@ describe('PlanCardGroup — the plan panel\'s rows', () => {
     const row = container.querySelector('[data-task-id="p"]')!;
     expect(row.querySelector('.task-card-body [data-status="running"]')).not.toBeNull();
     expect(row.querySelector('.task-row-subtasks-folded')).toBeNull();
+  });
+
+  it('renders the whole descendant tree in nested subtasks with full dotted labels', () => {
+    const { container } = render(
+      <PlanCardGroup run={EMPTY_RUN} models={emptyModels} rows
+        tasks={[
+          makeTask({ id: 'p', order: 2, title: 'Parent', subtasks: [
+            makeTask({ id: 'c', order: 1, title: 'Child', subtasks: [
+              makeTask({ id: 'g', order: 3, title: 'Grandchild', status: 'in_progress' }),
+            ] }),
+          ] }),
+        ]}
+      />,
+    );
+    const row = container.querySelector('[data-task-id="p"]')!;
+    const folded = row.querySelector('.task-row-subtasks-folded')!;
+    // The grandchild is a nested .subtasks inside its parent's card, still a
+    // descendant of the top-level row so :has() can find any status at depth.
+    const nested = folded.querySelector('.subtasks .subtasks');
+    expect(nested).not.toBeNull();
+    expect(nested!.querySelector('[data-status="running"]')).not.toBeNull();
+    // Labels follow the full path, not just the immediate parent's order.
+    const orders = [...folded.querySelectorAll('.subtask-order')].map((el) => el.textContent);
+    expect(orders).toContain('2.1.');
+    expect(orders).toContain('2.1.3.');
+  });
+
+  it('keeps the full deep tree in an expanded body, with no folded copy', () => {
+    const { container } = render(
+      <PlanCardGroup run={EMPTY_RUN} models={emptyModels} rows
+        tasks={[
+          makeTask({ id: 'p', order: 2, title: 'Parent', subtasks: [
+            makeTask({ id: 'c', order: 1, title: 'Child', subtasks: [
+              makeTask({ id: 'g', order: 3, title: 'Grandchild', status: 'failed' }),
+            ] }),
+          ] }),
+        ]}
+      />,
+    );
+    fireEvent.click(heading(/^#2 Parent/));
+    const row = container.querySelector('[data-task-id="p"]')!;
+    expect(row.querySelector('.task-card-body .subtasks .subtasks [data-status="failed"]')).not.toBeNull();
+    expect(row.querySelector('.task-row-subtasks-folded')).toBeNull();
+    expect(row.querySelectorAll('.subtask-order')).toHaveLength(2);
+  });
+
+  it('keeps arrow-key folding of the body under a filter while aria-expanded stays truthful', () => {
+    const { container } = render(
+      <PlanFilterActiveContext.Provider value={true}>
+        <PlanCardGroup run={EMPTY_RUN} models={emptyModels} rows
+          tasks={[
+            makeTask({ id: 'p', order: 1, title: 'Parent', subtasks: [makeTask({ id: 'c', order: 1, title: 'Child' })] }),
+          ]}
+        />
+      </PlanFilterActiveContext.Provider>,
+    );
+    const parent = heading(/^#1 Parent/);
+    const row = container.querySelector('[data-task-id="p"]')!;
+    // The filter reveals the child while the editor body stays closed.
+    expect(parent.getAttribute('aria-expanded')).toBe('true');
+    expect(row.querySelector('.task-card-body')).toBeNull();
+    expect(row.querySelector('.task-row-subtasks-folded [data-status="not-started"]')).not.toBeNull();
+    // → and ← still open and close the body; the disclosure stays expanded.
+    fireEvent.keyDown(parent, { key: 'ArrowRight' });
+    expect(row.querySelector('.task-card-body')).not.toBeNull();
+    expect(parent.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.keyDown(parent, { key: 'ArrowLeft' });
+    expect(row.querySelector('.task-card-body')).toBeNull();
+    expect(parent.getAttribute('aria-expanded')).toBe('true');
   });
 });
