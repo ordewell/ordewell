@@ -459,6 +459,7 @@ export function cardRowView(task: Task, run: TaskCardRun | undefined, context: {
   // The run's verdict and round are the newer word on a loop's check: they say whether it is between rounds (ADR-0045).
   return taskRowView({
     ...task,
+    status: run?.status ?? task.status,
     handoff: run ? run.handoff : task.handoff,
     idleSince: run?.idleSince ?? null,
     completionReceived: run?.completionReceived,

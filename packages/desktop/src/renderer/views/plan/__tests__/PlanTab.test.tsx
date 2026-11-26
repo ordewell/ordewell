@@ -88,6 +88,19 @@ describe('planProgress', () => {
     expect(planProgress(host)).toEqual({ done: 1, total: 3, counts: { passed: 1, failed: 1, 'not-started': 1 } });
   });
 
+  it('shows the live running status on a retried task', async () => {
+    const plan = surfacePlan([surfaceTask({ id: 'a', order: 1, title: 'Retry me', status: 'failed' })]);
+    const daemon = fakeDaemon({ 'sessions.load': ok({ ok: true, plan, goal: 'Ship' }) });
+    const host = new DaemonHost('/work/acme');
+    hosts.push(host);
+    await act(() => host.open('s1'));
+    await act(async () => daemon.push('s1', { type: 'connected', sessionId: 's1' }, { type: 'run_snapshot', sessionId: 's1', view: { tasks: plan.tasks, runMerge: null, handoff: null, mergeResult: null }, stream: 'd1', seq: 0 }));
+    const { container } = render(<PlanList host={host} />);
+    await act(async () => daemon.push('s1', { type: 'task_started', taskId: 'a', order: 1, title: 'Retry me', runner: 'claude-code', stream: 'd1', seq: 1 }));
+    expect(planProgress(host)?.counts.running).toBe(1);
+    expect(container.querySelector('[data-task-id="a"] [data-status="running"]')).not.toBeNull();
+  });
+
   it('has nothing to say before there is a plan', () => {
     const host = new DaemonHost('/work/empty');
     hosts.push(host);
