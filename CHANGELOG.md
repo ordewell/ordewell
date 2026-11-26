@@ -8,6 +8,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- Failed VS Code agent logins keep the terminal open so their diagnostic output remains visible, and report the exit code and retry command.
+- Desktop status filters show matching nested tasks, including deep descendants, and reflect the live status of retried tasks.
+
 ## [0.14.14] - 2026-11-26
 
 ### Fixed
