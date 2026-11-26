@@ -71,6 +71,10 @@ Each runner you want to use must be installed and on your PATH. See the
 [full runner list](https://github.com/ordewell/ordewell#readme). If a runner appears greyed out right after installing it, run
 `/refresh`, which reads your login shell's PATH again.
 
+If a login exits with an error, its terminal stays open so you can read the
+message; use `/login <runner>` in the panel to retry, and Ordewell rechecks
+sign-in after a successful exit. Press Enter to close a failed login terminal.
+
 Skills are `SKILL.md` folders: type `/name` in the panel to load one into the
 conversation, and attach task skills as chips on a task's card. See
 [Writing skills](https://github.com/ordewell/ordewell/blob/main/docs/skills.md).

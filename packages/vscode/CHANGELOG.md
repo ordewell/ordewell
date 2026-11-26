@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Failed agent logins keep their terminal open so diagnostic output remains visible, with the exit code and a retry command.
+
 ## [0.14.14] - 2026-11-26
 
 ### Fixed

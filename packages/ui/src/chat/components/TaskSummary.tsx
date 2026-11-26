@@ -23,6 +23,11 @@ export interface TaskSummaryProps {
   density?: TaskSummaryDensity;
   /** With `onToggle`, the summary opens and closes the details below it. */
   expanded?: boolean;
+  /** What the disclosure button reports to assistive tech. Defaults to
+   *  `expanded`: a status filter can reveal the row's descendants while its
+   *  editor body stays collapsed, so the heading must not claim "collapsed"
+   *  while that content is on screen. Only the ARIA state, never the body. */
+  ariaExpanded?: boolean;
   onToggle?: () => void;
   /** Shown only once an attempt has started, since only then is there a chat to open. */
   onOpenChat?: () => void;
@@ -65,8 +70,9 @@ function headerClick(onToggle: (() => void) | undefined): React.MouseEventHandle
  */
 export default function TaskSummary(props: TaskSummaryProps) {
   if (props.density === 'row') return <TaskSummaryRow {...props} />;
-  const { task, row, density = 'comfortable', expanded, onToggle, onOpenChat, badges = true, children, className } = props;
+  const { task, row, density = 'comfortable', expanded, ariaExpanded, onToggle, onOpenChat, badges = true, children, className } = props;
   const compact = density === 'compact';
+  const expandedForAria = ariaExpanded ?? expanded;
   const openChat = onOpenChat && row.chatAvailable ? onOpenChat : undefined;
   const classes = ['task-card-header', 'task-summary', `task-summary-${density}`, className].filter(Boolean).join(' ');
   return (
@@ -78,7 +84,7 @@ export default function TaskSummary(props: TaskSummaryProps) {
       </span>
       <div className={`task-heading-block${openChat ? ' task-heading-block-with-log' : ''}`}>
         {onToggle ? (
-          <button type="button" className="task-heading" aria-expanded={expanded}
+          <button type="button" className="task-heading" aria-expanded={expandedForAria}
             title={expanded ? 'Collapse task details' : 'Expand task details'}
             onClick={(e) => { e.stopPropagation(); onToggle(); }}>
             <span className="task-title-text">{task.title}</span>
@@ -129,10 +135,11 @@ function rowAssignment(task: Task, row: TaskRowView): React.ReactNode {
  * reader, worded as the graph names its node ("#2 Add the route, needs you"),
  * so the panel and the graph never describe one task differently.
  */
-function TaskSummaryRow({ task, row, expanded, onToggle, onOpenChat, badges = true, children, className, status, idleSince }: TaskSummaryProps) {
+function TaskSummaryRow({ task, row, expanded, ariaExpanded, onToggle, onOpenChat, badges = true, children, className, status, idleSince }: TaskSummaryProps) {
   const look = status ?? statusOf(row.status);
   const line = statusLineOf(row, look, idleSince);
   const name = `#${row.orderLabel} ${task.title}, ${line.charAt(0).toLowerCase()}${line.slice(1)}`;
+  const expandedForAria = ariaExpanded ?? expanded;
   const openChat = onOpenChat && row.chatAvailable ? onOpenChat : undefined;
   const assignment = rowAssignment(task, row);
   const classes = ['task-card-header', 'task-summary', 'task-summary-row', `task-row-${look.tone}`, className].filter(Boolean).join(' ');
@@ -143,7 +150,7 @@ function TaskSummaryRow({ task, row, expanded, onToggle, onOpenChat, badges = tr
         <span className="task-order">{row.orderLabel}</span>
         <KindBadges task={task} row={row} ai={false} />
         {onToggle ? (
-          <button type="button" className="task-heading" aria-expanded={expanded} aria-label={name} title={task.title}
+          <button type="button" className="task-heading" aria-expanded={expandedForAria} aria-label={name} title={task.title}
             onClick={(e) => { e.stopPropagation(); onToggle(); }}>
             <span className="task-title-text">{task.title}</span>
           </button>

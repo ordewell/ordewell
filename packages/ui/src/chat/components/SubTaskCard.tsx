@@ -5,6 +5,7 @@ import TaskAssignment, { TaskAssignmentReadout } from './TaskAssignment';
 import TaskHandoff from './TaskHandoff';
 import { cardEditable, pausedOnLimit, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, TaskRowAction, AssignmentScope } from '@ordewell/core';
+import { statusOf } from '../../design/status';
 import { RunnerOptionItem, StatusBadge, TaskActions, TaskMarkControl, TaskRevertControl, UsageLimitControls, runnerOptionsFor, statusBadge } from './TaskCard';
 import { AssignmentFlag, IsolationBadges, TaskCheck } from './TaskSummary';
 import type { RunnerMode, RunnerOption, RunnerSignInView, TaskCardRun } from './TaskCard';
@@ -12,8 +13,13 @@ import { checkLabel, verdictSummary } from '../checkLabel';
 
 interface SubTaskCardProps {
   task: Task;
-  /** The subtask's parent, used to build its dotted order label (e.g. "2.1"). */
-  parentTask?: Task;
+  /** The subtask's parent, used to build its dotted order label (e.g. "2.1").
+   *  A parent below the top level carries its own full label, so a grandchild
+   *  reads "2.1.3" and not just "1.3" (core's `taskOrderLabel` reads `label`). */
+  parentTask?: Task & { label?: string };
+  /** This subtask's own subtasks, rendered as a nested tree so every counted
+   *  descendant is a discoverable card, not just the direct children. */
+  children?: React.ReactNode;
   /** The plan tree, which tells what a failure blocks and labels it. */
   tasks?: Task[];
   models: DiscoveredModel[];
@@ -60,7 +66,7 @@ const DEFAULT_MODES: RunnerMode[] = [
   { id: 'plan', label: 'Read-only', description: 'Ordewell commands; lands nothing' },
 ];
 
-export default function SubTaskCard({ task, parentTask, tasks, models, modes, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, runActive, run, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, runnerSignIn, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRevert, onRunTask, onOpenLog }: SubTaskCardProps) {
+export default function SubTaskCard({ task, parentTask, tasks, children, models, modes, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, runActive, run, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, runnerSignIn, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRevert, onRunTask, onOpenLog }: SubTaskCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState<string | null>(null);
 
@@ -72,6 +78,9 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
   const isolation = run?.isolation ?? null;
   const row = taskRowView({
     ...task,
+    // The run's status is the newer word on a subtask, as on a top-level card:
+    // task_started reaches a nested task before the plan is rewritten.
+    status: run?.status ?? task.status,
     handoff,
     idleSince: run?.idleSince ?? null,
     completionReceived: run?.completionReceived,
@@ -89,6 +98,9 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
     ...(run ? { verdict: run.verdict ?? task.verdict, loopRound: run.loopRound } : {}),
   }, { parent: parentTask, placement: 'subtask', tasks, runnerScope });
   const status = statusBadge(row);
+  // The frame's plan filter matches a card by the status its descendants carry,
+  // so a subtask must be as identifiable as the top-level row it sits under.
+  const statusId = statusOf(row.status).id;
   const failed = task.status === 'failed';
   // A subtask's own state decides, never its parent's: a queued subtask of a
   // running parent keeps its editors, and one that has started keeps none. The
@@ -120,7 +132,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
   };
 
   return (
-    <div className="task-with-controls subtask-with-controls">
+    <div className="task-with-controls subtask-with-controls" data-status={statusId}>
       <div className={`subtask-card ${expanded ? 'expanded' : ''}`}>
         <div className="subtask-card-header" onClick={() => setExpanded(!expanded)}>
           <TaskCheck row={row} />
@@ -295,6 +307,9 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
 
         <UsageLimitControls taskId={task.id} row={row} onResumeNow={onResumeNow} onCancelResume={onCancelResume} />
       </div>
+      {/* Descendants stay inside this card's subtree, so a status filter that
+          matches a grandchild finds its data-status under the top-level row. */}
+      {children}
     </div>
   );
 }

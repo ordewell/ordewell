@@ -1,5 +1,6 @@
 import type { KeyboardEvent } from 'react';
 import { PanelRightClose, PanelRightOpen, Workflow, X } from 'lucide-react';
+import { PlanFilterActiveContext } from '@ordewell/ui';
 import { EmptyState, IconButton, PlanGlyph, SectionHeader, StatusIndicator, STATUSES, type StatusId } from '@ordewell/ui/design';
 import type { PlanProgress } from './api';
 import { formatChord, isMac, parseChord } from './keys';
@@ -46,6 +47,12 @@ export function PlanPanel({ drawer = false }: { drawer?: boolean }): JSX.Element
     </span>
   );
 
+  // data-filter drives the CSS that reveals a collapsed row's descendants; the
+  // same fact reaches the cards through context so their disclosure buttons
+  // report expanded while that content is visible. Only a drawer carries a
+  // rail filter, exactly as data-filter is set below.
+  const filterActive = drawer && layout.planFilter !== undefined;
+
   return (
     <aside
       className={['frame-plan', drawer ? 'frame-drawer frame-drawer-right' : ''].filter(Boolean).join(' ')}
@@ -70,11 +77,13 @@ export function PlanPanel({ drawer = false }: { drawer?: boolean }): JSX.Element
           </>
         )}
       />
-      <div className="frame-plan-body">
-        {views.length === 0
-          ? <EmptyState icon={PlanGlyph} title="No plan yet." body="Describe a goal to the planner." />
-          : views.map((view) => <div key={view.id} className="frame-plan-view">{view.render()}</div>)}
-      </div>
+      <PlanFilterActiveContext.Provider value={filterActive}>
+        <div className="frame-plan-body">
+          {views.length === 0
+            ? <EmptyState icon={PlanGlyph} title="No plan yet." body="Describe a goal to the planner." />
+            : views.map((view) => <div key={view.id} className="frame-plan-view">{view.render()}</div>)}
+        </div>
+      </PlanFilterActiveContext.Provider>
     </aside>
   );
 }

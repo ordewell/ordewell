@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { PlanFilterActiveContext } from '@ordewell/ui';
 import type { FrameApi } from '../../../frame/api';
 import { DaemonHost } from '../../../session/DaemonHost';
 import { fakeDaemon, ok, surfacePlan, surfaceTask } from '../../../session/__tests__/fakeDaemon';
@@ -36,6 +37,17 @@ async function openedHost(tasks: Parameters<typeof surfacePlan>[0]) {
     daemon.push('s1', { type: 'connected', sessionId: 's1' }, { type: 'run_snapshot', sessionId: 's1', view: { tasks: plan.tasks, runMerge: null, handoff: null, mergeResult: null }, stream: 'd1', seq: 0 });
   });
   return host;
+}
+
+// Mirrors PlanPanel: one filter drives both the CSS (data-filter) and the
+// context that keeps a revealed row's disclosure button honest. With no filter
+// the context is off, as on the docked panel and every other surface.
+function filtered(host: DaemonHost, filter?: string) {
+  return (
+    <PlanFilterActiveContext.Provider value={filter !== undefined}>
+      <div className="frame-plan" data-filter={filter}><PlanList host={host} /></div>
+    </PlanFilterActiveContext.Provider>
+  );
 }
 
 const TASKS = [
@@ -86,6 +98,145 @@ describe('planProgress', () => {
       surfaceTask({ id: 'c', order: 3, title: 'Three' }),
     ]);
     expect(planProgress(host)).toEqual({ done: 1, total: 3, counts: { passed: 1, failed: 1, 'not-started': 1 } });
+  });
+
+  it('shows the live running status on a retried task', async () => {
+    const plan = surfacePlan([surfaceTask({ id: 'a', order: 1, title: 'Retry me', status: 'failed' })]);
+    const daemon = fakeDaemon({ 'sessions.load': ok({ ok: true, plan, goal: 'Ship' }) });
+    const host = new DaemonHost('/work/acme');
+    hosts.push(host);
+    await act(() => host.open('s1'));
+    await act(async () => daemon.push('s1', { type: 'connected', sessionId: 's1' }, { type: 'run_snapshot', sessionId: 's1', view: { tasks: plan.tasks, runMerge: null, handoff: null, mergeResult: null }, stream: 'd1', seq: 0 }));
+    const { container } = render(<PlanList host={host} />);
+    await act(async () => daemon.push('s1', { type: 'task_started', taskId: 'a', order: 1, title: 'Retry me', runner: 'claude-code', stream: 'd1', seq: 1 }));
+    expect(planProgress(host)?.counts.running).toBe(1);
+    expect(container.querySelector('[data-task-id="a"] [data-status="running"]')).not.toBeNull();
+  });
+
+  it('exposes a running child of a collapsed parent to the running filter', async () => {
+    const host = await openedHost([surfaceTask({ id: 'parent', order: 1, title: 'Parent', subtasks: [
+      surfaceTask({ id: 'child', order: 1, title: 'Child', status: 'in_progress' }),
+    ] })]);
+    const { container } = render(<div className="frame-plan" data-filter="running"><PlanList host={host} /></div>);
+    expect(planProgress(host)?.counts.running).toBe(1);
+    expect(container.querySelector('[data-task-id="parent"] [data-status="running"]')).not.toBeNull();
+  });
+
+  it('exposes a running grandchild of a collapsed parent to the running filter', async () => {
+    const host = await openedHost([surfaceTask({ id: 'parent', order: 1, title: 'Parent', subtasks: [
+      surfaceTask({ id: 'child', order: 1, title: 'Child', subtasks: [
+        surfaceTask({ id: 'grandchild', order: 1, title: 'Grandchild', status: 'in_progress' }),
+      ] }),
+    ] })]);
+    const { container } = render(<div className="frame-plan" data-filter="running"><PlanList host={host} /></div>);
+    expect(planProgress(host)?.counts.running).toBe(1);
+    expect(container.querySelector('[data-task-id="parent"] [data-status="running"]')).not.toBeNull();
+  });
+
+  it('reads a grandchild that becomes running mid-run from the live run, not the plan', async () => {
+    const plan = surfacePlan([surfaceTask({ id: 'parent', order: 1, title: 'Parent', subtasks: [
+      surfaceTask({ id: 'child', order: 1, title: 'Child', subtasks: [
+        surfaceTask({ id: 'grandchild', order: 1, title: 'Grandchild' }),
+      ] }),
+    ] })]);
+    const daemon = fakeDaemon({ 'sessions.load': ok({ ok: true, plan, goal: 'Ship' }) });
+    const host = new DaemonHost('/work/acme');
+    hosts.push(host);
+    await act(() => host.open('s1'));
+    await act(async () => daemon.push('s1', { type: 'connected', sessionId: 's1' }, { type: 'run_snapshot', sessionId: 's1', view: { tasks: plan.tasks, runMerge: null, handoff: null, mergeResult: null }, stream: 'd1', seq: 0 }));
+    const { container } = render(filtered(host, 'running'));
+    expect(planProgress(host)?.counts.running ?? 0).toBe(0);
+    // task_started reaches a depth-three task before the plan is rewritten; its
+    // own run entry must make its card identifiable to the filter.
+    await act(async () => daemon.push('s1', { type: 'task_started', taskId: 'grandchild', order: 1, title: 'Grandchild', runner: 'claude-code', stream: 'd1', seq: 1 }));
+    expect(planProgress(host)?.counts.running).toBe(1);
+    expect(container.querySelector('[data-task-id="parent"] [data-status="running"]')).not.toBeNull();
+  });
+
+  it('keeps every deep descendant identifiable under a filter for another status', async () => {
+    const host = await openedHost([surfaceTask({ id: 'parent', order: 1, title: 'Parent', subtasks: [
+      surfaceTask({ id: 'child', order: 1, title: 'Child', subtasks: [
+        surfaceTask({ id: 'failedGrandchild', order: 1, title: 'Failed grandchild', status: 'failed' }),
+        surfaceTask({ id: 'pendingGrandchild', order: 2, title: 'Pending grandchild' }),
+      ] }),
+    ] })]);
+    const { container } = render(filtered(host, 'failed'));
+    expect(planProgress(host)?.counts.failed).toBe(1);
+    const parent = container.querySelector('[data-task-id="parent"]')!;
+    expect(parent.querySelector('[data-status="failed"]')).not.toBeNull();
+    expect(parent.querySelector('[data-status="not-started"]')).not.toBeNull();
+  });
+
+  it('reports a revealed row as expanded to assistive tech, and collapsed with the filter off', async () => {
+    const host = await openedHost([surfaceTask({ id: 'parent', order: 1, title: 'Parent', subtasks: [
+      surfaceTask({ id: 'child', order: 1, title: 'Child', subtasks: [
+        surfaceTask({ id: 'grandchild', order: 1, title: 'Grandchild', status: 'in_progress' }),
+      ] }),
+    ] })]);
+    const { container, rerender } = render(filtered(host, 'running'));
+    const heading = () => container.querySelector('[data-task-id="parent"] .task-summary-row .task-heading')!;
+    // The filter shows descendants while the editor body stays closed: the
+    // disclosure button must not claim "collapsed" while they are on screen.
+    expect(heading().getAttribute('aria-expanded')).toBe('true');
+    expect(container.querySelector('[data-task-id="parent"] .task-card-body')).toBeNull();
+    expect(container.querySelector('[data-task-id="parent"] [data-status="running"]')).not.toBeNull();
+    // Filter off: the folded descendants are hidden and the button truthfully
+    // describes the collapsed body again, with normal collapse preserved.
+    rerender(filtered(host));
+    expect(heading().getAttribute('aria-expanded')).toBe('false');
+    expect(container.querySelector('[data-task-id="parent"] .task-card-body')).toBeNull();
+  });
+
+  it('exposes a nested task that becomes running mid-run, reading the run not the plan', async () => {
+    const plan = surfacePlan([surfaceTask({ id: 'parent', order: 1, title: 'Parent', subtasks: [
+      surfaceTask({ id: 'child', order: 1, title: 'Child' }),
+    ] })]);
+    const daemon = fakeDaemon({ 'sessions.load': ok({ ok: true, plan, goal: 'Ship' }) });
+    const host = new DaemonHost('/work/acme');
+    hosts.push(host);
+    await act(() => host.open('s1'));
+    await act(async () => daemon.push('s1', { type: 'connected', sessionId: 's1' }, { type: 'run_snapshot', sessionId: 's1', view: { tasks: plan.tasks, runMerge: null, handoff: null, mergeResult: null }, stream: 'd1', seq: 0 }));
+    const { container } = render(<div className="frame-plan" data-filter="running"><PlanList host={host} /></div>);
+    expect(planProgress(host)?.counts.running ?? 0).toBe(0);
+    // task_started moves the nested run entry but not the plan: the subtask card
+    // must read the run's status so a started child is still exposed to :has().
+    await act(async () => daemon.push('s1', { type: 'task_started', taskId: 'child', order: 1, title: 'Child', runner: 'claude-code', stream: 'd1', seq: 1 }));
+    expect(planProgress(host)?.counts.running).toBe(1);
+    expect(container.querySelector('[data-task-id="parent"] [data-status="running"]')).not.toBeNull();
+  });
+
+  it('keeps each nested status identifiable under the filter', async () => {
+    const host = await openedHost([
+      surfaceTask({ id: 'p', order: 1, title: 'Parent', status: 'in_progress', subtasks: [
+        surfaceTask({ id: 'c1', order: 1, title: 'Running child', status: 'in_progress' }),
+        surfaceTask({ id: 'c2', order: 2, title: 'Failed child', status: 'failed' }),
+        surfaceTask({ id: 'c3', order: 3, title: 'Pending child' }),
+      ] }),
+    ]);
+    const { container } = render(<div className="frame-plan" data-filter="running"><PlanList host={host} /></div>);
+    expect(planProgress(host)?.counts.running).toBe(2);
+    const parent = container.querySelector('[data-task-id="p"]')!;
+    expect(parent.querySelectorAll('.task-row-subtasks-folded [data-status="running"]')).toHaveLength(1);
+    expect(parent.querySelector('.task-row-subtasks-folded [data-status="failed"]')).not.toBeNull();
+    expect(parent.querySelector('.task-row-subtasks-folded [data-status="not-started"]')).not.toBeNull();
+  });
+
+  it('keeps normal collapse with no filter and holds the child for the filter to reveal', async () => {
+    const host = await openedHost([surfaceTask({ id: 'parent', order: 1, title: 'Parent', subtasks: [
+      surfaceTask({ id: 'child', order: 1, title: 'Child', status: 'in_progress' }),
+    ] })]);
+    const view = (filter?: string) => <div className="frame-plan" data-filter={filter}><PlanList host={host} /></div>;
+    const { container, rerender } = render(view());
+    const parent = () => container.querySelector('[data-task-id="parent"]')!;
+    // Unfiltered, a collapsed row still shows only its three lines: no open
+    // card body. Its descendants sit in the folded block frame.css hides.
+    expect(parent().querySelector('.task-card-body')).toBeNull();
+    expect(parent().querySelector('.task-row-subtasks-folded [data-status="running"]')).not.toBeNull();
+    // A rail count opens the plan with the filter set: that same block is what
+    // :has() keeps the card for, and CSS now reveals it to the user.
+    rerender(view('running'));
+    expect(planProgress(host)?.counts.running).toBe(1);
+    expect(parent().querySelector('.task-row-subtasks-folded [data-status="running"]')).not.toBeNull();
   });
 
   it('has nothing to say before there is a plan', () => {
