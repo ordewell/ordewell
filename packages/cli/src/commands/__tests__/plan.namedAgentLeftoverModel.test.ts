@@ -40,12 +40,22 @@ import { homeEnv, setEnv, writeStandIn } from '@ordewell/core/testing';
 /** What OpenCode's `opencode models` lists for this user: its own providers' ids, which share an OpenRouter slug's shape. */
 const OPENCODE_CATALOG = ['opencode/deepseek-v4.1-flash', 'opencode-go/claude-haiku-5-5'];
 
+/** The same catalog as OpenCode v2.4.1's `api model.list`, the variant-bearing source a healthy CLI answers. */
+const OPENCODE_API = {
+  data: [
+    { modelID: 'deepseek-v4.1-flash', providerID: 'opencode', type: 'chat', name: 'DeepSeek V4.1 Flash', enabled: true, variants: [] },
+    { modelID: 'claude-haiku-5-5', providerID: 'opencode-go', type: 'chat', name: 'Claude Haiku 5.5', enabled: true, variants: [] },
+  ],
+};
+
 /** Discovery that spawns nothing: OpenCode lists its catalog, and no other runner is asked. */
 function catalogResolver(): ModelResolver {
   const registry = { getManifest: (id: string) => (id === 'opencode' ? OPENCODE_MANIFEST : undefined) } as unknown as ConstructorParameters<typeof ModelResolver>[0];
   const keyless = { getProviderApiKey: () => '', getProviderBaseUrl: () => '', setProviderModelLists: () => {}, openaiCompatibleBaseUrl: '' } as unknown as IConfig;
   return new ModelResolver(registry, keyless, {
     execImpl: async (command) => {
+      // The v2 flag rejection is expected; the API is the source a real CLI answers.
+      if (command === 'opencode api model.list') return { stdout: JSON.stringify(OPENCODE_API) };
       if (command === 'opencode models') return { stdout: `${OPENCODE_CATALOG.join('\n')}\n` };
       throw new Error(`not run in this test: ${command}`);
     },
