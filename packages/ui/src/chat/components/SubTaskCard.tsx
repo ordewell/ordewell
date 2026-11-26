@@ -5,6 +5,7 @@ import TaskAssignment, { TaskAssignmentReadout } from './TaskAssignment';
 import TaskHandoff from './TaskHandoff';
 import { cardEditable, pausedOnLimit, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, TaskRowAction, AssignmentScope } from '@ordewell/core';
+import { statusOf } from '../../design/status';
 import { RunnerOptionItem, StatusBadge, TaskActions, TaskMarkControl, TaskRevertControl, UsageLimitControls, runnerOptionsFor, statusBadge } from './TaskCard';
 import { AssignmentFlag, IsolationBadges, TaskCheck } from './TaskSummary';
 import type { RunnerMode, RunnerOption, RunnerSignInView, TaskCardRun } from './TaskCard';
@@ -72,6 +73,9 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
   const isolation = run?.isolation ?? null;
   const row = taskRowView({
     ...task,
+    // The run's status is the newer word on a subtask, as on a top-level card:
+    // task_started reaches a nested task before the plan is rewritten.
+    status: run?.status ?? task.status,
     handoff,
     idleSince: run?.idleSince ?? null,
     completionReceived: run?.completionReceived,
@@ -89,6 +93,9 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
     ...(run ? { verdict: run.verdict ?? task.verdict, loopRound: run.loopRound } : {}),
   }, { parent: parentTask, placement: 'subtask', tasks, runnerScope });
   const status = statusBadge(row);
+  // The frame's plan filter matches a card by the status its descendants carry,
+  // so a subtask must be as identifiable as the top-level row it sits under.
+  const statusId = statusOf(row.status).id;
   const failed = task.status === 'failed';
   // A subtask's own state decides, never its parent's: a queued subtask of a
   // running parent keeps its editors, and one that has started keeps none. The
@@ -120,7 +127,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
   };
 
   return (
-    <div className="task-with-controls subtask-with-controls">
+    <div className="task-with-controls subtask-with-controls" data-status={statusId}>
       <div className={`subtask-card ${expanded ? 'expanded' : ''}`}>
         <div className="subtask-card-header" onClick={() => setExpanded(!expanded)}>
           <TaskCheck row={row} />

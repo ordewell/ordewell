@@ -493,6 +493,37 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
   const [offeringResolve, setOfferingResolve] = useState(false);
   const sortedSubtasks = [...task.subtasks].sort((a, b) => a.order - b.order);
 
+  // One block, drawn either inside the open card or, for a collapsed row, in a
+  // folded container the frame's status filter can still search with :has().
+  const subtasksBlock = sortedSubtasks.length > 0 && (
+    <div className="subtasks">
+      {sortedSubtasks.map((sub) => {
+        // A subtask can run on a different runner than its parent, so its
+        // pickers must be scoped to ITS OWN assignedRunner, not the
+        // parent's — reusing the parent's `models`/`modes` here would
+        // show the wrong runner's catalog (or none at all).
+        const subRunner = sub.assignedRunner;
+        const subRunnerModels = subRunner ? modelsByRunner?.[subRunner] : undefined;
+        const subModels = subRunnerModels && subRunnerModels.length > 0 ? subRunnerModels : models;
+        const subModes = subRunner ? (modesByRunner?.[subRunner] ?? []) : [];
+        return (
+          <SubTaskCard key={sub.id} task={sub} parentTask={task} tasks={siblings} models={subModels}
+            modes={subModes} runners={runners} runnerScope={runnerScope} effectiveRunner={subRunner}
+            configuredProviders={configuredProviders} modelApiMapping={modelApiMapping}
+            isExecuting={isExecuting} runActive={runActive} run={runsByTask?.get(sub.id)}
+            onRunnerChange={onRunnerChange}
+            onModelChange={onModelChange} onModelsRefreshNeeded={onModelsRefreshNeeded} onModeChange={onModeChange}
+            taskSkills={taskSkills} onSkillsChange={onSkillsChange}
+            onRemoveTask={onRemoveTask} onPromptChange={onPromptChange}
+            onRetry={onRetry} runnerSignIn={runnerSignIn} onSkip={onSkip} onCancel={onCancel} onCancelResume={onCancelResume} onResumeNow={onResumeNow}
+            onForceStart={onForceStart} onMarkComplete={onMarkComplete}
+            onMarkIncomplete={onMarkIncomplete} onRevert={onRevert}
+            onRunTask={onRunTask} onOpenLog={onOpenLog} />
+        );
+      })}
+    </div>
+  );
+
   // The run's word on this task: absent until the host has folded a run, and
   // then authoritative over the plan for everything status-only.
   const idleSince = run?.idleSince ?? null;
@@ -843,34 +874,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
               </div>
             )}
 
-            {sortedSubtasks.length > 0 && (
-              <div className="subtasks">
-                {sortedSubtasks.map((sub) => {
-                  // A subtask can run on a different runner than its parent, so its
-                  // pickers must be scoped to ITS OWN assignedRunner, not the
-                  // parent's — reusing the parent's `models`/`modes` here would
-                  // show the wrong runner's catalog (or none at all).
-                  const subRunner = sub.assignedRunner;
-                  const subRunnerModels = subRunner ? modelsByRunner?.[subRunner] : undefined;
-                  const subModels = subRunnerModels && subRunnerModels.length > 0 ? subRunnerModels : models;
-                  const subModes = subRunner ? (modesByRunner?.[subRunner] ?? []) : [];
-                  return (
-                    <SubTaskCard key={sub.id} task={sub} parentTask={task} tasks={siblings} models={subModels}
-                      modes={subModes} runners={runners} runnerScope={runnerScope} effectiveRunner={subRunner}
-                      configuredProviders={configuredProviders} modelApiMapping={modelApiMapping}
-                      isExecuting={isExecuting} runActive={runActive} run={runsByTask?.get(sub.id)}
-                      onRunnerChange={onRunnerChange}
-                      onModelChange={onModelChange} onModelsRefreshNeeded={onModelsRefreshNeeded} onModeChange={onModeChange}
-                      taskSkills={taskSkills} onSkillsChange={onSkillsChange}
-                      onRemoveTask={onRemoveTask} onPromptChange={onPromptChange}
-                      onRetry={onRetry} runnerSignIn={runnerSignIn} onSkip={onSkip} onCancel={onCancel} onCancelResume={onCancelResume} onResumeNow={onResumeNow}
-                      onForceStart={onForceStart} onMarkComplete={onMarkComplete}
-                      onMarkIncomplete={onMarkIncomplete} onRevert={onRevert}
-                      onRunTask={onRunTask} onOpenLog={onOpenLog} />
-                  );
-                })}
-              </div>
-            )}
+            {subtasksBlock}
 
             {canMessage && <TaskMessageBox taskId={task.id} onSend={onSendMessage!} onSendNow={onSendMessageNow!}
               working={row.status === 'running' || row.status === 'quiet'} resumes={paused} />}
@@ -891,6 +895,13 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
 
             <TaskRevertControl taskId={task.id} title={task.title} row={row} onRevert={onRevert} />
           </div>
+        )}
+        {/* A collapsed row keeps its descendants in the card, so the frame's
+            status filter can find a counted nested task with :has(). CSS folds
+            them out of sight until a filter opens the matching card; a normal
+            (unfiltered) collapse shows only the row's three lines. */}
+        {asRow && !expanded && subtasksBlock && (
+          <div className="task-row-subtasks-folded">{subtasksBlock}</div>
         )}
       </div>
       {(!asRow || expanded) && <div className="task-footer-controls">

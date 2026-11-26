@@ -352,4 +352,39 @@ describe('PlanCardGroup — the plan panel\'s rows', () => {
     fireEvent.keyDown(plain, { key: 'ArrowRight' });
     expect(plain.getAttribute('aria-expanded')).toBe('false');
   });
+
+  it('carries a collapsed row\'s descendants in a folded block, each identified by status', () => {
+    const { container } = render(
+      <PlanCardGroup run={EMPTY_RUN} models={emptyModels} rows
+        tasks={[
+          makeTask({ id: 'p', order: 1, title: 'Parent', subtasks: [
+            makeTask({ id: 'c1', order: 1, title: 'Running child', status: 'in_progress' }),
+            makeTask({ id: 'c2', order: 2, title: 'Pending child' }),
+          ] }),
+        ]}
+      />,
+    );
+    const row = container.querySelector('[data-task-id="p"]')!;
+    // Collapse is preserved: no open editors. The frame's CSS hides the folded
+    // block until a filter points at a nested status; :has() can still see it.
+    expect(row.querySelector('.task-card-body')).toBeNull();
+    const folded = row.querySelector('.task-row-subtasks-folded');
+    expect(folded).not.toBeNull();
+    expect(folded!.querySelector('[data-status="running"]')).not.toBeNull();
+    expect(folded!.querySelector('[data-status="not-started"]')).not.toBeNull();
+  });
+
+  it('shows an expanded row\'s subtasks in its body, with no duplicate folded block', () => {
+    const { container } = render(
+      <PlanCardGroup run={EMPTY_RUN} models={emptyModels} rows
+        tasks={[
+          makeTask({ id: 'p', order: 1, title: 'Parent', subtasks: [makeTask({ id: 'c', order: 1, title: 'Child', status: 'in_progress' })] }),
+        ]}
+      />,
+    );
+    fireEvent.click(heading(/^#1 Parent/));
+    const row = container.querySelector('[data-task-id="p"]')!;
+    expect(row.querySelector('.task-card-body [data-status="running"]')).not.toBeNull();
+    expect(row.querySelector('.task-row-subtasks-folded')).toBeNull();
+  });
 });

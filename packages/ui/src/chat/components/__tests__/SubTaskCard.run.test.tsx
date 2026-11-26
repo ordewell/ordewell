@@ -65,3 +65,19 @@ describe('SubTaskCard — its own run entry', () => {
     expect(screen.getByText('Waits for your approval')).toBeTruthy();
   });
 });
+
+describe('SubTaskCard — status the plan filter matches', () => {
+  it('is identified by its own status, as a top-level row is', () => {
+    const { container } = render(<SubTaskCard task={makeTask({ status: 'failed' })} parentTask={parent} models={[]} />);
+
+    expect(container.querySelector('.subtask-with-controls')).toHaveAttribute('data-status', 'failed');
+  });
+
+  it('reads the run\'s newer status on a subtask that just started', () => {
+    // A nested task_started rewrites the run before the plan: its card must not
+    // still say "not started", or the running filter cannot find this child.
+    const { container } = render(<SubTaskCard task={makeTask({ status: 'pending' })} parentTask={parent} models={[]} run={{ status: 'in_progress' }} />);
+
+    expect(container.querySelector('.subtask-with-controls')).toHaveAttribute('data-status', 'running');
+  });
+});

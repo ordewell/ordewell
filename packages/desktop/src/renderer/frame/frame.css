@@ -267,6 +267,13 @@ kbd.frame-menu-hint { font-family: inherit; }
 .frame-plan-body { display: flex; flex-direction: column; }
 .frame-plan-view { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .frame-plan-body > .ow-empty-state { margin: auto; }
+/* A collapsed row still draws its descendants (TaskCard's folded block), so the
+   filter's :has() can find a counted nested task. Out of sight with no filter —
+   ordinary collapse — and opened when a rail filter points at a nested status,
+   so "1 running" always has the running child to show. Non-matching rows are
+   hidden by the rules below, so their folded block never reaches the eye. */
+.frame-plan .task-row-item:not(.expanded) .task-row-subtasks-folded { display: none; }
+.frame-plan[data-filter] .task-row-item:not(.expanded) .task-row-subtasks-folded { display: block; }
 /* A rail count opens the plan showing only the tasks in its status (Collapse order); a stage heading would head a gap. */
 .frame-plan[data-filter] .plan-stage-head,
 .frame-plan[data-filter='needs-you'] .task-list-rows > [data-task-id]:not(:has([data-status='needs-you'])),
