@@ -1,5 +1,7 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type * as vscode from 'vscode';
-import { augmentedPath, checksSignInByHandshake, describeSignInWays, inProcessProvider, providerRunnerLoginNote, recheckRunnerSignIn, runnerForProvider, TERMINAL_UI_SIGN_IN, withPath, workspaceEnvOf, type INotification, type ModelResolver, type PlannerBackendId, type RunnerInstallation, type RunnerRegistry } from '@ordewell/core';
+import { augmentedPath, describeLoginStillBlocked, describeSignInWays, ExecutableNotFoundError, inProcessProvider, isExecutableResolved, planDirectLaunch, providerRunnerLoginNote, recheckRunnerSignIn, runnerForProvider, TERMINAL_UI_SIGN_IN, withPath, workspaceEnvOf, type INotification, type LaunchDeps, type ModelResolver, type PlannerBackendId, type RunnerAuth, type RunnerInstallation, type RunnerRegistry } from '@ordewell/core';
 import type { HostToWebview } from '@ordewell/ui/protocol';
 
 const POLL_MS = 2_000;
@@ -13,7 +15,7 @@ const TERMINAL_LOST_MESSAGE = 'The login terminal stopped before sign-in finishe
 const PROBE_FAILED_MESSAGE = "The sign-in could not be checked: the agent's status probe failed.";
 
 export interface PlannerLoginDeps {
-  runnerInstallation: Pick<RunnerInstallation, 'runnerUsability' | 'refresh'> & Partial<Pick<RunnerInstallation, 'recheck'>>;
+  runnerInstallation: Pick<RunnerInstallation, 'runnerUsability' | 'refresh' | 'recheck'>;
   /** The workspace's catalog, whose ACP handshake rechecks an agent with no status command (ADR-0052). */
   modelResolver?: Pick<ModelResolver, 'rediscoverRunner'>;
   /** Only to name the agent and refuse an id the host does not know. */
@@ -38,39 +40,66 @@ export interface PlannerLoginDeps {
   /** The poll interval and the budget, each overridable by a test. */
   pollMs?: number;
   timeoutMs?: number;
-  /** The host OS, which picks the login terminal's shell; a test pins either from any host. */
+  /** The host OS, which picks how the login is started; a test pins either from any host. */
   platform?: NodeJS.Platform;
+  /**
+   * How the agent's file is found, as its probe and spawn find it; a test
+   * points it at stand-ins. Off Windows, `exists` is whether a file may be run.
+   */
+  launch?: Omit<LaunchDeps, 'platform'>;
   log?: (msg: string) => void;
 }
 
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-/**
- * One argv item as the login terminal's shell reads it. The argv comes from the
- * runner's manifest, never from the webview, so this is about spaces rather
- * than an injection: cmd.exe takes a double-quoted run, a POSIX shell a
- * closed-then-escaped single quote.
- */
-function shellQuote(arg: string, platform: NodeJS.Platform): string {
-  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(arg)) return arg;
-  if (platform === 'win32') return `"${arg.replace(/"/g, '""')}"`;
-  return `'${arg.replace(/'/g, `'\\''`)}'`;
+/** What the login terminal starts: the agent's own file and its arguments, with no shell between. */
+interface LoginLaunch {
+  shellPath: string;
+  shellArgs: string[] | string;
+  PATH: string;
 }
 
-/** The manifest's login as one line for the login terminal's shell. */
-export function commandLine(argv: readonly string[], platform: NodeJS.Platform = process.platform): string {
-  return argv.map((arg) => shellQuote(arg, platform)).join(' ');
+/** The first file on `PATH` named `command`, as execvp picks it when the probe spawns the agent. */
+function onPosixPath(command: string, PATH: string, runnable: (candidate: string) => boolean): string | undefined {
+  if (command.includes('/')) return runnable(command) ? command : undefined;
+  return PATH.split(path.posix.delimiter).map((d) => d.trim()).filter(Boolean)
+    .map((dir) => path.posix.join(dir, command))
+    .find(runnable);
+}
+
+/** A file execvp would start: there, and executable by this user. */
+function runnableFile(candidate: string): boolean {
+  try {
+    if (!fs.statSync(candidate).isFile()) return false;
+    fs.accessSync(candidate, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
- * On Windows the login runs in cmd.exe whatever the user's default terminal
- * is. Windows PowerShell prefers an npm-installed agent's `.ps1` shim to the
- * `.cmd` beside it and, under the default Restricted execution policy, refuses
- * to run it, so the login died before the agent started. cmd.exe reaches the
- * `.cmd` or a native `.exe` through PATHEXT and has no execution policy.
+ * The login as the terminal's own process (#62 F1). Typed into the user's
+ * shell it was never seen to end, since the shell outlives it; and the shell
+ * found the name again after its startup files ran, which may pick another
+ * binary than the probe did (#62 F3). So the file is resolved here on the
+ * probe's augmented PATH: absolute on POSIX, and on Windows by the same
+ * routes a spawn takes (ADR-0010), so an npm `.cmd` shim starts its target and
+ * a lone `.cmd` goes through cmd.exe, whose line is handed over verbatim.
  */
-function loginShell(platform: NodeJS.Platform): { shellPath?: string } {
-  return platform === 'win32' ? { shellPath: process.env.ComSpec || 'cmd.exe' } : {};
+async function loginLaunch(argv: readonly string[], platform: NodeJS.Platform, launch: Omit<LaunchDeps, 'platform'>): Promise<LoginLaunch> {
+  const [command, ...args] = argv;
+  const PATH = await (launch.resolvePath ?? augmentedPath)();
+  const deps: LaunchDeps = { ...launch, platform, resolvePath: async () => PATH };
+  if (platform !== 'win32') {
+    const file = onPosixPath(command, PATH, deps.exists ?? runnableFile);
+    if (!file) throw new ExecutableNotFoundError(command, PATH);
+    return { shellPath: file, shellArgs: args, PATH };
+  }
+  const plan = await planDirectLaunch(command, args, deps);
+  if (!isExecutableResolved(command, plan, PATH, deps)) throw new ExecutableNotFoundError(command, PATH);
+  // VS Code takes a string of arguments on Windows as one command line, as is.
+  return { shellPath: plan.file, shellArgs: plan.verbatim ? plan.args.join(' ') : plan.args, PATH };
 }
 
 /**
@@ -81,9 +110,11 @@ function loginShell(platform: NodeJS.Platform): { shellPath?: string } {
  *
  * The login belongs to an agent, not to the planner choice: a named runner is
  * signed in without switching to it, and no path writes `config.aiProvider`.
- * Only the agent's own status command decides it worked; a terminal that closes
- * or five minutes of polling ends the attempt as a failure the surface shows
- * inline, never as a silent success.
+ * Only fresh evidence decides it worked: the agent's status command while it
+ * runs, then once more, or its handshake where it has none, once the login
+ * exits 0. Five minutes without an end closes the login, and every end other
+ * than a confirmed sign-in is a failure the surface shows inline, never a
+ * silent success.
  */
 export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): Promise<void> {
   const runner = runnerId ?? runnerForProvider(deps.config.aiProvider) ?? undefined;
@@ -143,17 +174,33 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
 
   const root = deps.workspaceRoot();
   const platform = deps.platform ?? process.platform;
+  let launch: LoginLaunch;
+  try {
+    launch = await loginLaunch(command, platform, deps.launch ?? {});
+  } catch (err) {
+    // Not found, or a Windows shim that cannot carry the arguments: nothing
+    // started, so the reason is the answer. Only its first line: the rest
+    // lists every PATH folder searched, which is the log's to keep.
+    const why = err instanceof Error ? err.message : String(err);
+    deps.log?.(`Could not start the ${label} login: ${why}`);
+    const message = `The ${label} login could not be started. ${why.split('\n')[0]}`;
+    deps.post({ type: 'plannerLoginEnded', runner, ok: false, message });
+    deps.notifications.warn(message);
+    return;
+  }
   let terminal: vscode.Terminal;
   try {
     terminal = deps.window.createTerminal({
       name: `${label} login`,
       cwd: root,
-      ...loginShell(platform),
+      shellPath: launch.shellPath,
+      shellArgs: launch.shellArgs,
       // The agent's own account is chosen by the workspace environment
-      // (ADR-0016), so the terminal that logs in must see the same one a spawn
-      // would. The PATH is the probe's augmented one too: a GUI-launched host
-      // can find the agent with it and still not find it in a bare terminal.
-      env: withPath({}, await augmentedPath(), await (deps.env ?? workspaceEnvOf)(root)),
+      // (ADR-0016), so the login must see the same one a spawn would, on the
+      // PATH its file was found on: an agent run by `env node` finds that too.
+      env: withPath({}, launch.PATH, await (deps.env ?? workspaceEnvOf)(root)),
+      // A login that ended has nothing to come back to after a reload.
+      isTransient: true,
     });
   } catch (err) {
     // The one failure the row cannot explain by itself: nothing opened to run
@@ -167,11 +214,17 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
   const closedListener = deps.window.onDidCloseTerminal((t) => {
     if (t === terminal) closed = true;
   });
+  // VS Code sets the exit status when the terminal's process ends, which is
+  // now the login itself, then fires the close.
+  const ended = (): boolean => closed || terminal.exitStatus !== undefined;
 
   const sleep = deps.sleep ?? wait;
   const now = deps.now ?? Date.now;
   const pollMs = deps.pollMs ?? POLL_MS;
   const deadline = now() + (deps.timeoutMs ?? TIMEOUT_MS);
+  // Only a status command can confirm a login still running; an agent with
+  // none answers nothing a poll could read, so its exit is what is waited for.
+  const polls = (manifest.auth?.statusArgs?.length ?? 0) > 0;
 
   const end = async (ok: boolean, message?: string): Promise<void> => {
     if (ok) {
@@ -194,16 +247,17 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
 
   let outcome: { ok: boolean; message?: string };
   try {
+    // In view and focused: the login's prompts, device code or browser link
+    // are the user's to read and answer.
     terminal.show();
-    terminal.sendText(commandLine(command, platform));
 
     let signedIn = false;
     let probeFailed = false;
-    while (!closed && terminal.exitStatus === undefined && now() < deadline) {
+    while (!ended() && now() < deadline) {
       await sleep(pollMs);
-      // Closed while we waited: the attempt is over, and polling a terminal
-      // that is gone would only delay the answer.
-      if (closed || terminal.exitStatus !== undefined) break;
+      // Ended while we waited: polling a login that is over would only delay the answer.
+      if (ended()) break;
+      if (!polls) continue;
       // Refresh before every look: a cached verdict would hide a login that
       // finished within the last half minute.
       deps.runnerInstallation.refresh();
@@ -213,22 +267,28 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
           break;
         }
       } catch (err) {
-        // The terminal is still open; only the status probe failed.
+        // The login is still running; only the status probe failed.
         deps.log?.(`The ${label} status probe failed during login: ${err instanceof Error ? err.message : String(err)}`);
         probeFailed = true;
         break;
       }
     }
-    const ended = closed || terminal.exitStatus !== undefined;
-    outcome = signedIn
-      ? { ok: true }
-      : probeFailed
-        ? { ok: false, message: PROBE_FAILED_MESSAGE }
-        : ended && checksSignInByHandshake(manifest)
-          ? await recheckAfterLogin(deps, runner, label)
-          : { ok: false, message: ended ? CLOSED_MESSAGE : TIMEOUT_MESSAGE };
+    if (signedIn) outcome = { ok: true };
+    else if (probeFailed) outcome = { ok: false, message: PROBE_FAILED_MESSAGE };
+    else if (!ended()) {
+      // A login left waiting is ended with its terminal, so nothing outlives
+      // the attempt that started it.
+      terminal.dispose();
+      outcome = { ok: false, message: TIMEOUT_MESSAGE };
+    } else {
+      const code = terminal.exitStatus?.code;
+      // Only a login that finished is a recheck (ADR-0052): one that failed or
+      // was closed keeps the blocker it was started to clear.
+      outcome = code === 0 ? await recheckAfterLogin(deps, runner, label)
+        : { ok: false, message: code === undefined ? CLOSED_MESSAGE : `The ${label} login exited with code ${code}.` };
+    }
   } catch (err) {
-    // A terminal disposed between create and send must still end the attempt:
+    // A terminal disposed between create and show must still end the attempt:
     // the webview clears its pending button only on `plannerLoginEnded`, and
     // would leave it disabled until a reload.
     deps.log?.(`The ${label} login terminal failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -240,28 +300,26 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
 }
 
 /**
- * An agent with no status command never reads signed in on a poll, so the
- * terminal closing is the user's word that the login is done: it is rechecked
- * once, the record forgotten and the agent asked by its own handshake, and
- * only that answer is the verdict (ADR-0052, #46 F7). The login runs inside a
- * shell, so its exit status is not known here; a cancelled login is caught by
- * the handshake's refusal, which records the blocker again.
+ * The login process exited 0: ask for fresh evidence, and only that answer is
+ * the verdict (ADR-0052, #46 F7), since a login can print success and persist
+ * nothing. What was recorded is forgotten, then a status command answers for
+ * itself and an agent with none is asked by its own handshake, whose refusal
+ * records the blocker again.
  */
 async function recheckAfterLogin(deps: PlannerLoginDeps, runner: string, label: string): Promise<{ ok: boolean; message?: string }> {
   const installation = deps.runnerInstallation;
-  if (!installation.recheck) return { ok: false, message: CLOSED_MESSAGE };
-  const recheck = installation.recheck.bind(installation);
-  let state: string | undefined;
+  let auth: RunnerAuth | undefined;
   try {
-    state = (await recheckRunnerSignIn(runner, {
-      installation: { refresh: () => installation.refresh(), recheck, runnerUsability: (r) => installation.runnerUsability(r) },
+    auth = (await recheckRunnerSignIn(runner, {
+      installation: { refresh: () => installation.refresh(), recheck: (r) => installation.recheck(r), runnerUsability: (r) => installation.runnerUsability(r) },
       ...(deps.modelResolver ? { resolver: deps.modelResolver } : {}),
       manifests: deps.runnerRegistry,
-    })).auth?.state;
+    })).auth;
   } catch (err) {
     deps.log?.(`The ${label} recheck after login failed: ${err instanceof Error ? err.message : String(err)}`);
     return { ok: false, message: PROBE_FAILED_MESSAGE };
   }
+  const state = auth?.state;
   if (state === 'signed-in') return { ok: true };
   // What the recheck recorded changed what both roles show, signed in or not.
   try {
@@ -269,7 +327,8 @@ async function recheckAfterLogin(deps: PlannerLoginDeps, runner: string, label: 
   } catch (err) {
     deps.log?.(`Planner state refresh after the ${label} recheck failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+  // A hook that still found no key never asked the agent, so the words say what Ordewell lacks.
   return state === 'signed-out'
-    ? { ok: false, message: `${label} still reports not logged in.` }
+    ? { ok: false, message: describeLoginStillBlocked(label, auth?.signIn, TERMINAL_UI_SIGN_IN) }
     : { ok: false, message: `The login finished, but ${label} cannot say whether it is signed in. Send again to try it.` };
 }

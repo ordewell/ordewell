@@ -1,6 +1,6 @@
 import type { RunnerUsability } from './RunnerInstallation';
 import type { UnlistedReason } from './ModelDiscovery';
-import { describeSignIn, signInOfVerdict, TERMINAL_UI_SIGN_IN, type RunnerSignIn, type SignInSyntax } from './signInHint';
+import { describeSignIn, setsUpKey, signInOfVerdict, TERMINAL_UI_SIGN_IN, type RunnerSignIn, type SignInSyntax } from './signInHint';
 import type { RunnerAuth } from './runnerAuth';
 
 // The readiness-to-choice rule alone, with nothing Node-bound, so a webview's
@@ -44,7 +44,11 @@ export function runnerReadiness(usability: RunnerUsability, unlisted?: UnlistedR
   // Blocked only on the recorded verdict, never on discovery's words alone,
   // so the picker, the gate and the catalog cannot disagree.
   if (auth?.state === 'signed-out') {
-    return { kind: 'blocked', why: unlisted === 'no-credential' ? 'no-credential' : 'signed-out', ...(auth.signIn ? { signIn: auth.signIn } : {}) };
+    // The verdict says it too, so a row whose discovery reason is gone reads the same.
+    if (unlisted === 'no-credential' || auth.signIn?.needsKey) {
+      return { kind: 'blocked', why: 'no-credential', ...(auth.signIn ? { signIn: { ...auth.signIn, needsKey: true } } : {}) };
+    }
+    return { kind: 'blocked', why: 'signed-out', ...(auth.signIn ? { signIn: auth.signIn } : {}) };
   }
   if (unlisted === 'pending') return { kind: 'pending' };
   if (unlisted === 'no-models') return { kind: 'no-usable-model' };
@@ -53,8 +57,12 @@ export function runnerReadiness(usability: RunnerUsability, unlisted?: UnlistedR
   return auth?.state === 'signed-in' ? { kind: 'ready' } : { kind: 'sign-in-unknown' };
 }
 
-/** What a row's recovery control does, for a surface to bind: its own Log in, key entry or refresh. */
-export type RunnerRecoveryKind = 'sign-in' | 'add-key' | 'refresh-models' | 'retry';
+/**
+ * What a row's recovery control does, for a surface to bind: its own Log in,
+ * the key entry, the agent's own setup where that is its only way to a key
+ * Ordewell reads (`set-up`, which runs the same login), or a refresh.
+ */
+export type RunnerRecoveryKind = 'sign-in' | 'add-key' | 'set-up' | 'refresh-models' | 'retry';
 
 /**
  * A runner as a picker offers it (ADR-0052): one short status in words, the
@@ -92,6 +100,10 @@ const CHOICES: Record<RunnerChoice['status'], Omit<RunnerChoice, 'status'>> = {
 /** The one readiness-to-choice rule every picker and host write reads. */
 export function runnerChoice(readiness: RunnerReadiness): RunnerChoice {
   const status = readiness.kind === 'blocked' ? readiness.why : readiness.kind;
+  // Add key is only for a key entry that can reach the agent: one with no key
+  // route of Ordewell's is offered its own setup instead (ADR-0052, ADR-0060).
+  const keyless = readiness.kind === 'blocked' && readiness.why === 'no-credential' && readiness.signIn ? { ...readiness.signIn, needsKey: true as const } : undefined;
+  if (setsUpKey(keyless)) return { status, ...CHOICES[status], recovery: { kind: 'set-up', label: `Set up ${keyless.label}` } };
   return { status, ...CHOICES[status] };
 }
 

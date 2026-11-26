@@ -167,7 +167,8 @@ export function rewordSignIn(message: string, from: SignInSyntax, to: SignInSynt
   let said = message;
   for (const manifest of BUILTIN_MANIFESTS) {
     const signIn = runnerSignIn(manifest);
-    said = said.replaceAll(describeSignIn(signIn, from), describeSignIn(signIn, to));
+    // A keyless agent's setup is worded apart from its sign-in, so both are re-worded.
+    for (const way of [signIn, { ...signIn, needsKey: true as const }]) said = said.replaceAll(describeSignIn(way, from), describeSignIn(way, to));
   }
   return said;
 }

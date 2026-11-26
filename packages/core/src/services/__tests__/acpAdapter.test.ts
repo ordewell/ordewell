@@ -24,6 +24,7 @@ import { fakeConfig, setEnv } from '../../testing';
 import { CURSOR_EXTENSION_REQUESTS } from '../harness/cursorRequests';
 import { runnerEnv } from '../harness/runnerEnv';
 import { clineCredentials } from '../harness/clineCredentials';
+import { setSharedProviderCredentials } from '../hostCredentials';
 import { qwenCredentials } from '../harness/qwenCredentials';
 import { stubNoOrdewellProvider } from './ordewellProviderEnv';
 import { COPILOT_CLI_PROFILE } from '../harness/copilotProfile';
@@ -1295,6 +1296,34 @@ describe('AcpAdapter provider credential', () => {
       expect(cline.spawned.lastEnv()).toMatchObject({ CLINE_PROVIDER: 'openrouter', CLINE_API_KEY: KEY });
     });
 
+    it('starts Cline\'s planner, first turn included, and its task on a key the host keeps only in the shared store, and hands it nothing else', async () => {
+      setSharedProviderCredentials(() => ({ OPENROUTER_API_KEY: KEY, OPENROUTER_BASE_URL: 'https://openrouter.ai/api/v1' }));
+      try {
+        const credentials = clineCredentials({ homedir: () => '/no-such-home' });
+        const planner = setup([...handshake(), { expect: 'session/prompt', reply: { stopReason: 'end_turn' } }], { ...ROLES_PROFILE, credentials });
+        await planner.adapter.start(plannerStart());
+        await turn(planner.adapter, 'Plan the change');
+        const task = setup(handshake(), withKey(credentials));
+        await task.adapter.start(taskStart());
+        // Qwen reads any OpenAI-compatible key, so the store is no business of its hook.
+        const qwen = setup(handshake(), withKey(qwenCredentials));
+        await qwen.adapter.start(taskStart());
+
+        for (const started of [planner, task]) {
+          const env = started.spawned.lastEnv();
+          expect(env).toMatchObject({ CLINE_PROVIDER: 'openrouter', CLINE_API_KEY: KEY });
+          expect(Object.entries(env).filter(([, value]) => value === KEY).map(([name]) => name)).toEqual(['CLINE_API_KEY']);
+          expect(env.OPENROUTER_BASE_URL || undefined).toBeUndefined();
+          expect(JSON.stringify(started.agent.received)).not.toContain(KEY);
+          expect(JSON.stringify(started.spawned.lastArgs())).not.toContain(KEY);
+        }
+        expect(JSON.stringify(qwen.spawned.lastEnv())).not.toContain(KEY);
+        expect(process.env.OPENROUTER_API_KEY || undefined).toBeUndefined();
+      } finally {
+        setSharedProviderCredentials(undefined);
+      }
+    });
+
     it('keeps the key out of the log, the agent\'s transcript, the arguments and the errors of a start the agent refuses', async () => {
       const logged = (['log', 'info', 'warn', 'error', 'debug'] as const).map((level) => vi.spyOn(console, level));
       vi.stubEnv('OPENROUTER_API_KEY', KEY);
@@ -1416,7 +1445,7 @@ describe('AcpAdapter provider credential', () => {
 
       const refused = await adapter.start(taskStart()).then(() => null, (e: unknown) => e as Error);
 
-      expect(refused?.message).toBe(`Cline has no provider key Ordewell can hand it: Ordewell holds none for a provider Cline offers, and \`${providers()}\` names no provider it last used. Set the key of a provider Cline offers, such as OpenRouter, in Ordewell with \`/key-set\`, or sign in with \`cline auth\` (a Cline or ClinePass account, or a provider's key), or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell's environment.`);
+      expect(refused?.message).toBe(`Cline has no provider key Ordewell can hand it: Ordewell holds none for a provider Cline offers, and \`${providers()}\` names no provider it last used. Run \`cline auth\` and choose a provider with its API key (a Cline or ClinePass account sign-in leaves no key Ordewell can read), or save the key of a provider Cline offers, such as OpenRouter, with \`/key-set\` in the terminal or the Desktop app, or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell's environment.`);
       expect(refused?.message).not.toContain('fake-agent login');
       expect(spawned.processes).toHaveLength(0);
     });
@@ -1425,7 +1454,7 @@ describe('AcpAdapter provider credential', () => {
       writeFileSync(providers(), '{ not json', { mode: 0o600 });
       const { adapter } = setup(handshake(), cline());
 
-      await expect(adapter.start(taskStart())).rejects.toThrow(`\`${providers()}\` could not be read. Set the key of a provider Cline offers, such as OpenRouter, in Ordewell with \`/key-set\`, or sign in with \`cline auth\``);
+      await expect(adapter.start(taskStart())).rejects.toThrow(`\`${providers()}\` could not be read. Run \`cline auth\` and choose a provider with its API key`);
     });
   });
 });

@@ -1,3 +1,5 @@
+import { describeLoginStillBlocked, TERMINAL_UI_SIGN_IN, type RunnerSignIn, type SignInSyntax } from '@ordewell/core/plan-utils';
+
 /**
  * How long a sign-in is given, and how often the agent's own status command is
  * asked again (ADR-0052). One rule for the chat's login terminal and the
@@ -19,7 +21,10 @@ export interface SignInOutcome {
 /** A login that exited cleanly, for an agent that still cannot say: never taken as signed in (ADR-0052). */
 export const signInUnconfirmed = (label: string): string =>
   `The login finished, but ${label} cannot say whether it is signed in. Send again to try it.`;
-export const signInStillOut = (label: string): string => `${label} still reports not logged in.`;
+/** A recheck still signed out: for an agent that only lacks a key, what Ordewell lacks, since the agent was never asked. */
+export const signInStillOut = (label: string, signIn?: RunnerSignIn, syntax: SignInSyntax = TERMINAL_UI_SIGN_IN): string => describeLoginStillBlocked(label, signIn, syntax);
+
+type AuthState = 'signed-in' | 'signed-out' | 'unknown';
 
 export interface SignInWaitDeps {
   /** Resolves with the login's exit code when its process exits, or with none when its tab closes first. */
@@ -39,9 +44,11 @@ export interface SignInWaitDeps {
    * so without this a login that worked ended as a closed terminal (#46 F7).
    * A failed or cancelled login is never rechecked, so its blocker stays.
    */
-  recheck?(): Promise<'signed-in' | 'signed-out' | 'unknown' | undefined>;
+  recheck?(): Promise<AuthState | { state: AuthState; signIn?: RunnerSignIn } | undefined>;
   /** The agent as the recheck's outcome names it. */
   label?: string;
+  /** How that outcome names the surface's ways in: the chat's /login unless the surface has buttons instead. */
+  syntax?: SignInSyntax;
 }
 
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -74,10 +81,13 @@ export async function waitForSignIn(deps: SignInWaitDeps): Promise<SignInOutcome
 
 async function afterExit(deps: SignInWaitDeps, code: number | void): Promise<SignInOutcome> {
   if (code !== 0 || !deps.recheck) return { ok: false, message: SIGN_IN_CLOSED };
-  const state = await deps.recheck().catch(() => undefined);
+  const answer = await deps.recheck().catch(() => undefined);
+  // The state alone, or the verdict whose ways in word what still blocks it.
+  const verdict = typeof answer === 'string' ? { state: answer } : answer;
+  const state = verdict?.state;
   if (state === 'signed-in') return { ok: true };
   const label = deps.label ?? 'The agent';
-  if (state === 'signed-out') return { ok: false, message: signInStillOut(label) };
+  if (state === 'signed-out') return { ok: false, message: signInStillOut(label, verdict?.signIn, deps.syntax) };
   if (state === 'unknown') return { ok: false, message: signInUnconfirmed(label) };
   return { ok: false, message: SIGN_IN_CLOSED };
 }

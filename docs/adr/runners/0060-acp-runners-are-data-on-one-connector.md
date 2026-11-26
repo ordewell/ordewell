@@ -321,7 +321,16 @@ the judge.
      is handed `CLINE_PROVIDER` and `CLINE_API_KEY` only for a vendor whose
      Cline provider id defaults to Ordewell's endpoint (OpenRouter is
      `openrouter`, OpenAI `openai-native`; `clineCredentials.ts` lists them),
-     and not for one behind a proxy or on another region's host. The model
+     and not for one behind a proxy or on another region's host. A host
+     that keeps Ordewell's shared store (`~/.ordewell/.env`, where Desktop
+     and `/key-set` save) out of its environment, as VS Code does, has
+     Cline's hook read that file's keys as the daemon's environment holds
+     them (`sharedProviderCredentials`, `hostCredentials.ts`): each only for
+     a vendor the spawn's variables have no key for, paired with the
+     endpoint saved beside it or the vendor's default, so a workspace's base
+     URL cannot move it. A key the host keeps privately (VS Code's secret
+     store or settings) is not among them, and no other agent's hook reads
+     the store. The model
      (`OPENAI_MODEL`, `CLINE_MODEL`) is the planner's, prefix stripped, only
      when `AI_PROVIDER` named that vendor, since no other model of Ordewell's
      is that vendor's for certain; the plan's model still reaches the agent
@@ -366,11 +375,14 @@ the judge.
      of the entry it last used. Qwen reads its own settings and sign-in
      itself, so its hook answers nothing here.
   4. **A refusal naming both routes.** Cline's hook refuses the start before
-     anything is spawned, naming the store and the routes: "Set the key of a
-     provider Cline offers, such as OpenRouter, in Ordewell with `/key-set`, or
-     sign in with `cline auth` (a Cline or ClinePass account, or a provider's
-     key), or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell's
-     environment." Qwen learns it is signed out from its own `-32000`, and its
+     anything is spawned, naming the store and the routes: "Run `cline auth`
+     and choose a provider with its API key (a Cline or ClinePass account
+     sign-in leaves no key Ordewell can read), or save the key of a provider
+     Cline offers, such as OpenRouter, with `/key-set` in the terminal or the
+     Desktop app, or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell's
+     environment." An account sign-in keeps an OAuth token (`settings.auth`,
+     `tokenSource: "oauth"` in Cline 3.0.74), not the `apiKey` the hook reads,
+     and VS Code's own key entry is not lent to Cline, so neither is a route. Qwen learns it is signed out from its own `-32000`, and its
      profile's `signInRoute` adds Ordewell's route to the one its manifest
      names, as the terminal words it: "Qwen Code is not signed in. Run /key-set
      and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or
@@ -979,10 +991,12 @@ the private directory:
 - **A restricted Cursor's sign-in off macOS.** The sign-in was recorded
   surviving the moved home of configuration on macOS only. Where Cursor keeps
   it inside that home, a planner or read-only start fails as signed out.
-- **A key kept outside the environment.** The hook reads the host's and the
-  workspace's variables, where the CLI's `/key-set` writes; a key VS Code keeps in
-  its secret store, and its `aiProvider` setting, reach no agent until the
-  extension hands them to the runner's environment.
+- **A key kept outside the environment.** A hook reads the host's and the
+  workspace's variables, where the CLI and the daemon load `~/.ordewell/.env`.
+  VS Code keeps that file out of its environment, and only Cline's hook reads
+  its keys there (R9), so Qwen Code and Gemini CLI in VS Code still need the key
+  in the environment. A key VS Code keeps in its secret store or settings, and
+  its `aiProvider` setting, reach no agent.
 - **Cline signed in to a Cline or ClinePass account.** The recordings use a
   provider's key. No recording shows what an account's sign-in stores or a
   task run on it; where the reader finds no key in the entry Cline last used,
@@ -1335,3 +1349,5 @@ the private directory:
   a background subagent, or a Cursor `cursor/task` notice, fails the start.
 - 2026-11-10 — R3: the live subagent probe passed for Qwen Code 0.27.1 and Cline 3.0.74 (OpenRouter `deepseek/deepseek-v4.1-flash`); Cline's `spawn_agent` was absent from the model's tools, so the refusal by name was not exercised live.
 - 2026-11-16 — R9: the routes and hints name `/key-set`, the key command's name now; `/key` stays an alias.
+- 2026-11-25 — R9: in VS Code, Cline's hook reads the keys saved in `~/.ordewell/.env`, each with its saved endpoint, for a vendor the spawn's variables lack; no other agent's hook reads them.
+- 2026-11-25 — R9: Cline's refusal names `cline auth` with a provider's key first, says a Cline or ClinePass account sign-in leaves no key it reads, and names `/key-set` only for the terminal and the Desktop app.

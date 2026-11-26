@@ -110,7 +110,7 @@ describe('runnerReadiness, the typed state a picker or catalog reads', () => {
   it.each([
     [{ usable: false, reason: 'cursor-agent is not installed or is not on PATH.' }, undefined, { kind: 'unusable', reason: 'cursor-agent is not installed or is not on PATH.' }],
     [{ usable: true, auth: { state: 'signed-out' as const, signIn } }, 'signed-out' as const, { kind: 'blocked', why: 'signed-out', signIn }],
-    [{ usable: true, auth: { state: 'signed-out' as const, signIn, detail: 'no provider key' } }, 'no-credential' as const, { kind: 'blocked', why: 'no-credential', signIn }],
+    [{ usable: true, auth: { state: 'signed-out' as const, signIn, detail: 'no provider key' } }, 'no-credential' as const, { kind: 'blocked', why: 'no-credential', signIn: { ...signIn, needsKey: true } }],
     [{ usable: true, auth: { state: 'unknown' as const } }, 'pending' as const, { kind: 'pending' }],
     [{ usable: true, auth: { state: 'unknown' as const } }, 'no-answer' as const, { kind: 'discovery-failed' }],
     [{ usable: true, auth: { state: 'signed-in' as const } }, 'no-choice' as const, { kind: 'agent-default' }],

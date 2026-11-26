@@ -66,7 +66,9 @@ is one runner per API provider, under the provider's own id and name.**
   what the host holds for the runner (`hostCredentials.ts`). VS Code lends
   that file's keys there rather than into its environment, last and only
   where the start's environment has none, each with the endpoint saved
-  beside it. A workspace's
+  beside it. Of what the host holds, only the file's keys reach anything
+  spawned, and only Cline's credential hook
+  ([ADR-0060](0060-acp-runners-are-data-on-one-connector.md) R9). A workspace's
   variables (`.ordewell/env`, an `.envrc`,
   [ADR-0016](../platform/0016-per-workspace-environment.md)) list the runner and
   start it in that workspace, but enable nothing: the set is one per host. A
@@ -534,3 +536,4 @@ comes from that call.
 - 2026-11-21 — DeepSeek's own API gets every turn's reasoning back, not only a tool-calling turn's; `taskReasoningKept` (default `all`) lets a request hint a stepped boundary before which older reasoning may go, honoured only through OpenRouter on probed upstreams of a probed model.
 - 2026-11-22 — the written-call detector is shared with the API planner and takes `<invoke>`, DSML and whole-reply JSON calls besides `<tool_call>`.
 - 2026-11-25 — VS Code lends the keys saved in `~/.ordewell/.env` to the runner, each with its saved endpoint.
+- 2026-11-25 — of the keys VS Code holds, Cline's credential hook is lent the `~/.ordewell/.env` ones alone.

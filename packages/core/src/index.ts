@@ -177,7 +177,7 @@ export { LineBuffer, TaskModeUnsupportedError } from './services/harness/AgentAd
 export type { SpawnFn, AgentAdapter, AgentEvent, AgentStartOptions, PlannerStartOptions, TaskStartOptions, TaskRunnerFlags, TaskRunnerConfig, TaskModeAgentAdapter, AgentProcessDeps, AgentAdapterFactory } from './services/harness/AgentAdapter';
 export { supportsTaskMode, createTaskAdapter, runnerPlans } from './services/harness/connectors';
 export { PROVIDER_RUNNER_IDS, isProviderRunner, providerRunnerLabel, providerRunnerLoginNote, providerRunnerNamed, configuredProviderRunners } from './services/providerRunners';
-export { setHostCredentials, withHostCredentials, type HostCredentialReader } from './services/hostCredentials';
+export { setHostCredentials, setSharedProviderCredentials, withHostCredentials, type HostCredentialReader } from './services/hostCredentials';
 export { StdioAgentAdapter } from './services/harness/StdioAgentAdapter';
 export type { SpawnSpec } from './services/harness/StdioAgentAdapter';
 export { ClaudeCodeAdapter } from './services/harness/ClaudeCodeAdapter';
@@ -211,7 +211,7 @@ export { DaemonStream, type ConnectedFrame, type DaemonFrame } from './utils/dae
 export { ReconnectBackoff } from './utils/reconnectBackoff';
 export { SessionNotFoundError, NoPlanError, AlreadyExecutingError } from './services/SessionErrors';
 export { LeaseHost, processLeaseHost, SessionHeldError, describeHeld, describeHolder, LEASE_HEARTBEAT_MS, LEASE_STALE_MS, type LeaseHostKind, type LeaseHostOptions, type SessionHeld, type SessionLease, type SessionLeaseRecord } from './services/sessionLease';
-export { describeRunnerSignIn, describeSignIn, describeSignInWays, RunnerCredentialRefusal, RunnerSignedOutError, signInAction, signInOf, signInOfVerdict, TERMINAL_UI_SIGN_IN, HEADLESS_CLI_SIGN_IN, type KeySignInRoute, type RunnerSignIn, type SignInSyntax } from './services/signInHint';
+export { describeLoginStillBlocked, describeRunnerSignIn, describeSignIn, describeSignInLead, describeSignInWays, RunnerCredentialRefusal, RunnerSignedOutError, setsUpKey, signInAction, signInOf, signInOfVerdict, TERMINAL_UI_SIGN_IN, HEADLESS_CLI_SIGN_IN, type KeySignInRoute, type RunnerSignIn, type SignInSyntax } from './services/signInHint';
 export { daemonWaitLine, daemonStillWaitingLine, DAEMON_STILL_WAITING_MS, DETECTING_AGENTS, DETECTING_AGENTS_DETAIL } from './services/startupWait';
 export { AGENT_DEFAULT_MODEL, AGENT_SIGN_IN_NOTE, agentInstallRoutes, describeUnusedPlanningKey, type AgentInstallRoute } from './services/plannerNotices';
 export { plannerNotReady, plannerNotReadyFor, describePlannerNotReady, PlannerNotReadyError, TERMINAL_UI_COMMANDS, CHAT_COMMANDS, HEADLESS_CLI_COMMANDS, type PlannerNotReady, type PlannerCommandSyntax, type PlannerReadinessConfig } from './services/plannerReadiness';

@@ -171,6 +171,39 @@ describe('describePlannerNotReady', () => {
   });
 });
 
+describe('a Cline planner whose credential hook found no key (no sign-out of its own)', () => {
+  afterEach(() => resetInstalledPlanner());
+
+  // What discovery records when Cline's hook refused before Cline was spawned.
+  const clineNoKey: RunnerAuth = {
+    state: 'signed-out', loginCommand: ['cline', 'auth'], detail: 'no provider key',
+    signIn: { runner: 'cline', label: 'Cline', login: ['cline', 'auth'], needsKey: true },
+  };
+
+  it('refuses the turn for the key it lacks and names its setup, never that Cline is signed out', () => {
+    recordRunnerAuth('cline', clineNoKey);
+    const reason = plannerNotReadyFor(hostConfig({ aiProvider: 'cline', planningModel: '' }))!;
+
+    expect(reason).toMatchObject({ code: 'signed_out', runner: 'cline', signIn: { needsKey: true } });
+    expect(describePlannerNotReady(reason, CHAT_COMMANDS)).toBe(
+      'Cline has no provider API key Ordewell can hand it. Set it up with /login cline, or run cline auth, and choose an API provider and enter its key; an account sign-in alone is not enough. Then try again.',
+    );
+    expect(describePlannerNotReady(reason, HEADLESS_CLI_COMMANDS)).toBe(
+      'Cline has no provider API key Ordewell can hand it. Run cline auth and choose an API provider and enter its key; an account sign-in alone is not enough. Then try again.',
+    );
+  });
+
+  it('offers a signed-in agent first, with the same lead', () => {
+    const reason: PlannerNotReady = {
+      code: 'signed_out', provider: 'cline', label: 'Cline', runner: 'cline', signIn: clineNoKey.signIn!,
+      signedIn: { provider: 'codex', label: 'Codex' },
+    };
+    expect(describePlannerNotReady(reason, TERMINAL_UI_COMMANDS)).toBe(
+      'Cline has no provider API key Ordewell can hand it. Codex is signed in: switch with /planner, or set it up with /login cline, or run cline auth, and choose an API provider and enter its key; an account sign-in alone is not enough. Then try again.',
+    );
+  });
+});
+
 describe('a signed-out planner refused while another installed agent is signed in', () => {
   afterEach(() => resetInstalledPlanner());
 

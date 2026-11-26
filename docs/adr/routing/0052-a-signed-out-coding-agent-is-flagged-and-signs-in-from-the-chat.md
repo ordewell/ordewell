@@ -134,13 +134,29 @@ control, and whether a new pick is refused:
 | Readiness | Status | Recovery | New pick |
 |---|---|---|---|
 | signed out | Signed out | Sign in (`sign-in`) | refused |
-| no credential | API key needed | Add key (`add-key`) | refused |
+| no credential | API key needed | Add key (`add-key`); Set up \<Agent\> (`set-up`) for an agent with no key route of Ordewell's | refused |
 | a finished catalog with no model and no agent default | No usable model | Refresh models (`refresh-models`) | refused |
 | the ask got no answer | Couldn't load models | Retry (`retry`) | allowed |
 | discovery still asking | Checking models… | — | allowed |
 | no evidence of the sign-in | Sign-in not checked | — | allowed |
 | the agent offers no model and runs on its own | Uses agent default | — | allowed |
 | signed in, models listed | — | — | allowed |
+
+A credential hook that found no key never asked the agent, so its verdict is no
+sign-out: discovery records it with `signIn.needsKey`, and `runnerReadiness`
+reads `no-credential` from that verdict as well as from discovery's reason. Add
+key opens only the key entry, on the agent's own vendor where it has one
+(`/key-set openrouter` for Qwen Code). An agent with no key route of Ordewell's
+and a login of its own (Cline, whose key VS Code's key entry cannot reach)
+offers `Set up Cline`, which runs that login (`cline auth`), and every surface
+words it as the key it lacks rather than a sign-out (`setsUpKey`): `Cline has
+no provider API key Ordewell can hand it. Set it up with /login cline, or run
+cline auth, and choose an API provider and enter its key; an account sign-in
+alone is not enough.` A Cline account sign-in keeps an OAuth token, not the key
+its hook reads (ADR-0060), so only a provider's key is named. The send gate's
+refusal, a refused pick, the chat's error banner (`Set up Cline`, then `Cline is
+set up. Send your message again.`) and the empty state's row (`Set up`) say the
+same.
 
 Only evidence blocks: a confirmed sign-out, a credential hook with no key, or a
 discovery that finished and established there is nothing to run the agent on.
@@ -170,7 +186,8 @@ pick it again.`, or `Run /refresh to load its models again, then pick it.` An
 unusable runner is no new refusal here: it is refused at its start, as before.
 
 The TUI words each blocked row as the status and the usual command:
-`Signed out · /login cursor-agent`, `API key needed · /key-set`,
+`Signed out · /login cursor-agent`, `API key needed · /key-set` (`API key
+needed · /login cline` for Cline's setup),
 `No usable model · /refresh`, `Couldn't load models · /refresh`, with no other
 ornament; its label is red. Enter on a blocked row, ticking it on in `/runners`,
 `/runners <id> on` and `/task-runner <task> <id>` say the refusal with its way in
@@ -180,7 +197,7 @@ rows again, so the stepper's early display of it is undone.
 The Desktop and VS Code chat's planner and Runners pills put the status inside
 the row's capsule, after the name, in the error colour for a blocker and muted
 for the neutral ones, with the recovery as the capsule's last segment: `Cursor
-Signed out [Sign in]`. Sign in and Add key run that agent's login or key entry,
+Signed out [Sign in]`. Sign in and Set up run that agent's login, Add key the key entry,
 Refresh models and Retry ask the host to detect the agents and their catalogs
 again; none re-picks or sends anything once it is done. A row that refuses a new
 pick keeps its pill focusable with `aria-disabled` and names the status in
@@ -189,8 +206,9 @@ screen reader. A task card's Runner dropdown names a blocker as `Cursor —
 Signed out` and disables it, except on the task already on it. The planner's
 model list says nothing while its agent's models are asked for or it runs on its
 own default, and tells a failed load (Retry) from a catalog that listed nothing
-(Refresh models); a credential hook's own words (Cline's) are the status's
-detail. The Desktop reads each row's `readiness` from the daemon's list; VS Code
+(Refresh models); a credential hook's own words are the status's detail, except
+for a row whose recovery is the agent's setup, which gives the setup's shorter
+direction. The Desktop reads each row's `readiness` from the daemon's list; VS Code
 words its own from the same probe and discovery answers
 (`runnerReadiness`) and judges each new pick with the daemon's check
 (`refuseBlockedPick`). A pick either host refuses shows its refusal in the
@@ -344,15 +362,18 @@ the record says signed out, never on a list), so a sign-in done in another
 terminal is seen without a recheck. An ask that gets no answer keeps the
 blocker. The user's explicit recovery (`recheckRunnerSignIn`) forgets the
 record for that runner and workspace first and then asks the same way: a login
-that finished (the TUI's `/login` when its child exits 0, the desktop's login
-terminal when its process exits 0, VS Code's when its terminal closes, since its
-login runs inside a shell whose exit is not the login's), and the TUI's explicit
+that finished (the TUI's `/login` when its child exits 0, and the desktop's and
+VS Code's login terminals when their process, the login itself, exits 0), and the TUI's explicit
 `/refresh`, which rechecks every agent it shows signed out. The daemon takes it
 as `runners.list?recheck=<runner>[,<runner>]`. Where nothing can say, the agent
 reads `unknown`, never signed in on a terminal's exit alone; the user can send
 again, and a new refusal records the blocker again. Nothing is resent for them,
 and a login that failed or was cancelled is not a recheck, so its blocker
-stays.
+stays. A recheck still signed out is `<Label> still reports not logged in.`,
+unless its credential hook again found no key: the agent was never asked, so
+every host says `The Cline setup finished, but Ordewell still has no provider
+API key it can hand Cline.` and the setup's way in again
+(`describeLoginStillBlocked`).
 
 ### Signing in
 
@@ -362,16 +383,18 @@ the manifest's login args in this terminal: the alt screen and raw mode are
 suspended, the child inherits stdio, cwd, PATH and the workspace environment,
 and the TUI resumes in a `finally` so a failed spawn cannot leave the terminal
 behind. Ctrl-C belongs to the child while it runs. VS Code's Log in, on any pill
-or empty-state row, opens an integrated terminal named `<Label> login` with the
-workspace's cwd and environment, sends the argv once, and polls the runner's
-status verdict every two seconds for up to five minutes; a login the probe does
-not confirm, or whose terminal closes, ends as a visible failure; for an agent
-with no status command, whose poll can never confirm, the closed terminal is
-rechecked once as above and its answer is the outcome. On Windows that
-terminal is cmd.exe whatever the user's default: Windows PowerShell prefers an
-npm-installed agent's `.ps1` shim to the `.cmd` beside it, and its default
-Restricted execution policy refuses to run it, so the login died before the
-agent started.
+or empty-state row, opens a transient integrated terminal named `<Label> login`
+whose process is the login itself: the agent's file, found on the probe's
+augmented PATH (absolute on POSIX, by `planDirectLaunch`'s routes on Windows, so
+an npm `.cmd` shim starts its target and a lone `.cmd` runs through cmd.exe),
+with the argv's arguments, the workspace's cwd and environment, and no shell in
+between. A shell would outlive the login, so its end was never seen, and would
+find the name again after its startup files ran. While it runs, a runner with a
+status command is polled every two seconds; it ends at the first of a confirmed
+sign-in, the process's exit, or five minutes, when the terminal is disposed and
+the login with it. An exit 0 is rechecked once as above and its answer is the
+outcome; a nonzero exit, a closed terminal or the timeout ends as a visible
+failure and keeps what was recorded.
 
 Neither path writes the planner choice: signing a named agent in leaves
 `aiProvider` alone, so "Claude plans while Codex signs in" works. Success is
@@ -572,3 +595,5 @@ art for the TTL and the refresh trigger.
 - 2026-11-25 — one choice rule for every picker (`runnerChoice`): ready choices first, blocked ones kept visible with one status and their recovery; a new planner pick, runner switched on or task assignment of a signed-out, keyless or modelless runner is refused, and judged again at the daemon's write (`runner_not_ready`); choices already made are kept.
 - 2026-11-25 — a planner turn its agent ended signed out mid-session keeps its failure once as the conversation's error, carrying that agent's `signIn`, and the Desktop and VS Code chat offer its Sign in there.
 - 2026-11-25 — the Desktop and VS Code pickers read the same choice rule: each row's status and recovery in its capsule, a blocked row refused as a new pick but focusable, the model list told by readiness; VS Code judges its own picks with the daemon's `refuseBlockedPick`, and a refused pick offers that agent's Sign in.
+- 2026-11-25 — VS Code's login runs as its terminal's own process rather than text typed into a shell, so its exit ends the wait: an exit 0 is rechecked, any other end keeps the blocker, and the timeout disposes the terminal.
+- 2026-11-25 — a credential hook with no key is recorded as such (`signIn.needsKey`) and is no sign-out: Add key opens only the key entry, an agent with no key route of Ordewell's (Cline) offers `Set up <Agent>`, its own login, on every picker, the send refusal and the error banner, and a finished setup that still leaves no key says Ordewell lacks one rather than that the agent refused.

@@ -1,14 +1,17 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { setSharedProviderCredentials } from '../../hostCredentials';
 import { clineCredentials } from '../clineCredentials';
+import { geminiCredentials } from '../geminiCredentials';
+import { qwenCredentials } from '../qwenCredentials';
 
 const KEY = 'sk-or-v1-cline-key-never-shown';
 const OTHER_KEY = 'sk-ant-other-provider-key';
 const ORDEWELL_KEY = 'sk-or-v1-ordewell-own-key-never-shown';
 
-const ROUTES = 'Set the key of a provider Cline offers, such as OpenRouter, in Ordewell with `/key-set`, or sign in with `cline auth` (a Cline or ClinePass account, or a provider\'s key), or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell\'s environment.';
+const ROUTES = 'Run `cline auth` and choose a provider with its API key (a Cline or ClinePass account sign-in leaves no key Ordewell can read), or save the key of a provider Cline offers, such as OpenRouter, with `/key-set` in the terminal or the Desktop app, or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell\'s environment.';
 const NONE = 'Cline has no provider key Ordewell can hand it: Ordewell holds none for a provider Cline offers, and ';
 
 let home: string;
@@ -71,6 +74,16 @@ describe('clineCredentials', () => {
     expect(await refusal({ CLINE_PROVIDER_SETTINGS_PATH: named })).toBe(`${NONE}\`${named}\` is missing. ${ROUTES}`);
   });
 
+  it('finds no key after a Cline account sign-in alone, which keeps an OAuth token rather than an API key', async () => {
+    // The entry Cline 3.0.74 saves for an account login (`saveProviderSettings(..., { tokenSource: 'oauth' })`),
+    // read from its shipped source: no live account login was run.
+    store({
+      version: 1, lastUsedProvider: 'cline', modes: {},
+      providers: { cline: { settings: { provider: 'cline', auth: { accessToken: KEY } }, updatedAt: '2026-11-25T10:00:00.000Z', tokenSource: 'oauth' } },
+    });
+    expect(await refusal()).toBe(`${NONE}the provider it last used (cline) has no key in \`${storePath}\`. ${ROUTES}`);
+  });
+
   describe('with a provider configured in Ordewell', () => {
     it('hands Cline the OpenRouter key Ordewell holds, ahead of Cline\'s own store', async () => {
       store(signedIn('anthropic'));
@@ -93,6 +106,73 @@ describe('clineCredentials', () => {
         OPENAI_COMPATIBLE_API_KEY: ORDEWELL_KEY, OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:11434/v1',
       };
       expect(await read(unreachable)).toEqual({ CLINE_PROVIDER: 'openrouter', CLINE_API_KEY: KEY, CLINE_MODEL: 'openai/gpt-4.1-mini' });
+    });
+  });
+
+  describe('with a key saved in Ordewell\'s shared store the host keeps out of its environment', () => {
+    const SAVED_KEY = 'sk-or-v1-saved-in-the-shared-store';
+    const readShared = (env: Record<string, string | undefined>, shared: Record<string, string>) =>
+      clineCredentials({ homedir: () => home, shared: () => shared })({ env, kind: 'task' });
+
+    it('hands Cline the saved OpenRouter key with no Cline store at all, as the daemon whose environment holds it does', async () => {
+      expect(await readShared({}, { OPENROUTER_API_KEY: SAVED_KEY, OPENROUTER_BASE_URL: 'https://openrouter.ai/api/v1' }))
+        .toEqual({ CLINE_PROVIDER: 'openrouter', CLINE_API_KEY: SAVED_KEY });
+    });
+
+    it('reads the store the host registered, afresh for each spawn, and none once it is removed', async () => {
+      const saved: Record<string, string> = {};
+      setSharedProviderCredentials(() => saved);
+      try {
+        expect(await refusal()).toBe(`${NONE}\`${storePath}\` is missing. ${ROUTES}`);
+        saved.OPENROUTER_API_KEY = SAVED_KEY;
+        saved.OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+        expect(await read()).toEqual({ CLINE_PROVIDER: 'openrouter', CLINE_API_KEY: SAVED_KEY });
+      } finally {
+        setSharedProviderCredentials(undefined);
+      }
+      expect(await refusal()).toBe(`${NONE}\`${storePath}\` is missing. ${ROUTES}`);
+    });
+
+    it('asks the store under the spawn\'s own variables, and reads it as the daemon would: AI_PROVIDER picks among them all', async () => {
+      const asked: Record<string, string | undefined>[] = [];
+      const env = { XAI_API_KEY: ORDEWELL_KEY, AI_PROVIDER: 'openrouter', ORCHESTRATOR_MODEL: 'openai/gpt-5' };
+      const shared = { OPENROUTER_API_KEY: SAVED_KEY, OPENROUTER_BASE_URL: 'https://openrouter.ai/api/v1' };
+      const answer = await clineCredentials({ homedir: () => home, shared: (e) => { asked.push({ ...e }); return shared; } })({ env, kind: 'planner' });
+      expect(answer).toEqual({ CLINE_PROVIDER: 'openrouter', CLINE_API_KEY: SAVED_KEY, CLINE_MODEL: 'openai/gpt-5' });
+      expect(asked).toEqual([env]);
+      // Without AI_PROVIDER, the first configured in PROVIDER_PRIORITY, as the daemon's environment reads.
+      expect(await readShared({ XAI_API_KEY: ORDEWELL_KEY }, shared)).toEqual({ CLINE_PROVIDER: 'openrouter', CLINE_API_KEY: SAVED_KEY });
+    });
+
+    it('is not sent to Cline\'s default from a saved custom endpoint, whatever the workspace names, and Cline\'s own store answers', async () => {
+      const elsewhere = { OPENROUTER_API_KEY: SAVED_KEY, OPENROUTER_BASE_URL: 'https://proxy.example/v1' };
+      const workspace = { OPENROUTER_BASE_URL: 'https://openrouter.ai/api/v1' };
+      expect(await readShared(workspace, elsewhere).then(() => 'handed', () => 'refused')).toBe('refused');
+      store(signedIn());
+      expect(await readShared(workspace, elsewhere)).toEqual({ CLINE_PROVIDER: 'openrouter', CLINE_API_KEY: KEY, CLINE_MODEL: 'openai/gpt-4.1-mini' });
+      // Nor a saved Custom endpoint or a vendor Cline has no provider for.
+      const incompatible = { OPENAI_COMPATIBLE_API_KEY: SAVED_KEY, OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:11434/v1', MOONSHOT_API_KEY: SAVED_KEY };
+      expect(await readShared({}, incompatible)).toEqual({ CLINE_PROVIDER: 'openrouter', CLINE_API_KEY: KEY, CLINE_MODEL: 'openai/gpt-4.1-mini' });
+    });
+
+    it('gives way to the user\'s own Cline variables, asking nothing of the store', async () => {
+      const shared = vi.fn(() => ({ OPENROUTER_API_KEY: SAVED_KEY }));
+      expect(await clineCredentials({ homedir: () => home, shared })({ env: { CLINE_PROVIDER: 'anthropic', CLINE_API_KEY: 'from-the-user' } })).toBeNull();
+      expect(shared).not.toHaveBeenCalled();
+    });
+
+    it('is no other agent\'s: Qwen\'s and Gemini\'s hooks never read it', async () => {
+      const shared = vi.fn(() => ({ OPENROUTER_API_KEY: SAVED_KEY, OPENROUTER_BASE_URL: 'https://openrouter.ai/api/v1', GEMINI_API_KEY: SAVED_KEY }));
+      setSharedProviderCredentials(shared);
+      try {
+        for (const hook of [qwenCredentials, geminiCredentials]) {
+          const answer = await hook({ env: { HOME: home } }).then((a) => a, () => null);
+          expect(JSON.stringify(answer ?? {})).not.toContain(SAVED_KEY);
+        }
+        expect(shared).not.toHaveBeenCalled();
+      } finally {
+        setSharedProviderCredentials(undefined);
+      }
     });
   });
 
