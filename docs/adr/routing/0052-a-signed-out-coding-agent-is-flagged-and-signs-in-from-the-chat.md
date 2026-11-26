@@ -363,7 +363,7 @@ terminal is seen without a recheck. An ask that gets no answer keeps the
 blocker. The user's explicit recovery (`recheckRunnerSignIn`) forgets the
 record for that runner and workspace first and then asks the same way: a login
 that finished (the TUI's `/login` when its child exits 0, and the desktop's and
-VS Code's login terminals when their process, the login itself, exits 0), and the TUI's explicit
+VS Code's login terminals when the login their wrapper ran exits 0), and the TUI's explicit
 `/refresh`, which rechecks every agent it shows signed out. The daemon takes it
 as `runners.list?recheck=<runner>[,<runner>]`. Where nothing can say, the agent
 reads `unknown`, never signed in on a terminal's exit alone; the user can send
@@ -384,17 +384,32 @@ suspended, the child inherits stdio, cwd, PATH and the workspace environment,
 and the TUI resumes in a `finally` so a failed spawn cannot leave the terminal
 behind. Ctrl-C belongs to the child while it runs. VS Code's Log in, on any pill
 or empty-state row, opens a transient integrated terminal named `<Label> login`
-whose process is the login itself: the agent's file, found on the probe's
+whose process is a **wrapper shell** (`/bin/sh` on POSIX, cmd.exe on Windows)
+that runs the login as its child: the agent's file, found on the probe's
 augmented PATH (absolute on POSIX, by `planDirectLaunch`'s routes on Windows, so
 an npm `.cmd` shim starts its target and a lone `.cmd` runs through cmd.exe),
-with the argv's arguments, the workspace's cwd and environment, and no shell in
-between. A shell would outlive the login, so its end was never seen, and would
-find the name again after its startup files ran. While it runs, a runner with a
-status command is polled every two seconds; it ends at the first of a confirmed
-sign-in, the process's exit, or five minutes, when the terminal is disposed and
-the login with it. An exit 0 is rechecked once as above and its answer is the
-outcome; a nonzero exit, a closed terminal or the timeout ends as a visible
-failure and keeps what was recorded.
+with the argv's arguments, the workspace's cwd and environment. The wrapper is
+not a login shell that could outlive the login or re-find the name after its
+startup files ran: the resolved file and its argv are handed to it as positional
+parameters (POSIX `"$@"`) or a quoted command line (Windows), never as text in
+its script, so a metacharacter in an argument is passed to the agent, not run,
+and no credential from the workspace environment is echoed or written to disk.
+
+The wrapper exists for one reason: VS Code disposes a transient terminal the
+moment its own process ends, and its stable API has no stream for a terminal's
+output, so a login that printed an error and exited nonzero disappeared along
+with the error. The wrapper writes the login's **real exit code** to a status
+file — the completion signal the host polls, since a held-open shell sets no
+`exitStatus` — and, on a nonzero exit, holds the terminal open with a "press
+Enter" line until the person has read the output. On success it exits at once.
+The status file holds only a number; the temp dir holding it (and the Windows
+batch) is removed once the verdict has been read, with the terminal's close as a
+fallback where cmd.exe still holds a file open. While the login runs, a runner
+with a status command is polled every two seconds; the attempt ends at the
+first of a confirmed sign-in, the status file's exit code, a closed terminal, or
+five minutes, when the terminal is disposed and the login with it. An exit 0 is
+rechecked once as above and its answer is the outcome; a nonzero exit, a closed
+terminal or the timeout ends as a visible failure and keeps what was recorded.
 
 Neither path writes the planner choice: signing a named agent in leaves
 `aiProvider` alone, so "Claude plans while Codex signs in" works. Success is
@@ -437,10 +452,18 @@ The TUI injects `spawn` and drives a fake daemon, which is how suspend/resume
 and the post-login re-probe are asserted. VS Code injects `createTerminal`,
 `onDidCloseTerminal`, `sleep`, `now` and the usability probe into
 `PlannerLoginDeps`, so a poll ends without real seconds and "signed in" is
-asserted to come from the probe rather than the child's exit. The fixtures are
-the CLIs' published answer shapes, never credentials; a real login stays a
-manual check. [ADR-0038](0038-runner-install-verdicts-expire.md) is the prior
-art for the TTL and the refresh trigger.
+asserted to come from the probe rather than the child's exit. The wrapper's
+status file and temp dir are injected too (`loginTempRoot`), so a case drives
+completion from a status code while the shell is held open, and asserts cleanup.
+A real-VS-Code integration test drives `loginPlanner` against a fake agent CLI:
+it reproduces the transient-terminal disappearance on an exit 3, and proves the
+wrapper keeps the failed terminal open, reports the status-file exit code,
+rechecks a success, keeps an interactive TTY and stdin, and ends on close and
+timeout. The fixtures are the CLIs' published answer shapes and a fake agent,
+never credentials; a real account login stays a manual check, and no claim is
+made that an untested runner's login works end to end.
+[ADR-0038](0038-runner-install-verdicts-expire.md) is the prior art for the TTL
+and the refresh trigger.
 
 ## Out of scope
 
@@ -451,8 +474,11 @@ art for the TTL and the refresh trigger.
 - Preflighting a task's agent for its login: the task's own failure is its
   report, worded with the way in.
 - A machine-wide account manager, or signing several agents in from one action.
-- Recording a login's output: the terminal belongs to the user, and the
-  transcript keeps only the verdict.
+- Recording or reading back a login's output: the terminal belongs to the user,
+  and the transcript keeps only the verdict. A failing login's terminal is held
+  open so the person can read its scrollback; Ordewell never captures that text
+  (the stable terminal API has no output stream), only the exit code the wrapper
+  writes to its status file.
 
 ## Considered options
 
@@ -460,6 +486,14 @@ art for the TTL and the refresh trigger.
   every one of these logins prompts on a TTY — a browser OAuth, a device code, a
   pasted code — which a piped child cannot show, and the user would still have
   to type into something that is not the terminal.
+- **Make the login the terminal's own process, with no shell in between.**
+  Chosen on 2026-11-25, dropped: VS Code disposes a transient integrated terminal
+  as soon as its own process ends, so a login that printed an error and exited
+  nonzero disappeared along with the error before the person could read it, and
+  there was no Windows route that retained output either. The replacement is a
+  wrapper shell that holds the terminal open on failure and reports the login's
+  real exit through a status file, while still handing the resolved file and argv
+  to the login without a login shell re-finding the name.
 - **Copy the command into the message and stop there.** Rejected: the command is
   already in the message, and the request was to sign in from the chat. Copying
   it still sends the user to another shell and says nothing about whether it
@@ -597,3 +631,4 @@ art for the TTL and the refresh trigger.
 - 2026-11-25 — the Desktop and VS Code pickers read the same choice rule: each row's status and recovery in its capsule, a blocked row refused as a new pick but focusable, the model list told by readiness; VS Code judges its own picks with the daemon's `refuseBlockedPick`, and a refused pick offers that agent's Sign in.
 - 2026-11-25 — VS Code's login runs as its terminal's own process rather than text typed into a shell, so its exit ends the wait: an exit 0 is rechecked, any other end keeps the blocker, and the timeout disposes the terminal.
 - 2026-11-25 — a credential hook with no key is recorded as such (`signIn.needsKey`) and is no sign-out: Add key opens only the key entry, an agent with no key route of Ordewell's (Cline) offers `Set up <Agent>`, its own login, on every picker, the send refusal and the error banner, and a finished setup that still leaves no key says Ordewell lacks one rather than that the agent refused.
+- 2026-11-26 — VS Code's login is wrapped, not the terminal's own process: a cross-platform wrapper shell (/bin/sh, cmd.exe) runs the resolved login as its child, holds the terminal open on a nonzero exit so the error stays visible, and reports the real exit code through a status file; users get the actionable failure, success/close/timeout and cleanup are retained, and the wrapper is proven against fake agents in a real VS Code host.

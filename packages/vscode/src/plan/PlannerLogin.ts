@@ -1,8 +1,7 @@
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import type * as vscode from 'vscode';
-import { augmentedPath, describeLoginStillBlocked, describeSignInWays, ExecutableNotFoundError, inProcessProvider, isExecutableResolved, planDirectLaunch, providerRunnerLoginNote, recheckRunnerSignIn, runnerForProvider, TERMINAL_UI_SIGN_IN, withPath, workspaceEnvOf, type INotification, type LaunchDeps, type ModelResolver, type PlannerBackendId, type RunnerAuth, type RunnerInstallation, type RunnerRegistry } from '@ordewell/core';
+import { describeLoginStillBlocked, describeSignInWays, inProcessProvider, providerRunnerLoginNote, recheckRunnerSignIn, runnerForProvider, TERMINAL_UI_SIGN_IN, withPath, workspaceEnvOf, type INotification, type LaunchDeps, type ModelResolver, type PlannerBackendId, type RunnerAuth, type RunnerInstallation, type RunnerRegistry } from '@ordewell/core';
 import type { HostToWebview } from '@ordewell/ui/protocol';
+import { buildLoginTerminal, resolveLoginLaunch, type LoginTerminal } from './loginTerminal';
 
 const POLL_MS = 2_000;
 /** Long enough for a browser OAuth or a device code, short enough to end a forgotten one. */
@@ -47,60 +46,15 @@ export interface PlannerLoginDeps {
    * points it at stand-ins. Off Windows, `exists` is whether a file may be run.
    */
   launch?: Omit<LaunchDeps, 'platform'>;
+  /**
+   * Root for the login wrapper's status dir, which a test pins to observe that
+   * every attempt cleans up after itself. Defaults to `os.tmpdir()`.
+   */
+  loginTempRoot?: () => string;
   log?: (msg: string) => void;
 }
 
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
-/** What the login terminal starts: the agent's own file and its arguments, with no shell between. */
-interface LoginLaunch {
-  shellPath: string;
-  shellArgs: string[] | string;
-  PATH: string;
-}
-
-/** The first file on `PATH` named `command`, as execvp picks it when the probe spawns the agent. */
-function onPosixPath(command: string, PATH: string, runnable: (candidate: string) => boolean): string | undefined {
-  if (command.includes('/')) return runnable(command) ? command : undefined;
-  return PATH.split(path.posix.delimiter).map((d) => d.trim()).filter(Boolean)
-    .map((dir) => path.posix.join(dir, command))
-    .find(runnable);
-}
-
-/** A file execvp would start: there, and executable by this user. */
-function runnableFile(candidate: string): boolean {
-  try {
-    if (!fs.statSync(candidate).isFile()) return false;
-    fs.accessSync(candidate, fs.constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * The login as the terminal's own process (#62 F1). Typed into the user's
- * shell it was never seen to end, since the shell outlives it; and the shell
- * found the name again after its startup files ran, which may pick another
- * binary than the probe did (#62 F3). So the file is resolved here on the
- * probe's augmented PATH: absolute on POSIX, and on Windows by the same
- * routes a spawn takes (ADR-0010), so an npm `.cmd` shim starts its target and
- * a lone `.cmd` goes through cmd.exe, whose line is handed over verbatim.
- */
-async function loginLaunch(argv: readonly string[], platform: NodeJS.Platform, launch: Omit<LaunchDeps, 'platform'>): Promise<LoginLaunch> {
-  const [command, ...args] = argv;
-  const PATH = await (launch.resolvePath ?? augmentedPath)();
-  const deps: LaunchDeps = { ...launch, platform, resolvePath: async () => PATH };
-  if (platform !== 'win32') {
-    const file = onPosixPath(command, PATH, deps.exists ?? runnableFile);
-    if (!file) throw new ExecutableNotFoundError(command, PATH);
-    return { shellPath: file, shellArgs: args, PATH };
-  }
-  const plan = await planDirectLaunch(command, args, deps);
-  if (!isExecutableResolved(command, plan, PATH, deps)) throw new ExecutableNotFoundError(command, PATH);
-  // VS Code takes a string of arguments on Windows as one command line, as is.
-  return { shellPath: plan.file, shellArgs: plan.verbatim ? plan.args.join(' ') : plan.args, PATH };
-}
 
 /**
  * Sign a coding agent in from the chat (ADR-0009): run the runner's own login
@@ -115,6 +69,10 @@ async function loginLaunch(argv: readonly string[], platform: NodeJS.Platform, l
  * exits 0. Five minutes without an end closes the login, and every end other
  * than a confirmed sign-in is a failure the surface shows inline, never a
  * silent success.
+ *
+ * A wrapper shell runs the login and holds the terminal open after a failure,
+ * so the error stays on screen, and writes the real exit code to a status file
+ * the host reads — VS Code sets no exitStatus while that shell is held open.
  */
 export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): Promise<void> {
   const runner = runnerId ?? runnerForProvider(deps.config.aiProvider) ?? undefined;
@@ -174,9 +132,9 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
 
   const root = deps.workspaceRoot();
   const platform = deps.platform ?? process.platform;
-  let launch: LoginLaunch;
+  let launch;
   try {
-    launch = await loginLaunch(command, platform, deps.launch ?? {});
+    launch = await resolveLoginLaunch(command, platform, deps.launch ?? {});
   } catch (err) {
     // Not found, or a Windows shim that cannot carry the arguments: nothing
     // started, so the reason is the answer. Only its first line: the rest
@@ -189,21 +147,39 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
     return;
   }
   deps.log?.(`Login launch: runner=${runner} platform=${platform}`);
-  let terminal: vscode.Terminal;
+
+  // The wrapper owns a status file for the login's real exit code and holds the
+  // terminal open after a failure. Allocate it before the terminal exists, and
+  // clean it up on every path below.
+  let loginTerminal: LoginTerminal;
   try {
-    terminal = deps.window.createTerminal({
+    loginTerminal = buildLoginTerminal(launch, {
+      runner,
+      label,
       name: `${label} login`,
       cwd: root,
-      shellPath: launch.shellPath,
-      shellArgs: launch.shellArgs,
       // The agent's own account is chosen by the workspace environment
       // (ADR-0016), so the login must see the same one a spawn would, on the
       // PATH its file was found on: an agent run by `env node` finds that too.
-      env: withPath({}, launch.PATH, await (deps.env ?? workspaceEnvOf)(root)),
-      // A login that ended has nothing to come back to after a reload.
-      isTransient: true,
+      env: withPath({}, launch.PATH, await (deps.env ?? workspaceEnvOf)(root)) as Record<string, string>,
+      platform,
+      ...(deps.launch?.comSpec ? { comSpec: deps.launch.comSpec } : {}),
+      ...(deps.loginTempRoot ? { tempRoot: deps.loginTempRoot } : {}),
+      ...(deps.log ? { log: deps.log } : {}),
     });
   } catch (err) {
+    // Nothing started: the status file or the Windows wrapper could not be made.
+    deps.log?.(`Could not prepare the ${label} login terminal: ${err instanceof Error ? err.message : String(err)}`);
+    deps.post({ type: 'plannerLoginEnded', runner, ok: false, message: TERMINAL_FAILED_MESSAGE });
+    deps.notifications.info(`Could not open a terminal to sign in to ${label}.`);
+    return;
+  }
+
+  let terminal: vscode.Terminal;
+  try {
+    terminal = deps.window.createTerminal(loginTerminal.options);
+  } catch (err) {
+    loginTerminal.cleanup();
     // The one failure the row cannot explain by itself: nothing opened to run
     // the login in, so the reason is the host's to say.
     deps.log?.(`Could not open a ${label} login terminal: ${err instanceof Error ? err.message : String(err)}`);
@@ -212,12 +188,22 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
     return;
   }
   let closed = false;
+  let hostDone = false;
+  // VS Code fires terminal close events asynchronously, so this listener is
+  // fully assigned before the callback that disposes it can ever run.
   const closedListener = deps.window.onDidCloseTerminal((t) => {
-    if (t === terminal) closed = true;
+    if (t !== terminal) return;
+    closed = true;
+    // Once the host has read the verdict, a close that arrives later — the
+    // person dismissing a held-open failed login — removes the status dir.
+    // Not before: deleting it mid-wait would hide the exit code (or, on
+    // Windows, a batch file cmd.exe still has open).
+    if (hostDone && loginTerminal.cleanup()) closedListener.dispose();
   });
-  // VS Code sets the exit status when the terminal's process ends, which is
-  // now the login itself, then fires the close.
-  const ended = (): boolean => closed || terminal.exitStatus !== undefined;
+  // The login's real exit is read from the wrapper's status file; the terminal's
+  // own exitStatus is a fallback for a wrapper that ended on its own (success),
+  // and `closed` for a terminal the person closed.
+  const ended = (): boolean => loginTerminal.exitCode() !== undefined || closed || terminal.exitStatus !== undefined;
 
   const sleep = deps.sleep ?? wait;
   const now = deps.now ?? Date.now;
@@ -282,7 +268,7 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
       terminal.dispose();
       outcome = { ok: false, message: TIMEOUT_MESSAGE };
     } else {
-      const code = terminal.exitStatus?.code;
+      const code = loginTerminal.exitCode() ?? terminal.exitStatus?.code;
       deps.log?.(`Login exit: runner=${runner} code=${code ?? "unknown"}`);
       // Only a login that finished is a recheck (ADR-0052): one that failed or
       // was closed keeps the blocker it was started to clear.
@@ -296,7 +282,10 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
     deps.log?.(`The ${label} login terminal failed: ${err instanceof Error ? err.message : String(err)}`);
     outcome = { ok: false, message: TERMINAL_LOST_MESSAGE };
   } finally {
-    closedListener.dispose();
+    hostDone = true;
+    // Clean up only after the status verdict has been read. A failed cleanup
+    // (Windows still holding the batch file) leaves the close listener to retry.
+    if (loginTerminal.cleanup()) closedListener.dispose();
   }
   await end(outcome.ok, outcome.message);
 }

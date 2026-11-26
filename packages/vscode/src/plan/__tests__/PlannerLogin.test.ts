@@ -5,6 +5,16 @@ import * as path from 'node:path';
 import { delimiter } from 'node:path';
 import { ModelResolver, RunnerInstallation, RunnerRegistry, recordRunnerAuth, recordedRunnerAuth, resetRunnerAuth, runnerSignIn, signedOutAuth, type DiscoveredModel, type LaunchDeps, type PlannerBackendId, type RunnerAuth } from '@ordewell/core';
 import { loginPlanner, type PlannerLoginDeps } from '../PlannerLogin';
+import { wrappedCommand } from '../loginTerminal';
+
+/** Every attempt's status dir must be gone once its login has ended. */
+const tempRoots: string[] = [];
+afterEach(() => {
+  for (const dir of tempRoots.splice(0)) {
+    expect(fs.readdirSync(dir)).toEqual([]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 interface FakeTerminal {
   options: { name?: string; cwd?: string; shellPath?: string; shellArgs?: string[] | string; env?: Record<string, string>; isTransient?: boolean };
@@ -26,6 +36,12 @@ interface HarnessOptions {
   timeoutMs?: number;
   /** The login process exits with `code` once this many polls have slept; `undefined` is the user closing it. */
   exitAfter?: { polls: number; code: number | undefined };
+  /**
+   * The real POSIX/Windows wrapper writes `code` to its status file after this
+   * many polls and stays alive (holding its failed output open), so VS Code sets
+   * no exitStatus. The completion signal is then the status file alone.
+   */
+  statusAfter?: { polls: number; code: number };
   /** POSIX unless a case is about Windows, so the terminal options read the same on every host. */
   platform?: NodeJS.Platform;
   /** Where the agent's file is found; by default only the stand-ins in {@link FAKE_BIN}. */
@@ -46,6 +62,9 @@ function harness(options: HarnessOptions = {}) {
   let probe = 0;
   let clock = 0;
   let polls = 0;
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ow-planner-login-'));
+  tempRoots.push(tempRoot);
+  let batchText: string | undefined;
   const closeListeners: Array<(terminal: FakeTerminal) => void> = [];
   const terminal: FakeTerminal = {
     options: {},
@@ -59,10 +78,18 @@ function harness(options: HarnessOptions = {}) {
   };
   const createTerminal = vi.fn((opts: FakeTerminal['options']) => {
     terminal.options = opts;
+    // buildLoginTerminal wrote a Windows wrapper batch into the status dir just
+    // before createTerminal; snapshot it before cleanup removes the dir.
+    for (const dir of fs.readdirSync(tempRoot)) {
+      for (const file of fs.readdirSync(path.join(tempRoot, dir))) {
+        if (file.endsWith('.cmd')) batchText = fs.readFileSync(path.join(tempRoot, dir, file), 'utf8');
+      }
+    }
     return terminal;
   });
   // As VS Code does: the exit status is set, then the close event fires, once
-  // the terminal's own process ends or the user closes it.
+  // the terminal's process ends or the user closes it. (A held-open wrapper
+  // sets neither; those cases drive completion from the status file instead.)
   const exit = (code: number | undefined): void => {
     terminal.exitStatus = { code };
     for (const cb of [...closeListeners]) cb(terminal);
@@ -98,10 +125,16 @@ function harness(options: HarnessOptions = {}) {
         return { dispose: vi.fn() };
       }),
     },
+    loginTempRoot: () => tempRoot,
     // Instant, and a clock that moves with it: no real seconds, no fake timers.
     sleep: async (ms: number) => {
       clock += ms;
       polls += 1;
+      // The real wrapper writes its status file and stays alive: no exitStatus.
+      if (options.statusAfter && polls === options.statusAfter.polls) {
+        const dir = fs.readdirSync(tempRoot).filter((n) => n.startsWith('ordewell-login-'))[0];
+        if (dir) fs.writeFileSync(path.join(tempRoot, dir, 'status'), `${options.statusAfter.code}\n`);
+      }
       if (options.exitAfter && polls === options.exitAfter.polls) exit(options.exitAfter.code);
     },
     now: () => clock,
@@ -116,6 +149,11 @@ function harness(options: HarnessOptions = {}) {
     createTerminal,
     close,
     exit,
+    tempRoot,
+    /** The Windows wrapper batch written for this attempt, if any. */
+    batch: () => batchText,
+    /** The agent command the wrapper will run, read back from the options. */
+    command: () => wrappedCommand(terminal.options),
     /** The last word the webview is told the login ended with. */
     ended: () => vi.mocked(deps.post).mock.calls.map(([msg]) => msg).filter((msg) => msg.type === 'plannerLoginEnded').at(-1),
   };
@@ -133,7 +171,66 @@ describe('loginPlanner', () => {
     expect(JSON.stringify(vi.mocked(h.deps.log!).mock.calls)).not.toMatch(/secret-argument|accounts\/other/);
   });
 
-  it("runs Cursor's login as the terminal's own process and rechecks it when that process exits", async () => {
+  // The wrapper writes the login's real exit code to a status file and, on a
+  // failure, holds the shell (and its output) open. VS Code therefore sets no
+  // exitStatus, so the status file is the only completion signal.
+  it('ends a failed login from its status file while the terminal stays open with its output', async () => {
+    const h = harness({
+      aiProvider: 'cursor-agent',
+      verdict: () => ({ state: 'signed-out', loginCommand: ['cursor-agent', 'login'] }),
+      statusAfter: { polls: 1, code: 3 },
+    });
+
+    await loginPlanner(h.deps);
+
+    const message = 'The Cursor login exited with code 3. Run /login cursor-agent to retry and recheck sign-in.';
+    expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner: 'cursor-agent', ok: false, message });
+    expect(h.deps.notifications.warn).toHaveBeenCalledWith(`Ordewell could not confirm the Cursor login. ${message}`);
+    // No exitStatus: the wrapper is alive, holding the failed output on screen;
+    // the terminal is not disposed, so the scrollback is still accessible.
+    expect(h.terminal.exitStatus).toBeUndefined();
+    expect(h.terminal.disposed).toBe(0);
+    expect(h.deps.log).toHaveBeenCalledWith('Login exit: runner=cursor-agent code=3');
+    // A failed login is no recheck (ADR-0052): its blocker stays.
+    expect(h.deps.runnerInstallation.recheck).not.toHaveBeenCalled();
+    expect(h.deps.sendState).not.toHaveBeenCalled();
+  });
+
+  it('rechecks a successful login read from its status file, without an exitStatus', async () => {
+    let rechecked = false;
+    const h = harness({
+      aiProvider: 'cursor-agent',
+      verdict: () => ({ state: rechecked ? 'signed-in' : 'signed-out', loginCommand: ['cursor-agent', 'login'] }),
+      statusAfter: { polls: 1, code: 0 },
+    });
+    const recheck = vi.fn(async () => { rechecked = true; return { usable: true, auth: { state: 'unknown' as const } }; });
+    Object.assign(h.deps.runnerInstallation, { recheck });
+
+    await loginPlanner(h.deps);
+
+    expect(h.terminal.exitStatus).toBeUndefined();
+    expect(recheck).toHaveBeenCalledWith('cursor-agent');
+    expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner: 'cursor-agent', ok: true });
+  });
+
+  it('makes and removes the wrapper status dir around the attempt', async () => {
+    const h = harness({ exitAfter: { polls: 1, code: 0 } });
+    let during: string[] = [];
+    const sleep = h.deps.sleep!;
+    Object.assign(h.deps, {
+      sleep: async (ms: number) => {
+        during = fs.readdirSync(h.tempRoot);
+        await sleep(ms);
+      },
+    });
+
+    await loginPlanner(h.deps);
+
+    expect(during.some((n) => n.startsWith('ordewell-login-'))).toBe(true);
+    expect(fs.readdirSync(h.tempRoot)).toEqual([]);
+  });
+
+  it("rechecks Cursor's login when the wrapper process itself exits 0", async () => {
     let rechecked = false;
     const h = harness({
       aiProvider: 'cursor-agent',
@@ -148,10 +245,10 @@ describe('loginPlanner', () => {
     expect(h.createTerminal).toHaveBeenCalledWith(expect.objectContaining({
       name: 'Cursor login',
       cwd: '/ws',
-      shellPath: '/fake/bin/cursor-agent',
-      shellArgs: ['login'],
+      shellPath: '/bin/sh',
       isTransient: true,
     }));
+    expect(h.command()).toEqual(['/fake/bin/cursor-agent', 'login']);
     expect(h.terminal.sent).toEqual([]);
     expect(h.terminal.shown).toBe(1);
     expect(recheck).toHaveBeenCalledWith('cursor-agent');
@@ -165,16 +262,16 @@ describe('loginPlanner', () => {
     await loginPlanner(h.deps);
 
     expect(h.deps.runnerInstallation.runnerUsability).toHaveBeenCalledWith('claude-code');
-    expect(h.createTerminal).toHaveBeenCalledWith({
+    expect(h.createTerminal).toHaveBeenCalledWith(expect.objectContaining({
       name: 'Claude Code login',
       cwd: '/ws',
-      shellPath: '/fake/bin/claude',
-      shellArgs: ['auth', 'login'],
+      shellPath: '/bin/sh',
       env: expect.objectContaining({ CLAUDE_CONFIG_DIR: '/accounts/other' }),
       isTransient: true,
-    });
+    }));
+    expect(h.command()).toEqual(['/fake/bin/claude', 'auth', 'login']);
     expect(h.terminal.shown).toBe(1);
-    // The manifest's own argv, run as the process; nothing typed into a shell.
+    // The manifest's own argv, handed to the wrapper as parameters; nothing typed.
     expect(h.terminal.sent).toEqual([]);
     expect(h.deps.runnerInstallation.refresh).toHaveBeenCalled();
     expect(h.deps.sendState).toHaveBeenCalled();
@@ -208,7 +305,7 @@ describe('loginPlanner', () => {
 
   // #62 F3: typed into a login shell, the name was found again after its
   // startup files ran, so an rc file's PATH or alias could start another binary.
-  it('starts the first file on the probe\'s PATH, by its full path, with no shell to find it again', async () => {
+  it('starts the first file on the probe\'s PATH, by its full path, with the wrapper never re-finding the name', async () => {
     const h = harness({
       aiProvider: 'cline',
       verdict: () => ({ state: 'signed-out', loginCommand: ['cline', 'auth'] }),
@@ -221,9 +318,9 @@ describe('loginPlanner', () => {
 
     await loginPlanner(h.deps, 'cline');
 
-    expect(h.terminal.options).toMatchObject({ shellPath: '/Users/me/.local/bin/cline', shellArgs: ['auth'] });
-    // The terminal's own PATH is the one the file was found on, under the
-    // host's spelling of the key (`Path` on Windows).
+    expect(h.command()).toEqual(['/Users/me/.local/bin/cline', 'auth']);
+    expect(h.terminal.options.shellPath).toBe('/bin/sh');
+    // The terminal's own PATH is the one the file was found on, under the host's spelling.
     const pathKey = process.platform === 'win32' ? 'Path' : 'PATH';
     expect(h.terminal.options.env?.[pathKey]).toBe('/opt/homebrew/bin:/Users/me/.local/bin:/usr/local/bin');
     expect(h.terminal.sent).toEqual([]);
@@ -266,7 +363,7 @@ describe('loginPlanner', () => {
     const codexSignedOut = { state: 'signed-out' as const, loginCommand: ['codex', 'login'] };
 
     // Windows PowerShell picks npm's codex.ps1 over codex.cmd and, under the
-    // default Restricted policy, refuses to run it: no shell is in the way now.
+    // default Restricted policy, refuses to run it: the wrapper runs the shim's node target directly.
     it("starts an npm shim's own script with the node beside it, as a spawn does", async () => {
       const h = harness({
         platform: 'win32',
@@ -280,10 +377,12 @@ describe('loginPlanner', () => {
 
       await loginPlanner(h.deps, 'codex');
 
-      expect(h.terminal.options).toMatchObject({
-        shellPath: `${WIN_BIN}\\node.exe`,
-        shellArgs: [`${WIN_BIN}\\node_modules\\@openai\\codex\\bin\\codex.js`, 'login'],
-      });
+      // The Windows wrapper is cmd.exe running a batch that starts the shim's
+      // own resolved target; the command line stays inside the batch, not typed.
+      expect(h.terminal.options.shellPath).toBe(CMD);
+      expect(h.terminal.options.shellArgs as string).toMatch(/^\/d \/s \/c /);
+      expect(h.batch()).toContain(`${WIN_BIN}\\node_modules\\@openai\\codex\\bin\\codex.js`);
+      expect(h.batch()).toContain('login');
       expect(h.terminal.sent).toEqual([]);
       expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner: 'codex', ok: true });
     });
@@ -299,8 +398,10 @@ describe('loginPlanner', () => {
 
       await loginPlanner(h.deps);
 
-      // A string is VS Code's one Windows form for a command line taken verbatim.
-      expect(h.terminal.options).toMatchObject({ shellPath: CMD, shellArgs: `/d /s /c "${WIN_BIN}\\cursor-agent.cmd login"` });
+      // A lone .cmd keeps its verbatim command line, now embedded in the batch.
+      expect(h.terminal.options.shellPath).toBe(CMD);
+      expect(h.terminal.options.shellArgs as string).toMatch(/^\/d \/s \/c /);
+      expect(h.batch()).toContain(`cursor-agent.cmd login`);
     });
 
     it('starts a native executable directly', async () => {
@@ -314,7 +415,11 @@ describe('loginPlanner', () => {
 
       await loginPlanner(h.deps);
 
-      expect(h.terminal.options).toMatchObject({ shellPath: `${WIN_BIN}\\cursor-agent.exe`, shellArgs: ['login'] });
+      // Even a native exe is wrapped, so a failed login's output is retained.
+      expect(h.terminal.options.shellPath).toBe(CMD);
+      expect(h.batch()).toContain(`${WIN_BIN}\\cursor-agent.exe`);
+      expect(h.batch()).toContain('login');
+      expect(h.batch()).toContain('pause');
     });
   });
 
@@ -329,7 +434,8 @@ describe('loginPlanner', () => {
     await loginPlanner(h.deps, 'codex');
 
     expect(h.deps.runnerInstallation.runnerUsability).toHaveBeenCalledWith('codex');
-    expect(h.createTerminal).toHaveBeenCalledWith(expect.objectContaining({ name: 'Codex login', shellPath: '/fake/bin/codex', shellArgs: ['login'] }));
+    expect(h.createTerminal).toHaveBeenCalledWith(expect.objectContaining({ name: 'Codex login', shellPath: '/bin/sh' }));
+    expect(h.command()).toEqual(['/fake/bin/codex', 'login']);
     expect(h.deps.config.aiProvider).toBe('claude-code');
     expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner: 'codex', ok: true });
     expect(h.deps.notifications.info).toHaveBeenCalledWith('Signed in to Codex.');
@@ -342,7 +448,8 @@ describe('loginPlanner', () => {
 
     await loginPlanner(h.deps, 'copilot-cli');
 
-    expect(h.createTerminal).toHaveBeenCalledWith(expect.objectContaining({ name: 'GitHub Copilot CLI login', shellPath: '/fake/bin/copilot', shellArgs: ['login'] }));
+    expect(h.createTerminal).toHaveBeenCalledWith(expect.objectContaining({ name: 'GitHub Copilot CLI login', shellPath: '/bin/sh' }));
+    expect(h.command()).toEqual(['/fake/bin/copilot', 'login']);
     expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner: 'copilot-cli', ok: false, message: 'The terminal closed before sign-in finished.' });
   });
 
@@ -621,7 +728,7 @@ describe('the recheck after a login, on the real installation', () => {
 
     await loginPlanner(h.deps, runner);
 
-    expect(h.terminal.options).toMatchObject({ shellPath: `/fake/bin/${runner}`, shellArgs: runnerSignIn(runner)!.login!.slice(1) });
+    expect(h.command()).toEqual([`/fake/bin/${runner}`, ...runnerSignIn(runner)!.login!.slice(1)]);
     expect(r.acpClient).toHaveBeenCalled();
     expect(recordedRunnerAuth(runner, '/ws')?.state).toBe('signed-in');
     expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner, ok: true });
@@ -665,7 +772,7 @@ describe('the recheck after a login, on the real installation', () => {
 
     await loginPlanner(h.deps, 'cline');
 
-    expect(h.terminal.options).toMatchObject({ shellPath: '/fake/bin/cline', shellArgs: ['auth'] });
+    expect(h.command()).toEqual(['/fake/bin/cline', 'auth']);
     // Refused before any spawn: no ACP reply exists to attribute to Cline.
     expect(r.acpClient).not.toHaveBeenCalled();
     expect(recordedRunnerAuth('cline', '/ws')).toMatchObject({ state: 'signed-out', detail: 'no provider key', signIn: { needsKey: true } });

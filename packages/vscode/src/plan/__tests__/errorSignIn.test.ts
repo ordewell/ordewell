@@ -4,6 +4,7 @@ import type { HostToWebview } from '@ordewell/ui/protocol';
 import { ChatViewProvider } from '../../providers/ChatViewProvider';
 import { reportPlannerError, type PlanManagerDeps } from '../PlanManager';
 import { loginPlanner, type PlannerLoginDeps } from '../PlannerLogin';
+import { wrappedCommand } from '../loginTerminal';
 
 const CURSOR: RunnerSignIn = { runner: 'cursor-agent', label: 'Cursor', login: ['cursor-agent', 'login'] };
 
@@ -66,6 +67,7 @@ describe('the sign-in an error asks for', () => {
     };
     const post = vi.fn();
     const recheck = vi.fn(async () => { rechecked = true; return { usable: true, auth: { state: 'signed-in' as const } }; });
+    let launched: { shellPath?: string; shellArgs?: string[] | string } | undefined;
     const deps = {
       runnerInstallation: {
         runnerUsability: vi.fn(async (runner: string) => {
@@ -83,7 +85,7 @@ describe('the sign-in an error asks for', () => {
       post,
       notifications: { info: vi.fn(), warn: vi.fn() },
       window: {
-        createTerminal: vi.fn(() => terminal),
+        createTerminal: vi.fn((o: { shellPath?: string; shellArgs?: string[] | string }) => { launched = o; return terminal; }),
         onDidCloseTerminal: vi.fn((cb: (t: unknown) => void) => { closeListeners.push(cb); return { dispose: vi.fn() }; }),
       },
       sleep: async () => undefined,
@@ -93,7 +95,8 @@ describe('the sign-in an error asks for', () => {
 
     await loginPlanner(deps, CURSOR.runner);
 
-    expect(deps.window.createTerminal).toHaveBeenCalledWith(expect.objectContaining({ shellPath: '/fake/bin/cursor-agent', shellArgs: ['login'] }));
+    expect(launched?.shellPath).toBe('/bin/sh');
+    expect(wrappedCommand(launched ?? {})).toEqual(['/fake/bin/cursor-agent', 'login']);
     expect(recheck).toHaveBeenCalledWith('cursor-agent');
     expect(post).toHaveBeenLastCalledWith({ type: 'plannerLoginEnded', runner: 'cursor-agent', ok: true });
   });
