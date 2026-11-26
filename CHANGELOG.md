@@ -8,6 +8,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.14.15] - 2026-11-26
+
 ### Fixed
 
 - **OpenCode models keep their thinking-effort choices after a cold start.**
@@ -15,8 +17,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   which carries no variants, and that answer was cached for the daemon's life.
   It is now retried once and never cached, so the efforts reappear on the next
   lookup.
-- Failed VS Code agent logins keep the terminal open so their diagnostic output remains visible, and report the exit code and retry command.
-- Desktop status filters show matching nested tasks, including deep descendants, and reflect the live status of retried tasks.
+- Failed VS Code agent logins keep the terminal open so their diagnostic
+  output remains visible, and report the exit code and retry command.
+- Desktop status filters show matching nested tasks, including deep
+  descendants, and reflect the live status of retried tasks.
 
 ## [0.14.14] - 2026-11-26
 
@@ -5580,7 +5584,8 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.14...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.15...HEAD
+[0.14.15]: https://github.com/ordewell/ordewell/compare/v0.14.14...v0.14.15
 [0.14.14]: https://github.com/ordewell/ordewell/compare/v0.14.13...v0.14.14
 [0.14.13]: https://github.com/ordewell/ordewell/compare/v0.14.12...v0.14.13
 [0.14.12]: https://github.com/ordewell/ordewell/compare/v0.14.11...v0.14.12

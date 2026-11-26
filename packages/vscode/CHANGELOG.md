@@ -2,9 +2,12 @@
 
 ## [Unreleased]
 
+## [0.14.15] - 2026-11-26
+
 ### Fixed
 
-- Failed agent logins keep their terminal open so diagnostic output remains visible, with the exit code and a retry command.
+- Failed agent logins keep their terminal open so diagnostic output remains
+  visible, with the exit code and a retry command.
 
 ## [0.14.14] - 2026-11-26
 
@@ -2003,7 +2006,8 @@ First public release.
 Full project changelog:
 https://github.com/ordewell/ordewell/blob/main/CHANGELOG.md
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.14...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.15...HEAD
+[0.14.15]: https://github.com/ordewell/ordewell/compare/v0.14.14...v0.14.15
 [0.14.14]: https://github.com/ordewell/ordewell/compare/v0.14.13...v0.14.14
 [0.14.13]: https://github.com/ordewell/ordewell/compare/v0.14.12...v0.14.13
 [0.14.12]: https://github.com/ordewell/ordewell/compare/v0.14.11...v0.14.12
