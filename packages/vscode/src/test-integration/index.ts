@@ -177,7 +177,10 @@ async function unwrappedLoginLosesItsFailureOutput(): Promise<void> {
   t.show();
   try {
     await waitFor(() => t.exitStatus !== undefined, 10_000, 'the unwrapped login to exit');
-    await sleepReal(400);
+    // VS Code closes a transient terminal a tick after its process exits; on a
+    // loaded host that can be well past a fixed sleep. Wait for the real close
+    // event, bounded so a host that never closes one fails instead of hanging.
+    await waitFor(() => closed, 10_000, 'the unwrapped terminal close event');
     assert.strictEqual(t.exitStatus?.code, 3, 'the fake login did not exit 3');
     assert.strictEqual(closed, true, 'VS Code did not dispose the terminal on process exit');
     assert.ok(!vscode.window.terminals.includes(t), 'the terminal is still listed — the baseline did not reproduce the disappearance');
