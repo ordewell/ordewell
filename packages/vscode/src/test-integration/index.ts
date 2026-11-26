@@ -366,13 +366,25 @@ async function realAgentReachesAPassVerdict(): Promise<void> {
 }
 
 export async function run(): Promise<void> {
-  const scenarios: Array<[string, () => Promise<void>]> = [
+  // These six proofs drive the POSIX wrapper with fake POSIX shell agents. On a
+  // Windows host loginPlanner would pick the cmd.exe wrapper and /bin/sh does
+  // not exist, so they are POSIX-only; Windows launch/retention is proven by
+  // loginTerminal.test.ts (npm shim, .cmd, .ps1, native exe) instead. The
+  // remaining scenarios below run on every platform, as they always did.
+  const posixWrapperProofs: Array<[string, () => Promise<void>]> = process.platform === 'win32' ? [] : [
     ['reproduce the exit-3 terminal disappearance (baseline, no wrapper)', unwrappedLoginLosesItsFailureOutput],
     ['a failed login keeps its output and ends the spinner (status-file exit 3)', wrappedFailureKeepsOutputAndEndsTheSpinner],
     ['a successful login is rechecked (status-file exit 0)', wrappedSuccessRechecks],
     ['an interactive login keeps its TTY and stdin', interactiveLoginKeepsItsTty],
     ['closing the terminal mid-login ends as a failure', closeDuringLoginEndsAsFailure],
     ['a login left waiting times out and is disposed', timeoutEndsTheLogin],
+  ];
+  if (process.platform === 'win32') {
+    console.log('  – skipped 6 POSIX wrapper native scenarios (Windows retention is unit-tested)');
+  }
+
+  const scenarios: Array<[string, () => Promise<void>]> = [
+    ...posixWrapperProofs,
     ['a fake claude on PATH completes through task_complete', fakeClaudeCompletesThroughTheTool],
     ['the notify command is read from the user setting alone', notifyCommandIsTheUsersAlone],
     ['a real agent reaches a pass verdict', realAgentReachesAPassVerdict],
