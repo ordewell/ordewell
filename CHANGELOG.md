@@ -10,6 +10,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
+- **OpenCode models keep their thinking-effort choices after a cold start.**
+  A model list that failed or was killed could fall back to the plain listing,
+  which carries no variants, and that answer was cached for the daemon's life.
+  It is now retried once and never cached, so the efforts reappear on the next
+  lookup.
 - Failed VS Code agent logins keep the terminal open so their diagnostic output remains visible, and report the exit code and retry command.
 - Desktop status filters show matching nested tasks, including deep descendants, and reflect the live status of retried tasks.
 

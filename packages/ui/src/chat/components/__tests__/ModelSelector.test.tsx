@@ -352,6 +352,31 @@ describe('ModelSelector thinking variants', () => {
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
   });
 
+  it('offers an OpenCode model\'s discovered efforts, and none for a model that takes no effort', () => {
+    const opencode = [
+      withVariants('opencode-go/deepseek-v4.1-flash', 'DeepSeek V4.1 Flash 1017', ['low', 'high', 'max']),
+      model('opencode-go/mimo-v2.6-pro', 'MiMo-V2.6-Pro', 'opencode-go'),
+    ];
+    const { rerender } = render(
+      <ModelSelector
+        models={opencode}
+        currentModel={{ modelId: 'opencode-go/deepseek-v4.1-flash', modelLabel: 'DeepSeek V4.1 Flash 1017' }}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('combobox')).toHaveValue('');
+    expect(within(screen.getByRole('combobox')).getAllByRole('option').map((option) => option.getAttribute('value'))).toEqual(['', 'low', 'high', 'max']);
+
+    rerender(
+      <ModelSelector
+        models={opencode}
+        currentModel={{ modelId: 'opencode-go/mimo-v2.6-pro', modelLabel: 'MiMo-V2.6-Pro' }}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+  });
+
   // One rule with core's (clampThinkingEffort): it was kept only on an exact match here.
   it('carries an effort the new model lacks to the nearest level it has when switching models', () => {
     const onChange = vi.fn();

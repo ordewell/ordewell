@@ -378,41 +378,53 @@ function wasKilled(err: unknown): boolean {
   return !!err && typeof err === 'object' && (err as { killed?: unknown }).killed === true;
 }
 
-async function discoverFromCommand(manifest: RunnerManifest, execImpl: ExecImpl, env: RunnerEnv): Promise<{ models: DiscoveredModel[]; fromFallback: boolean }> {
+async function discoverFromCommand(manifest: RunnerManifest, execImpl: ExecImpl, env: RunnerEnv): Promise<{ models: DiscoveredModel[]; fromFallback: boolean; degraded: boolean }> {
   const discovery = manifest.modelDiscovery;
   const commands: DiscoveryCommand[] = discovery.discoveryCommands ?? [
     { command: discovery.command!, args: discovery.args || [], parser: discovery.parser },
   ];
 
-  const runCommands = async (): Promise<{ models: DiscoveredModel[] | null; timedOut: boolean }> => {
+  const runCommands = async (): Promise<{ models: DiscoveredModel[] | null; timedOut: boolean; degraded: boolean }> => {
     let timedOut = false;
-    for (const cmd of commands) {
+    // An answer from a later command after one failed or named no models is
+    // degraded: the manifest lists its richest source first, and OpenCode's
+    // plain `models` carries no variants. Accepting and caching it would keep
+    // every model's effort off. The first command's failure is expected — that
+    // is how a v2 CLI declines the v1 flag — so a later one marks the answer.
+    let degraded = false;
+    for (const [index, cmd] of commands.entries()) {
       try {
         // Generous timeout: a cold runner CLI may spawn its server, install
         // extensions, and fetch its catalog on first invocation after boot.
         const { stdout } = await execImpl(`${cmd.command} ${cmd.args.join(' ')}`, { timeout: 45000, env });
         const models = parseModelOutput(stdout, cmd.parser, manifest);
-        if (models.length > 0) return { models: applyVariants(mergeCanonicalAliases(models, manifest), manifest), timedOut };
+        if (models.length > 0) return { models: applyVariants(mergeCanonicalAliases(models, manifest), manifest), timedOut, degraded };
+        if (index > 0) degraded = true;
       } catch (err) {
         // A killed command is the cold-start shape a warm retry can recover;
-        // anything else is an answer, not a warm-up.
+        // anything else failed before a later command answered.
         if (wasKilled(err)) timedOut = true;
+        if (index > 0 || wasKilled(err)) degraded = true;
       }
     }
-    return { models: null, timedOut };
+    return { models: null, timedOut, degraded };
   };
 
-  // First pass. Retry once only when a command was killed by its timeout — the
-  // CLI was cold and the server is warm by the second pass. A command that
-  // exited non-zero said something real, and repeating it only doubles the wait.
-  const first = await runCommands();
-  if (first.models) return { models: first.models, fromFallback: false };
-  if (first.timedOut) {
+  // Retry a degraded first pass at once: the command that failed was cold and
+  // is warm by the second pass. Accepting the plain list would silently drop
+  // every model's variants — and, cached, keep them off for the daemon's life.
+  let result = await runCommands();
+  if (result.models && result.degraded) {
+    const retried = await runCommands();
+    if (retried.models) result = retried;
+  }
+  if (result.models) return { models: result.models, fromFallback: false, degraded: result.degraded };
+  if (result.timedOut) {
     const second = await runCommands();
-    if (second.models) return { models: second.models, fromFallback: false };
+    if (second.models) return { models: second.models, fromFallback: false, degraded: second.degraded };
   }
 
-  return { models: applyVariants(buildFallbackModels(manifest), manifest), fromFallback: true };
+  return { models: applyVariants(buildFallbackModels(manifest), manifest), fromFallback: true, degraded: result.degraded };
 }
 
 /**
@@ -703,10 +715,11 @@ export class ModelDiscovery {
     // 2. Command-based discovery (CLI subcommand or --help parsing).
     if ((discovery.method === 'command' || discovery.method === 'acp') && (discovery.command || discovery.discoveryCommands?.length)) {
       const result = await discoverFromCommand(manifest, this.execImpl, env);
-      // A fallback-only result means the CLI wasn't reachable — don't cache
-      // it, so a transient failure (PATH, network, cold start) heals on the
-      // next lookup instead of persisting until an explicit refresh.
-      return { models: result.models, cacheable: cacheable && !result.fromFallback, acp };
+      // A fallback-only or degraded result means the CLI (or its richer
+      // catalog command) wasn't reachable — don't cache it, so a transient
+      // failure (PATH, network, cold start) heals on the next lookup instead
+      // of persisting until an explicit refresh.
+      return { models: result.models, cacheable: cacheable && !result.fromFallback && !result.degraded, acp };
     }
     return { models: buildFallbackModels(manifest), cacheable, acp };
   }

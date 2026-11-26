@@ -577,6 +577,131 @@ describe('ModelDiscovery — OpenCode', () => {
     expect(models.every((m) => m.runnerProvider === 'openrouter')).toBe(true);
   });
 
+  it('retries the variant-bearing catalog after a cold failure instead of taking the variant-less list', async () => {
+    // Real `opencode api model.list` v2.4.1 shape, trimmed to one model.
+    const api = JSON.stringify({
+      location: { directory: '/Users/someone' },
+      data: [{
+        modelID: 'deepseek-v4.1-flash',
+        providerID: 'opencode-go',
+        type: 'chat',
+        name: 'DeepSeek V4.1 Flash 1017',
+        enabled: true,
+        variants: [
+          { id: 'low', settings: { reasoningEffort: 'low' } },
+          { id: 'high', settings: { reasoningEffort: 'high' } },
+          { id: 'max', settings: { reasoningEffort: 'max' } },
+        ],
+        limit: { context: 1000000, output: 384000 },
+      }],
+    });
+    let apiCalls = 0;
+    const exec: ExecImpl = vi.fn(async (cmd: string) => {
+      if (cmd.includes('models --verbose')) throw new Error('Unrecognized flag: --verbose');
+      if (cmd.includes('api model.list')) {
+        apiCalls++;
+        // Cold OpenCode server: the catalog command is killed by its timeout,
+        // while the plain listing answers from the warm server.
+        if (apiCalls === 1) throw Object.assign(new Error('ETIMEDOUT'), { killed: true });
+        return { stdout: api };
+      }
+      return { stdout: 'opencode-go/deepseek-v4.1-flash\n' };
+    });
+
+    const models = await new ModelDiscovery(registryWith(OPENCODE_MANIFEST), exec).discover('opencode');
+
+    const model = models.find((m) => m.modelId === 'opencode-go/deepseek-v4.1-flash');
+    expect(model?.variants.map((v) => v.id)).toEqual(['low', 'high', 'max']);
+  });
+
+  it('reads the per-model variants of opencode v2.4.1\'s `api model.list` answer', async () => {
+    // Trimmed from the real CLI on this machine (2026-11-26): `variants` is an
+    // array of { id, settings }, and a model that accepts no effort has [].
+    const api = JSON.stringify({
+      location: { directory: '/Users/someone' },
+      data: [
+        {
+          modelID: 'deepseek-v4.1-flash', providerID: 'opencode-go', type: 'chat',
+          name: 'DeepSeek V4.1 Flash 1017', enabled: true,
+          variants: [
+            { id: 'low', settings: { reasoningEffort: 'low' } },
+            { id: 'high', settings: { reasoningEffort: 'high' } },
+            { id: 'max', settings: { reasoningEffort: 'max' } },
+          ],
+          limit: { context: 1000000, output: 384000 },
+        },
+        {
+          modelID: 'gpt-6-luna', providerID: 'opencode-go', type: 'chat',
+          name: 'GPT-6 Luna', enabled: true,
+          variants: [
+            { id: 'none', settings: { reasoningEffort: 'none' } },
+            { id: 'low', settings: { reasoningEffort: 'low' } },
+            { id: 'medium', settings: { reasoningEffort: 'medium' } },
+            { id: 'high', settings: { reasoningEffort: 'high' } },
+            { id: 'xhigh', settings: { reasoningEffort: 'xhigh' } },
+            { id: 'max', settings: { reasoningEffort: 'max' } },
+          ],
+          limit: { context: 1050000, output: 128000 },
+        },
+        {
+          modelID: 'mimo-v2.6-pro', providerID: 'opencode-go', type: 'chat',
+          name: 'MiMo-V2.6-Pro', enabled: true, variants: [],
+          limit: { context: 1048576, output: 131072 },
+        },
+      ],
+    });
+    const exec: ExecImpl = vi.fn(async (cmd: string) => {
+      if (cmd.includes('models --verbose')) throw new Error('Unrecognized flag: --verbose');
+      if (cmd.includes('api model.list')) return { stdout: api };
+      throw new Error('plain listing should not be reached');
+    });
+
+    const models = await new ModelDiscovery(registryWith(OPENCODE_MANIFEST), exec).discover('opencode');
+    const byId = new Map(models.map((m) => [m.modelId, m]));
+
+    expect(byId.get('opencode-go/deepseek-v4.1-flash')!.variants.map((v) => v.id)).toEqual(['low', 'high', 'max']);
+    expect(byId.get('opencode-go/gpt-6-luna')!.variants.map((v) => v.id)).toEqual(['none', 'low', 'medium', 'high', 'xhigh', 'max']);
+    // No variants is still no variants: nothing is invented for a model that takes no effort.
+    expect(byId.get('opencode-go/mimo-v2.6-pro')!.variants).toEqual([]);
+  });
+
+  it('does not cache a variant-less answer degraded by a failed catalog command', async () => {
+    const api = JSON.stringify({
+      data: [{
+        modelID: 'deepseek-v4.1-flash',
+        providerID: 'opencode-go',
+        name: 'DeepSeek V4.1 Flash 1017',
+        enabled: true,
+        variants: [{ id: 'low', settings: {} }, { id: 'high', settings: {} }],
+      }],
+    });
+    let apiHealthy = false;
+    const exec: ExecImpl = vi.fn(async (cmd: string) => {
+      if (cmd.includes('models --verbose')) throw new Error('Unrecognized flag: --verbose');
+      if (cmd.includes('api model.list')) {
+        // A server that exits non-zero (not a timeout) is answered by the plain
+        // listing too, and must not become the daemon's permanent catalog.
+        if (!apiHealthy) throw Object.assign(new Error('Server process exited with code 1'), { code: 1 });
+        return { stdout: api };
+      }
+      return { stdout: 'opencode-go/deepseek-v4.1-flash\n' };
+    });
+    let clock = 0;
+    const discovery = new ModelDiscovery(registryWith(OPENCODE_MANIFEST), exec, undefined, undefined, undefined, () => clock);
+
+    const first = await discovery.discover('opencode');
+    expect(first.find((m) => m.modelId === 'opencode-go/deepseek-v4.1-flash')!.variants).toEqual([]);
+
+    // Before the degraded answer's short negative TTL, re-reading it is fine.
+    clock += 30_000;
+    // But it must not be the daemon's catalog for good: once the CLI answers,
+    // the next lookup recovers the variants instead of serving the plain list.
+    apiHealthy = true;
+    clock += 31_000;
+    const later = await discovery.discover('opencode');
+    expect(later.find((m) => m.modelId === 'opencode-go/deepseek-v4.1-flash')!.variants.map((v) => v.id)).toEqual(['low', 'high']);
+  });
+
   it('parses verbose output and extracts per-model variants', async () => {
     const verboseOutput = [
       'opencode/claude-sonnet-4-6',
@@ -848,7 +973,7 @@ describe('ModelDiscovery — OpenCode', () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const exec: ExecImpl = vi.fn(async (cmd: string) => {
-      if (cmd.includes('--verbose') || cmd.includes('api')) throw new Error('not v1 or v2 api');
+      if (!cmd.includes('models --verbose')) throw new Error('not the v1 catalog');
       await gate;
       return { stdout: 'opencode/gpt-5.1\n' };
     });
@@ -860,8 +985,8 @@ describe('ModelDiscovery — OpenCode', () => {
     expect((await a).map((m) => m.modelId)).toEqual(['opencode/gpt-5.1']);
     expect((await b).map((m) => m.modelId)).toEqual(['opencode/gpt-5.1']);
 
-    // 3 commands, once — not once per lookup.
-    expect(exec).toHaveBeenCalledTimes(3);
+    // One command, once — not once per lookup.
+    expect(exec).toHaveBeenCalledTimes(1);
   });
 
   it('does not join a discovery that began before clear()', async () => {
@@ -869,7 +994,7 @@ describe('ModelDiscovery — OpenCode', () => {
     const gate = new Promise<void>((resolve) => { release = resolve; });
     let call = 0;
     const exec: ExecImpl = vi.fn(async (cmd: string) => {
-      if (cmd.includes('--verbose') || cmd.includes('api')) throw new Error('nope');
+      if (!cmd.includes('models --verbose')) throw new Error('nope');
       if (call++ === 0) { await gate; return { stdout: 'opencode/stale\n' }; }
       return { stdout: 'opencode/fresh\n' };
     });
@@ -889,7 +1014,7 @@ describe('ModelDiscovery — OpenCode', () => {
     const gate = new Promise<void>((resolve) => { release = resolve; });
     let call = 0;
     const exec: ExecImpl = vi.fn(async (cmd: string) => {
-      if (cmd.includes('--verbose') || cmd.includes('api')) throw new Error('nope');
+      if (!cmd.includes('models --verbose')) throw new Error('nope');
       if (call++ === 0) { await gate; return { stdout: 'opencode/stale\n' }; }
       return { stdout: 'opencode/fresh\n' };
     });
