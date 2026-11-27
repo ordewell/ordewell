@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.14.16] - 2026-11-27
+
+### Fixed
+
+- Withdrawn approval requests settle promptly without recording a denial, and timed-out approvals are labelled separately.
+- Model discovery probes are cancelled when the extension deactivates.
+
 ## [0.14.15] - 2026-11-26
 
 ### Fixed
@@ -2006,7 +2013,8 @@ First public release.
 Full project changelog:
 https://github.com/ordewell/ordewell/blob/main/CHANGELOG.md
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.15...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.16...HEAD
+[0.14.16]: https://github.com/ordewell/ordewell/compare/v0.14.15...v0.14.16
 [0.14.15]: https://github.com/ordewell/ordewell/compare/v0.14.14...v0.14.15
 [0.14.14]: https://github.com/ordewell/ordewell/compare/v0.14.13...v0.14.14
 [0.14.13]: https://github.com/ordewell/ordewell/compare/v0.14.12...v0.14.13

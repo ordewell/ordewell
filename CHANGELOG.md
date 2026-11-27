@@ -8,6 +8,14 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.14.16] - 2026-11-27
+
+### Fixed
+
+- The terminal welcome screen reports blocked runner readiness consistently with the runner picker.
+- Withdrawn approval requests settle promptly without recording a denial, and timed-out approvals are labelled separately.
+- Model discovery probes are cancelled when their owner is disposed, including when VS Code deactivates.
+
 ## [0.14.15] - 2026-11-26
 
 ### Fixed
@@ -5584,7 +5592,8 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.15...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.16...HEAD
+[0.14.16]: https://github.com/ordewell/ordewell/compare/v0.14.15...v0.14.16
 [0.14.15]: https://github.com/ordewell/ordewell/compare/v0.14.14...v0.14.15
 [0.14.14]: https://github.com/ordewell/ordewell/compare/v0.14.13...v0.14.14
 [0.14.13]: https://github.com/ordewell/ordewell/compare/v0.14.12...v0.14.13
