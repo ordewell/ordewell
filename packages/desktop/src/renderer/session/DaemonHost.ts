@@ -287,6 +287,8 @@ export class DaemonHost {
    */
   private readonly turns = new Map<string, number>();
   private catalogRead = false;
+  /** Set while a failed skills read waits for the daemon to be back. */
+  private skillsRetry: (() => void) | null = null;
   private readonly agents: AgentDetection;
   /** What each chat instance keeps across a remount, by the place it is drawn in. */
   private readonly savedStates = new Map<string, unknown>();
@@ -404,6 +406,8 @@ export class DaemonHost {
    * to attach by hand. A read that fails leaves the menu as it was.
    */
   private async sendSkills(): Promise<void> {
+    this.skillsRetry?.();
+    this.skillsRetry = null;
     try {
       const { skills } = await callDaemon('skills.list', { workspace: this.workspace });
       this.emit({
@@ -415,7 +419,13 @@ export class DaemonHost {
         skills: skills.filter((s) => s.appliesTo === 'task').map((s) => ({ name: s.name, description: s.description })),
       });
     } catch {
-      // The built-in commands still list; the next catalog read asks again.
+      // The built-in commands still list. The first read is made at the chat's
+      // ready, which can come before the daemon this app starts is up (a slow
+      // start on Windows): once main says it is connected, it is asked again,
+      // as a failed agent detection is.
+      this.skillsRetry = window.ordewell.daemon.onStatus((status) => {
+        if (status.state === 'connected') void this.sendSkills();
+      });
     }
   }
 

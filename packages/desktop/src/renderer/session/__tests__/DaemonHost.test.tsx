@@ -894,6 +894,34 @@ describe('DaemonHost sign-in, keys and planner controls', () => {
     });
   });
 
+  it('asks for the skills again once the daemon is connected, when it was not up yet at ready', async () => {
+    let up = false;
+    const daemon = fakeDaemon({
+      'runners.list': ok({ runners: [], orchestratorModel: '' }),
+      'models.list': MODELS,
+      'settings.get': ok(SETTINGS),
+      'skills.list': () => (up
+        ? ok({ skills: [{ name: 'release-notes', description: 'Draft release notes', appliesTo: 'planner', userInvocable: true }] })
+        : { ok: false, status: 0, error: 'The daemon is not running.' }),
+    });
+    const host = hostWithOptions({});
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+    expect(seen.filter((m) => m.type === 'setSkills')).toEqual([]);
+
+    up = true;
+    act(() => daemon.setStatus({ state: 'reconnecting', port: 3700, attempt: 1, canStart: false }));
+    expect(daemon.calls('skills.list')).toHaveLength(1);
+    act(() => daemon.setStatus(daemon.connected));
+
+    await vi.waitFor(() => expect(seen.filter((m) => m.type === 'setSkills').at(-1)).toEqual({
+      type: 'setSkills', skills: [{ name: 'release-notes', description: 'Draft release notes', appliesTo: 'planner' }],
+    }));
+    // A read that answered waits on nothing: a later reconnection asks no more.
+    await act(async () => { daemon.setStatus(daemon.connected); await Promise.resolve(); });
+    expect(daemon.calls('skills.list')).toHaveLength(2);
+  });
+
   it('names the coding agent behind a harness planner, so the chat lists that agent\'s models', async () => {
     const model = { modelId: 'sonnet', modelLabel: 'Sonnet', variants: [{ id: 'high', label: 'High' }] };
     fakeDaemon({
