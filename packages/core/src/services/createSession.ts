@@ -429,9 +429,9 @@ export function createSession(deps: SessionDeps): Session {
         turnId: conversation?.currentTurnId,
       });
     },
-    onSettled: (id, granted, { request }) => {
+    onSettled: (id, granted, { request, reason }) => {
       if (isRunnerApproval(request)) events.status(session.planState);
-      else events.approvalSettled(id, granted);
+      else events.approvalSettled(id, granted, reason);
     },
   });
   const runnerApprovals = new RunnerApprovals(approvals);

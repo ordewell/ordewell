@@ -53,6 +53,8 @@ export function approvalStatusText(block: Pick<ApprovalBlock, 'status' | 'decide
       return policy ? `Auto-approved (${policy})` : block.forTask ? 'Approved for this task' : 'Approved';
     case 'denied':
       return policy ? `Auto-denied (${policy})` : 'Denied';
+    case 'timed_out':
+      return 'Timed out';
     case 'withdrawn':
       return 'Withdrawn';
   }

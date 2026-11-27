@@ -8,6 +8,8 @@ import { PlannerShellSandbox } from '../sandbox/plannerSandbox';
 import { fakeConfig } from '../../testing';
 import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import type { SessionMessage } from '../SessionMessage';
+import { EMPTY_CONVERSATION, reduceConversation } from '../../conversation/reduce';
+import { approvalStatusText } from '../../conversation/labels';
 import type { ConversationRequest } from '../AiService';
 import type { GrepOptions, ReadFileOpts, ToolOutcome } from '../../interfaces/IFileSystem';
 import type { WebRead, WebReadDecision } from '../webReadPolicy';
@@ -451,14 +453,14 @@ describe('Session approval flow', () => {
       return { session, fsAdapter, messages, parked };
     }
 
-    it('denies it as the turn ends, closes its card on every surface, and ignores a late answer', async () => {
+    it('withdraws it as the turn ends, closes its card on every surface, and ignores a late answer', async () => {
       const { session, fsAdapter, messages, parked } = sessionEndingMidApproval();
 
       await session.startPlanning('goal', ['claude-code']);
 
       const { id } = approvalRequests(messages)[0];
       expect(session.outstandingApprovals()).toEqual([]);
-      expect(messages).toContainEqual({ type: 'approval_settled', id, granted: false });
+      expect(messages).toContainEqual({ type: 'approval_settled', id, granted: false, reason: 'cancelled' });
       expect((await parked.outcome)?.output).toContain('not approved');
       expect(session.resolveApproval(id, true)).toBe(false);
       expect(fsAdapter.bashCalls).toEqual([]);
@@ -474,6 +476,9 @@ describe('Session approval flow', () => {
 
       expect((await outcome).output).toContain('not approved');
       expect(session.outstandingApprovals()).toEqual([]);
+      expect(messages).toContainEqual({ type: 'approval_settled', id: approvalRequests(messages)[0].id, granted: false, reason: 'cancelled' });
+      const card = messages.reduce(reduceConversation, EMPTY_CONVERSATION).blocks.find((block) => block.type === 'approval');
+      expect(card?.type === 'approval' && approvalStatusText(card)).toBe('Withdrawn');
     });
 
     it('leaves a running task\'s request open: the runner still waits on it', async () => {

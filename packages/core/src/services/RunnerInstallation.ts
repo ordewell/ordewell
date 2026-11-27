@@ -1,5 +1,4 @@
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import { discoveryExec } from './discoveryExec';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import { inProcessProvider, runnerCommand, type RunnerManifest } from '../plugins/types';
 import type { AiProvider } from '../interfaces/IConfig';
@@ -12,7 +11,6 @@ import { forgetRunnerAuth, readRunnerAuth, recordedRunnerAuth, recordRunnerAuth,
 import { VENDORS, vendorConfiguredIn } from './apiProviders';
 import { withHostCredentials } from './hostCredentials';
 
-const execAsync = promisify(exec);
 
 // Installation checks must find `claude`/`opencode` wherever the user installed
 // them, even under the minimal PATH a GUI-launched host inherits — same
@@ -20,7 +18,7 @@ const execAsync = promisify(exec);
 // as ModelDiscovery's. Exported for its test.
 export const defaultExec: ExecImpl = async (command, options) => {
   const PATH = await augmentedPath();
-  const { stdout } = await execAsync(command, { ...options, env: withPath(process.env, PATH), windowsHide: true });
+  const { stdout } = await discoveryExec(command, { ...options, env: withPath(process.env, PATH) });
   return { stdout: String(stdout) };
 };
 
@@ -105,6 +103,8 @@ export class RunnerInstallation {
   /** When {@link recheck} last asked about each workspace's runner, so a probe begun before it is not cached after it. */
   private rechecked: Map<string, number> = new Map();
   private registry: RunnerRegistry;
+  private readonly abort = new AbortController();
+  dispose(): void { this.abort.abort(); }
   private execImpl: ExecImpl;
   private now: () => number;
   private env: (workspace?: string) => Promise<Record<string, string>>;
@@ -132,6 +132,7 @@ export class RunnerInstallation {
    * an in-process runner, whether its provider is configured.
    */
   async isInstalled(runner: string): Promise<boolean> {
+    if (this.abort.signal.aborted) return false;
     const manifest = this.registry.getManifest(runner);
     // An in-process runner is code Ordewell ships: there is no binary to ask,
     // and it is installed exactly where its provider is configured (ADR-0070),
@@ -155,7 +156,7 @@ export class RunnerInstallation {
 
     const probe = (async () => {
       try {
-        const { stdout } = await this.execImpl(`${command} --version`, { timeout: CHECK_TIMEOUT_MS });
+        const { stdout } = await this.execImpl(`${command} --version`, { timeout: CHECK_TIMEOUT_MS, signal: this.abort.signal });
         return { installed: true, version: parseCliVersion(String(stdout ?? '')) };
       } catch {
         return { installed: false, version: undefined };

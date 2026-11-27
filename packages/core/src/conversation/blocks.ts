@@ -143,7 +143,7 @@ export interface SubagentBlock {
 }
 
 /** `withdrawn`: a runner's request that went unanswered — the runner cancelled it, or its process ended. */
-export type ApprovalStatus = 'pending' | 'granted' | 'denied' | 'withdrawn';
+export type ApprovalStatus = 'pending' | 'granted' | 'denied' | 'withdrawn' | 'timed_out';
 
 export interface ApprovalBlock {
   type: 'approval';

@@ -40,6 +40,7 @@ interface SharedCatalogs {
   vendor: VendorCatalog;
   root: ModelResolver;
   views: Map<string, ModelResolver>;
+  disposed: boolean;
 }
 
 export class ModelResolver {
@@ -58,7 +59,12 @@ export class ModelResolver {
     this.fetchImpl = deps.fetchImpl;
     this.execImpl = deps.execImpl;
     this.acpClient = deps.acpClient;
-    this.shared = { vendor: { options: null, load: null, errors: {}, generation: 0 }, root: this, views: new Map() };
+    this.shared = { vendor: { options: null, load: null, errors: {}, generation: 0 }, root: this, views: new Map(), disposed: false };
+  }
+
+  dispose(): void {
+    this.shared.disposed = true;
+    for (const catalog of this.runnerCatalogs()) catalog.dispose();
   }
 
   private get vendor(): VendorCatalog {
@@ -78,6 +84,7 @@ export class ModelResolver {
     if (!view) {
       view = new ModelResolver(this.registry, this.config, { fetchImpl: this.fetchImpl, execImpl: this.execImpl, acpClient: this.acpClient, env, workspace });
       view.shared = this.shared;
+      if (this.shared.disposed) view.discovery.dispose();
       this.shared.views.set(key, view);
     }
     return view;

@@ -54,18 +54,26 @@ function last(): (typeof calls)[number] {
 
 describe('the agent probes spawn with no console window', () => {
   it('model discovery', async () => {
-    expect(await discoveryExec('opencode models', { timeout: 1000 })).toEqual({ stdout: 'v1.2.3\n' });
-    const call = last();
-    expect(call).toMatchObject({ fn: 'exec', command: 'opencode models' });
-    expect(call.options).toMatchObject({ timeout: 1000, maxBuffer: 32 * 1024 * 1024, windowsHide: true });
-    expect(call.options.env).toBeDefined();
+    const platform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    try {
+      expect(await discoveryExec('opencode models', { timeout: 1000 })).toEqual({ stdout: 'v1.2.3\n' });
+      const call = last();
+      expect(call).toMatchObject({ fn: 'exec', command: 'opencode models' });
+      expect(call.options).toMatchObject({ timeout: 1000, maxBuffer: 32 * 1024 * 1024, windowsHide: true });
+      expect(call.options.env).toBeDefined();
+    } finally { Object.defineProperty(process, 'platform', { value: platform }); }
   });
 
   it('the installation check', async () => {
-    expect(await installationExec('claude --version', { timeout: 8000 })).toEqual({ stdout: 'v1.2.3\n' });
-    const call = last();
-    expect(call).toMatchObject({ fn: 'exec', command: 'claude --version' });
-    expect(call.options).toMatchObject({ timeout: 8000, windowsHide: true });
+    const platform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    try {
+      expect(await installationExec('claude --version', { timeout: 8000 })).toEqual({ stdout: 'v1.2.3\n' });
+      const call = last();
+      expect(call).toMatchObject({ fn: 'exec', command: 'claude --version' });
+      expect(call.options).toMatchObject({ timeout: 8000, windowsHide: true });
+    } finally { Object.defineProperty(process, 'platform', { value: platform }); }
   });
 
   it('the sign-in check', async () => {

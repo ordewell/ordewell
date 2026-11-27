@@ -879,6 +879,24 @@ describe('ModelDiscovery — OpenCode', () => {
     expect(models.map((m) => m.modelId).sort()).toEqual(['opencode-go/deepseek-v4-pro', 'opencode/gpt-5.1']);
   });
 
+  it('does not start another command or retry after disposal', async () => {
+    let release!: () => void;
+    let started!: () => void;
+    const running = new Promise<void>(resolve => { started = resolve; });
+    const exec: ExecImpl = vi.fn(async () => {
+      started();
+      await new Promise<void>(resolve => { release = resolve; });
+      throw Object.assign(new Error('timeout'), { killed: true });
+    });
+    const discovery = new ModelDiscovery(registryWith(OPENCODE_MANIFEST), exec);
+    const result = discovery.discover('opencode');
+    await running;
+    discovery.dispose();
+    release();
+    await result;
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
   it('does not retry a command that exited non-zero — the error is an answer', async () => {
     // A missing binary, a rejected flag or a busy port cannot heal on a retry.
     // Repeating the command only doubles the wait (a failing `opencode models`

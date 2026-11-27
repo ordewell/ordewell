@@ -56,6 +56,36 @@ describe('ApprovalPolicy', () => {
       expect(pending.outstanding()).toHaveLength(1);
     });
 
+    it('does not report a cancelled waiter as a human denial', async () => {
+      const onDecision = vi.fn();
+      const pending = new PendingApprovals();
+      const policy = new ApprovalPolicy({ ask: (r, signal) => pending.ask(r, { signal }), onDecision });
+      const controller = new AbortController();
+      const cancelled = policy.request(req(), { signal: controller.signal });
+      const remaining = policy.request(req());
+      controller.abort();
+      expect(await cancelled).toBe(false);
+      expect(onDecision).not.toHaveBeenCalled();
+      pending.resolve(pending.outstanding()[0].id, true);
+      expect(await remaining).toBe(true);
+      expect(onDecision).toHaveBeenCalledTimes(1);
+      expect(onDecision).toHaveBeenCalledWith(req(), true, 'asked');
+    });
+
+    it('does not report a cancelled per-invocation request as a human denial', async () => {
+      const onDecision = vi.fn();
+      const pending = new PendingApprovals();
+      const policy = new ApprovalPolicy({ ask: (r, signal) => pending.ask(r, { signal }), onDecision });
+      const controller = new AbortController();
+      const request = req({ subject: 'curl --netrc https://example.com', perInvocation: true });
+      const answer = policy.request(request, { signal: controller.signal });
+      expect(pending.outstanding()).toHaveLength(1);
+      controller.abort();
+      expect(await answer).toBe(false);
+      expect(pending.outstanding()).toEqual([]);
+      expect(onDecision).not.toHaveBeenCalled();
+    });
+
     it('keeps a shared ask open until every request waiting on it is withdrawn', async () => {
       const { pending, policy } = viaPending();
       const first = new AbortController();
@@ -72,6 +102,18 @@ describe('ApprovalPolicy', () => {
       expect(pending.outstanding()).toEqual([]);
     });
 
+    it('starts a fresh prompt when a new waiter arrives immediately after withdrawal', async () => {
+      const { pending, policy } = viaPending();
+      const controller = new AbortController();
+      const first = policy.request(req(), { signal: controller.signal });
+      controller.abort();
+      const second = policy.request(req());
+      expect(pending.outstanding()).toHaveLength(1);
+      pending.resolve(pending.outstanding()[0].id, true);
+      expect(await Promise.all([first, second])).toEqual([false, true]);
+      expect(policy.peek(req()).decision).toBe('allow');
+    });
+
     it('is not withdrawn by a waiter that never asked to leave', async () => {
       const { pending, policy } = viaPending();
       const leaving = new AbortController();
@@ -80,9 +122,10 @@ describe('ApprovalPolicy', () => {
 
       leaving.abort();
       expect(pending.outstanding()).toHaveLength(1);
+      expect(await one).toBe(false);
       pending.resolve(pending.outstanding()[0].id, true);
 
-      expect(await Promise.all([one, two])).toEqual([true, true]);
+      expect(await two).toBe(true);
     });
   });
 
@@ -429,18 +472,32 @@ describe('PendingApprovals decisions (ADR-0018, A1)', () => {
   it('waits for a runner\'s answer with no timeout, while the planner\'s still expires', async () => {
     vi.useFakeTimers();
     try {
-      const pending = new PendingApprovals({ timeoutMs: 1000 });
+      const settled = vi.fn();
+      const pending = new PendingApprovals({ timeoutMs: 1000, onSettled: settled });
       const runner = pending.decide(runnerReq(), { id: 'r', noTimeout: true });
       const planner = pending.ask(req());
       await vi.advanceTimersByTimeAsync(60 * 60_000);
 
       expect(await planner).toBe(false);
+      expect(settled).toHaveBeenCalledWith(expect.any(String), false, { request: req(), decision: { decision: 'deny' }, reason: 'timeout' });
       expect(pending.outstanding().map((p) => p.id)).toEqual(['r']);
       pending.resolve('r', { decision: 'allow' });
       expect(await runner).toEqual({ decision: 'allow' });
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('settles only once when an answer and cancellation race', async () => {
+    const settled = vi.fn();
+    const pending = new PendingApprovals({ onSettled: settled });
+    const controller = new AbortController();
+    const answer = pending.ask(req(), { id: 'race', signal: controller.signal });
+    expect(pending.resolve('race', false)).toBe(true);
+    controller.abort();
+    expect(await answer).toBe(false);
+    expect(settled).toHaveBeenCalledTimes(1);
+    expect(settled).toHaveBeenCalledWith('race', false, { request: req(), decision: { decision: 'deny' } });
   });
 
   it('hands the answer to onDecision before anything awaiting it runs', () => {

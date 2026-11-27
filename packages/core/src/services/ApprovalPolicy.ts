@@ -120,7 +120,9 @@ export class ApprovalPolicy implements IApproval {
     if (req.perInvocation) {
       if (this.modeOf(req.kind) === 'deny' || this.autonomousOf()) return decide(false, 'mode');
       if (!this.asker) return decide(false, 'no-channel');
-      return decide(await this.asker(req, opts.signal).catch(() => false), 'asked');
+      const answer = await this.asker(req, opts.signal).catch(() => false);
+      if (opts.signal?.aborted) return false;
+      return decide(answer, 'asked');
     }
     const { scopes, key, open } = this.standing(req);
     if (open.length === 0) {
@@ -144,18 +146,29 @@ export class ApprovalPolicy implements IApproval {
       const asked: ApprovalRequest = { ...req, scope: open[0], scopes: open.length > 1 ? open : undefined };
       const answer = this.asker(asked, withdraw.signal)
         .catch(() => false)
-        .finally(() => { if (this.generation === gen) this.inFlight.delete(openKey); });
+        .finally(() => { if (this.generation === gen && this.inFlight.get(openKey)?.answer === answer) this.inFlight.delete(openKey); });
       flight = { answer, waiting: 0, withdraw };
       this.inFlight.set(openKey, flight);
     }
     const shared = flight;
     shared.waiting++;
-    const leave = () => { if (--shared.waiting === 0) shared.withdraw.abort(); };
-    // Every waiter leaves once, and the ask goes with the last one.
-    if (opts.signal?.aborted) leave();
-    else opts.signal?.addEventListener('abort', leave, { once: true });
-    const answer = await shared.answer;
-    opts.signal?.removeEventListener('abort', leave);
+    const leave = () => {
+      if (--shared.waiting === 0) {
+        if (this.inFlight.get(openKey) === shared) this.inFlight.delete(openKey);
+        shared.withdraw.abort();
+      }
+    };
+    // A cancelled waiter settles immediately without withdrawing other waiters.
+    let cancelled = false;
+    let cancelWaiter: () => void = () => {};
+    const cancellation = new Promise<boolean>((resolve) => {
+      cancelWaiter = () => { cancelled = true; leave(); resolve(false); };
+    });
+    if (opts.signal?.aborted) cancelWaiter();
+    else opts.signal?.addEventListener('abort', cancelWaiter, { once: true });
+    const answer = await Promise.race([shared.answer, cancellation]);
+    opts.signal?.removeEventListener('abort', cancelWaiter);
+    if (cancelled) return false;
 
     // A denial is remembered too, so a model that retries the same blocked
     // lookup burns one tool round instead of re-prompting the user each time.

@@ -1,6 +1,5 @@
 import * as path from 'path';
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import { discoveryExec } from './discoveryExec';
 import * as fsSync from 'fs';
 import { DiscoveredModel } from '../models/Task';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
@@ -17,7 +16,6 @@ import { RunnerCredentialRefusal } from './signInHint';
 
 export type { AppServerModel } from './harness/appServerModels';
 
-const execAsync = promisify(exec);
 
 /**
  * Injectable command runner. Defaults to the real `child_process` exec wrapper;
@@ -25,7 +23,7 @@ const execAsync = promisify(exec);
  */
 export type ExecImpl = (
   command: string,
-  options?: { timeout?: number; env?: RunnerEnv }
+  options?: { timeout?: number; env?: RunnerEnv; signal?: AbortSignal }
 ) => Promise<{ stdout: string }>;
 
 // Discovery must find `claude`/`opencode` wherever the user installed them,
@@ -40,7 +38,7 @@ export const defaultExec: ExecImpl = async (command, options) => {
   // (~0.5MB with three providers today);
   // node's default 1MB maxBuffer would kill the child mid-stream and silently
   // degrade discovery to the variant-less plain parser.
-  const { stdout } = await execAsync(command, { timeout: options?.timeout, maxBuffer: 32 * 1024 * 1024, env: withPath(options?.env ?? process.env, PATH), windowsHide: true });
+  const { stdout } = await discoveryExec(command, { timeout: options?.timeout, maxBuffer: 32 * 1024 * 1024, signal: options?.signal, env: withPath(options?.env ?? process.env, PATH) });
   return { stdout: String(stdout) };
 };
 
@@ -54,12 +52,12 @@ export const defaultExec: ExecImpl = async (command, options) => {
 export type AppServerClientImpl = (
   command: string,
   args: string[],
-  options?: { timeout?: number; env?: RunnerEnv }
+  options?: { timeout?: number; env?: RunnerEnv; signal?: AbortSignal }
 ) => Promise<AppServerModel[] | null>;
 
 /** Exported for its test: the real client is the one place that spawns an app-server. */
 export const defaultAppServerClient: AppServerClientImpl = (command, args, options) =>
-  discoverAppServerModels(command, args, { timeout: options?.timeout, env: options?.env });
+  discoverAppServerModels(command, args, { timeout: options?.timeout, env: options?.env, signal: options?.signal });
 
 /**
  * Injectable ACP client: start the agent, open a session and return what it
@@ -71,11 +69,11 @@ export const defaultAppServerClient: AppServerClientImpl = (command, args, optio
 export type AcpClientImpl = (
   command: string,
   args: string[],
-  options?: { timeout?: number; env?: RunnerEnv }
+  options?: { timeout?: number; env?: RunnerEnv; signal?: AbortSignal }
 ) => Promise<AcpModelsAnswer>;
 
 export const defaultAcpClient: AcpClientImpl = (command, args, options) =>
-  discoverAcpModels(command, args, { timeout: options?.timeout, env: options?.env });
+  discoverAcpModels(command, args, { timeout: options?.timeout, env: options?.env, signal: options?.signal });
 
 /**
  * Why a runner's last discovery listed nothing (ADR-0060, R9; #46 F6), or
@@ -378,7 +376,7 @@ function wasKilled(err: unknown): boolean {
   return !!err && typeof err === 'object' && (err as { killed?: unknown }).killed === true;
 }
 
-async function discoverFromCommand(manifest: RunnerManifest, execImpl: ExecImpl, env: RunnerEnv): Promise<{ models: DiscoveredModel[]; fromFallback: boolean; degraded: boolean }> {
+async function discoverFromCommand(manifest: RunnerManifest, execImpl: ExecImpl, env: RunnerEnv, signal: AbortSignal): Promise<{ models: DiscoveredModel[]; fromFallback: boolean; degraded: boolean }> {
   const discovery = manifest.modelDiscovery;
   const commands: DiscoveryCommand[] = discovery.discoveryCommands ?? [
     { command: discovery.command!, args: discovery.args || [], parser: discovery.parser },
@@ -393,10 +391,11 @@ async function discoverFromCommand(manifest: RunnerManifest, execImpl: ExecImpl,
     // is how a v2 CLI declines the v1 flag — so a later one marks the answer.
     let degraded = false;
     for (const [index, cmd] of commands.entries()) {
+      if (signal.aborted) break;
       try {
         // Generous timeout: a cold runner CLI may spawn its server, install
         // extensions, and fetch its catalog on first invocation after boot.
-        const { stdout } = await execImpl(`${cmd.command} ${cmd.args.join(' ')}`, { timeout: 45000, env });
+        const { stdout } = await execImpl(`${cmd.command} ${cmd.args.join(' ')}`, { timeout: 45000, env, signal });
         const models = parseModelOutput(stdout, cmd.parser, manifest);
         if (models.length > 0) return { models: applyVariants(mergeCanonicalAliases(models, manifest), manifest), timedOut, degraded };
         if (index > 0) degraded = true;
@@ -414,12 +413,12 @@ async function discoverFromCommand(manifest: RunnerManifest, execImpl: ExecImpl,
   // is warm by the second pass. Accepting the plain list would silently drop
   // every model's variants — and, cached, keep them off for the daemon's life.
   let result = await runCommands();
-  if (result.models && result.degraded) {
+  if (!signal.aborted && result.models && result.degraded) {
     const retried = await runCommands();
     if (retried.models) result = retried;
   }
   if (result.models) return { models: result.models, fromFallback: false, degraded: result.degraded };
-  if (result.timedOut) {
+  if (!signal.aborted && result.timedOut) {
     const second = await runCommands();
     if (second.models) return { models: second.models, fromFallback: false, degraded: second.degraded };
   }
@@ -512,6 +511,8 @@ export class ModelDiscovery {
   private generation = 0;
   /** Bumped per runner by {@link forget}, as `generation` is for every runner. */
   private forgotten: Map<string, number> = new Map();
+  private readonly abort = new AbortController();
+  dispose(): void { this.abort.abort(); this.clear(); }
   private registry: RunnerRegistry;
   private execImpl: ExecImpl;
   private fetchImpl?: typeof fetch;
@@ -562,7 +563,7 @@ export class ModelDiscovery {
     const config = manifest.modelDiscovery.appServer;
     if (!config) return null;
 
-    const raw = await this.appServerClient(config.command, config.args, { env });
+    const raw = await this.appServerClient(config.command, config.args, { env, signal: this.abort.signal });
     if (raw) {
       const models = parseAppServerModels(raw);
       if (models.length > 0) return models;
@@ -594,6 +595,7 @@ export class ModelDiscovery {
   }
 
   private discoverRaw(runner: string): Promise<DiscoveredModel[]> {
+    if (this.abort.signal.aborted) return Promise.resolve([]);
     const cached = this.cache.get(runner);
     if (cached) return Promise.resolve(cached);
 
@@ -665,6 +667,7 @@ export class ModelDiscovery {
     let cacheable = true;
     let acp: AcpOutcome | undefined;
     const discovery = manifest.modelDiscovery;
+    if (this.abort.signal.aborted) return { models: [], cacheable: false };
 
     // An in-process runner (ADR-0070) offers its own provider's catalog, on
     // the key the host holds for it too. A listing that failed offers nothing
@@ -686,12 +689,13 @@ export class ModelDiscovery {
       cacheable = false;
     }
 
+    if (this.abort.signal.aborted) return { models: [], cacheable: false };
     // 0b. ACP discovery: the agent's own session options. A signed-out or
     //     silent agent offers nothing; the remaining methods answer instead.
     if (discovery.method === 'acp' && discovery.acp) {
       const started = await acpStartEnv(discovery.acp, env);
       const command = runnerCommand(manifest);
-      const answer = 'env' in started && command ? await this.acpClient(command, discovery.acp.args, { env: started.env }) : null;
+      const answer = 'env' in started && command ? await this.acpClient(command, discovery.acp.args, { env: started.env, signal: this.abort.signal }) : null;
       if (Array.isArray(answer) && answer.length > 0) return { models: mergeCanonicalAliases(answer, manifest), cacheable: true, acp: { kind: 'signed-in' } };
       // No answer (signed out, timeout, failed start) is transient and must
       // not be cached behind a working fallback; an agent that answered with
@@ -702,6 +706,7 @@ export class ModelDiscovery {
           : Array.isArray(answer) ? { kind: 'no-choice' } : { kind: 'no-answer' };
     }
 
+    if (this.abort.signal.aborted) return { models: [], cacheable: false };
     // 1. Try API discovery first (e.g. Anthropic Models API for Claude Code).
     //    Returns null when no auth token is available or the request fails —
     //    in both cases we fall through to command-based discovery.
@@ -712,9 +717,10 @@ export class ModelDiscovery {
       }
     }
 
+    if (this.abort.signal.aborted) return { models: [], cacheable: false };
     // 2. Command-based discovery (CLI subcommand or --help parsing).
     if ((discovery.method === 'command' || discovery.method === 'acp') && (discovery.command || discovery.discoveryCommands?.length)) {
-      const result = await discoverFromCommand(manifest, this.execImpl, env);
+      const result = await discoverFromCommand(manifest, this.execImpl, env, this.abort.signal);
       // A fallback-only or degraded result means the CLI (or its richer
       // catalog command) wasn't reachable — don't cache it, so a transient
       // failure (PATH, network, cold start) heals on the next lookup instead

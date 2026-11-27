@@ -5,6 +5,7 @@ import { assignmentFlagText, checkpointCardLines, conversationLength, conversati
 import { bodyMode, chatEditorRoomFor, chatPaneWidth, planPaneWidth, stackRows, type BodyMode, type PaneRect } from './geometry';
 import { slashCommandTable, type SlashCategory } from './slash';
 import { checkpointsBelow, continuesTask, findTask, isTaskRunning, newestRemovable, planPaneOpen, planRows, plannerInFlight, questionAbove, queuedTarget, refFor, rootFrame, scriptTaskView, runnerSignInLine, selectedPlanRow, signedOutWithWayIn, viewOnly, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type Focus, type ModelView, type PlanRow, type RunnerView, type TaskView, type TuiState } from './state';
+import { runnerRowChoice } from './runnerChoice';
 import { AGENT_DEFAULT_MODEL, AGENT_SIGN_IN_NOTE, agentInstallRoutes, DELEGATION_OFFERED, DETECTING_AGENTS, DETECTING_AGENTS_DETAIL, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_COMMANDS, describeUnusedPlanningKey, isCliProvider, type DecisionRecordEntry, type DiscoveredModel } from '@ordewell/core';
 import { RECORD_EMPTY, recordView } from '../decisionRecordView';
 import { modesForTask } from './taskAssignment';
@@ -1239,7 +1240,12 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
         ? style.grey(DETECTING_AGENTS)
         : enabledRunners.length > 0
           // In words too, so it survives colour being off: colour alone says nothing there.
-          ? enabledRunners.map((row) => (signedOutWithWayIn(row) ? style.red(`${row.name} (signed out · /login ${row.id})`) : row.name)).join(', ')
+          ? enabledRunners.map((row) => {
+            const { choice, status } = runnerRowChoice(row, true);
+            if (choice.group !== 'blocked' || !status) return row.name;
+            const label = choice.status === 'signed-out' ? status.replace(/^Signed out/, 'signed out') : status;
+            return style.red(`${row.name} (${label})`);
+          }).join(', ')
           : style.yellow('none enabled'),
       detecting ? [] : unusableRunners,
       cols,

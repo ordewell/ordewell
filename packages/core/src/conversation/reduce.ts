@@ -281,11 +281,11 @@ function requestApproval(view: ConversationView, { id: approvalId, kind, subject
   }));
 }
 
-function settleApproval(view: ConversationView, { id, granted }: Message<'approval_settled'>): ConversationView {
+function settleApproval(view: ConversationView, { id, granted, reason }: Message<'approval_settled'>): ConversationView {
   const i = findLastIndex(view.blocks, (b) => b.type === 'approval' && b.approvalId === id);
   const request = view.blocks[i];
   if (request?.type !== 'approval') return view;
-  return { ...view, blocks: replaceAt(view.blocks, i, { ...request, status: granted ? 'granted' : 'denied', decidedBy: 'asked' }) };
+  return { ...view, blocks: replaceAt(view.blocks, i, { ...request, status: reason === 'cancelled' ? 'withdrawn' : reason === 'timeout' ? 'timed_out' : granted ? 'granted' : 'denied', decidedBy: 'asked' }) };
 }
 
 function decideApproval(view: ConversationView, { kind, subject, scope, detail, granted, source }: Message<'approval_decided'>): ConversationView {

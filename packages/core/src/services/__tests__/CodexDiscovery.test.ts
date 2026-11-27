@@ -89,7 +89,7 @@ describe('ModelDiscovery — Codex (app-server → cache file → fallback)', ()
     const discovery = new ModelDiscovery(registryWith(CODEX_MANIFEST), noExec, undefined, client, readFile as never);
     const models = await discovery.discover('codex');
     expect(models.map((m) => m.modelId)).toEqual(['gpt-5.6-sol', 'gpt-5.5']);
-    expect(client).toHaveBeenCalledWith('codex', ['app-server'], { env: process.env });
+    expect(client).toHaveBeenCalledWith('codex', ['app-server'], { env: process.env, signal: expect.any(AbortSignal) });
     expect(readFile).not.toHaveBeenCalled();
   });
 
@@ -112,7 +112,7 @@ describe('ModelDiscovery — Codex (app-server → cache file → fallback)', ()
     const readFile = vi.fn(() => CACHE_FILE);
     const discovery = new ModelDiscovery(registryWith(CODEX_MANIFEST), noExec, undefined, client, readFile, undefined, async () => env);
     await discovery.discover('codex');
-    expect(client).toHaveBeenCalledWith('codex', ['app-server'], { env });
+    expect(client).toHaveBeenCalledWith('codex', ['app-server'], { env, signal: expect.any(AbortSignal) });
     expect(readFile).toHaveBeenCalledWith('/accounts/work/codex/models_cache.json');
   });
 
