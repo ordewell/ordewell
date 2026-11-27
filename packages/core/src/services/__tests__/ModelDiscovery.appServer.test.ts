@@ -52,7 +52,7 @@ lines.on('line', (line) => {
       controller.abort();
       expect(await result).toBeNull();
       await expect.poll(() => { try { process.kill(pid, 0); return true; } catch { return false; } }, { timeout: 5000 }).toBe(false);
-    } finally { controller.abort(); if (pid) { try { process.kill(pid, 'SIGKILL'); } catch {} } }
+    } finally { controller.abort(); if (pid) { try { process.kill(pid, 'SIGKILL'); } catch { /* Already exited. */ } } }
   });
 
   it('launches the server under the environment it is given', async () => {
