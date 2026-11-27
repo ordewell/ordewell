@@ -40,7 +40,7 @@ installed and signed in, or a provider API key. No Ordewell account or key.
 
 Use it in the [desktop app](#download-the-desktop-app), the
 [terminal](#install-the-terminal-app), [VS Code](#vs-code) or the command line.
-All of them drive the same plans, runners and settings. This README describes 0.14.15; see the
+All of them drive the same plans, runners and settings. This README describes 0.14.16; see the
 [published releases](https://github.com/ordewell/ordewell/releases) for the
 versions you can install and their release notes.
 
