@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.14.17] - 2026-11-27
+
+### Fixed
+
+- On Windows, a discovery or install probe that times out, is cancelled or outlives the extension host now ends every process it started, even an agent behind a `.cmd` shim.
+
 ## [0.14.16] - 2026-11-27
 
 ### Fixed
