@@ -90,6 +90,9 @@ function runSh(args, { env = {}, shims = [] } = {}) {
 
 /** HOME as the script's sh names it: Git Bash's turns a Windows path into its own form, so it prints /tmp/… for C:\…\Temp\…. */
 const shHome = (home) => spawnSync('sh', ['-c', 'printf %s "$HOME"'], { env: { ...process.env, HOME: home }, encoding: 'utf8' }).stdout;
+// Through sh, where onPath found it: Git for Windows' shasum is a Perl script,
+// which Node cannot start by name.
+const shasumCheck = (dir) => spawnSync('sh', ['-c', 'shasum -a 256 -c SHA256SUMS'], { cwd: dir, encoding: 'utf8' });
 const literal = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 describe('the release assets script', () => {
@@ -116,7 +119,7 @@ describe('the release assets script', () => {
     assert.equal(hash('Ordewell-win-x64.exe'), hash(`Ordewell-${VERSION}-win-x64.exe`));
     assert.notEqual(hash('Ordewell-win-x64.exe'), hash('Ordewell-mac-arm64.dmg'));
     if (hostHas('shasum')) {
-      const check = spawnSync('shasum', ['-a', '256', '-c', 'SHA256SUMS'], { cwd: dir, encoding: 'utf8' });
+      const check = shasumCheck(dir);
       assert.equal(check.status, 0, check.stdout + check.stderr);
     }
   });
@@ -210,7 +213,7 @@ describe('the release assets script', () => {
     }
     for (const name of FIXED_ASSETS) assert.ok(!existsSync(join(dir, name)), `${name} was written`);
     if (hostHas('shasum')) {
-      const check = spawnSync('shasum', ['-a', '256', '-c', 'SHA256SUMS'], { cwd: dir, encoding: 'utf8' });
+      const check = shasumCheck(dir);
       assert.equal(check.status, 0, check.stdout + check.stderr);
     }
   });

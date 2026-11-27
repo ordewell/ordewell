@@ -4,7 +4,7 @@
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { WINDOWS_JOBS, localRuns, readWorkspaces, uncommittedPaths } from './change-scope.mjs';
-import { STEPS, hostHasTool, missingTools, requiredTools, sh, testWithCoverage, workflowSteps } from './ci.mjs';
+import { STEPS, hostHasTool, missingTools, requiredTools, sh, testWithCoverage, useGitBash, workflowSteps } from './ci.mjs';
 
 const SANDBOX_SCRIPT = 'scripts/linux-sandbox-e2e.sh';
 
@@ -102,6 +102,7 @@ async function main() {
     for (const step of checks) console.log(`${step.id}: ${step.name}${step.reason ? ` — UNVERIFIED: ${step.reason}` : ''}`);
     return 0;
   }
+  if (!useGitBash()) return 1;
   return runChecks(checks, plan);
 }
 
