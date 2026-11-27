@@ -469,6 +469,13 @@ describe('reduceConversation', () => {
       ]);
     });
 
+    it('shows cancellation and timeout separately from a human denial', () => {
+      const view = play(approvals.slice(0, 2));
+      expect(unkeyed(reduceConversation(view, { type: 'approval_settled', id: 'ap-1', granted: false, reason: 'cancelled' }).blocks).at(-1)).toMatchObject({ status: 'withdrawn' });
+      expect(unkeyed(reduceConversation(view, { type: 'approval_settled', id: 'ap-1', granted: false, reason: 'timeout' }).blocks).at(-1)).toMatchObject({ status: 'timed_out' });
+      expect(unkeyed(reduceConversation(view, { type: 'approval_settled', id: 'ap-1', granted: false }).blocks).at(-1)).toMatchObject({ status: 'denied' });
+    });
+
     it('ignores an answer to a request it never saw', () => {
       const view = play(approvals.slice(0, 1));
 

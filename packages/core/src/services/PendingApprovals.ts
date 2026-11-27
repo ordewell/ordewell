@@ -28,7 +28,7 @@ export interface PendingApprovalsOptions {
   /** Announce a new request to the surfaces. */
   onRequest?: (pending: PendingApproval) => void;
   /** Announce that a request is no longer actionable (answered or expired). */
-  onSettled?: (id: string, granted: boolean, settled: { request: ApprovalRequest; decision: ApprovalDecision }) => void;
+  onSettled?: (id: string, granted: boolean, settled: { request: ApprovalRequest; decision: ApprovalDecision; reason?: 'cancelled' | 'timeout' }) => void;
 }
 
 export interface AskOptions {
@@ -45,7 +45,7 @@ export interface AskOptions {
    * stopped) must deliver the answer before it goes.
    */
   onDecision?: (decision: ApprovalDecision) => void;
-  /** Aborting it withdraws the request: it settles as a denial, which takes its card off every surface. */
+  /** Aborting withdraws the request and leaves the capability unapproved. */
   signal?: AbortSignal;
 }
 
@@ -56,7 +56,7 @@ let counter = 0;
 export class PendingApprovals {
   private readonly entries = new Map<string, {
     pending: PendingApproval;
-    settle: (decision: ApprovalDecision) => void;
+    settle: (decision: ApprovalDecision, reason?: 'cancelled' | 'timeout') => void;
     timer: ReturnType<typeof setTimeout> | null;
   }>();
   private readonly listeners = new Set<(pending: PendingApproval) => void>();
@@ -85,25 +85,27 @@ export class PendingApprovals {
     const pending: PendingApproval = { id, request, createdAt: new Date().toISOString() };
 
     return new Promise<ApprovalDecision>((resolve) => {
-      const settle = (decision: ApprovalDecision) => {
+      const abort = () => settle({ decision: 'deny' }, 'cancelled');
+      const settle = (decision: ApprovalDecision, reason?: 'cancelled' | 'timeout') => {
         const entry = this.entries.get(id);
         if (!entry) return;
         if (entry.timer) clearTimeout(entry.timer);
         this.entries.delete(id);
+        options.signal?.removeEventListener('abort', abort);
         options.onDecision?.(decision);
-        this.opts.onSettled?.(id, isGranted(decision), { request, decision });
+        this.opts.onSettled?.(id, isGranted(decision), { request, decision, ...(reason ? { reason } : {}) });
         resolve(decision);
       };
 
       let timer: ReturnType<typeof setTimeout> | null = null;
       if (!options.noTimeout) {
-        timer = setTimeout(() => settle({ decision: 'deny' }), this.opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+        timer = setTimeout(() => settle({ decision: 'deny' }, 'timeout'), this.opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
         // Never hold the process open on a prompt nobody is watching.
         (timer as unknown as { unref?: () => void }).unref?.();
       }
 
       this.entries.set(id, { pending, settle, timer });
-      options.signal?.addEventListener('abort', () => settle({ decision: 'deny' }), { once: true });
+      options.signal?.addEventListener('abort', abort, { once: true });
       this.opts.onRequest?.(pending);
       for (const listener of this.listeners) listener(pending);
     });

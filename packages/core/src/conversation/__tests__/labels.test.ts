@@ -23,6 +23,8 @@ describe('what a conversation block says', () => {
     expect(approvalStatusText({ status: 'granted', forTask: true })).toBe('Approved for this task');
     expect(approvalStatusText({ status: 'denied' })).toBe('Denied');
     expect(approvalStatusText({ status: 'withdrawn' })).toBe('Withdrawn');
+    expect(approvalStatusText({ status: 'timed_out' })).toBe('Timed out');
+    expect(approvalStatusText({ status: 'withdrawn' })).toBe('Withdrawn');
   });
 
   it('names the policy when nobody was asked, and stays plain when the user answered', () => {

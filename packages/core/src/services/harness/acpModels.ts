@@ -41,6 +41,7 @@ export function modelsFromSession(state: AcpSessionState): DiscoveredModel[] {
 export interface AcpModelsOptions {
   /** How long the whole handshake gets before the call answers `null`. */
   timeout?: number;
+  signal?: AbortSignal;
   /** The environment the agent is launched with, which can name its account and home. */
   env?: RunnerEnv;
 }
@@ -64,12 +65,14 @@ export type AcpModelsAnswer = DiscoveredModel[] | 'signed-out' | null;
  * the manifest's other discovery; the process group is always taken down.
  */
 export async function discoverAcpModels(command: string, args: string[], options: AcpModelsOptions = {}): Promise<AcpModelsAnswer> {
+  if (options.signal?.aborted) return null;
   let scratch: string;
   try {
     scratch = await mkdtemp(join(tmpdir(), 'ordewell-acp-models-'));
   } catch {
     return null;
   }
+  if (options.signal?.aborted) { await rm(scratch, { recursive: true, force: true }); return null; }
   const env = options.env;
   const agent = await openAppServer(command, args, {
     cwd: scratch,
@@ -79,8 +82,11 @@ export async function discoverAcpModels(command: string, args: string[], options
     },
     deps: env ? { workspaceEnv: async () => definedOnly(env) } : {},
   });
+  const cancel = () => agent?.dispose();
+  options.signal?.addEventListener('abort', cancel, { once: true });
+  if (options.signal?.aborted) cancel();
   try {
-    if (!agent) return null;
+    if (!agent || options.signal?.aborted) return null;
     const asked = (async (): Promise<AcpModelsAnswer> => {
       const initialized = await agent.rpc.call('initialize', { ...ACP_INITIALIZE_PARAMS });
       if (!initialized.ok) return null;
@@ -96,6 +102,7 @@ export async function discoverAcpModels(command: string, args: string[], options
       onEnded: () => null,
     });
   } finally {
+    options.signal?.removeEventListener('abort', cancel);
     agent?.dispose();
     // Windows refuses to remove a directory a process still has as its cwd,
     // and the agent just killed lets go of it only once it has exited: the

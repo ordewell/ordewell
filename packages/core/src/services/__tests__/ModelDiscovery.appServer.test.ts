@@ -40,6 +40,21 @@ lines.on('line', (line) => {
     expect(models?.map((m) => m.displayName)).toEqual(['日本語モデル']);
   });
 
+  it.skipIf(process.platform === 'win32')('ends a pending handshake on cancellation', async () => {
+    const pidFile = join(dir, 'server.pid');
+    const script = stub(`require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000);`);
+    const controller = new AbortController();
+    const result = defaultAppServerClient(process.execPath, [script], { timeout: 5000, signal: controller.signal });
+    let pid = 0;
+    try {
+      await expect.poll(() => existsSync(pidFile), { timeout: 3000 }).toBe(true);
+      pid = Number(readFileSync(pidFile, 'utf8'));
+      controller.abort();
+      expect(await result).toBeNull();
+      await expect.poll(() => { try { process.kill(pid, 0); return true; } catch { return false; } }, { timeout: 5000 }).toBe(false);
+    } finally { controller.abort(); if (pid) { try { process.kill(pid, 'SIGKILL'); } catch { /* Already exited. */ } } }
+  });
+
   it('launches the server under the environment it is given', async () => {
     const script = stub(`
 lines.on('line', (line) => {

@@ -75,6 +75,19 @@ describe('the ACP model client', () => {
     await vi.waitFor(() => { if (alive(pid)) throw new Error('still running'); });
   });
 
+  it('stops an in-flight agent when discovery is cancelled', async () => {
+    const controller = new AbortController();
+    const pidFile = join(dir, 'pid');
+    const result = discoverAcpModels(process.execPath, stub(`
+      if (msg.method === 'session/new') fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`),
+    { timeout: 5000, signal: controller.signal });
+    await vi.waitFor(() => { if (!existsSync(pidFile)) throw new Error('agent not ready'); });
+    const pid = Number(readFileSync(pidFile, 'utf8'));
+    controller.abort();
+    expect(await result).toBeNull();
+    await vi.waitFor(() => { if (alive(pid)) throw new Error('still running'); });
+  });
+
   it('answers null for a binary that is not there', async () => {
     expect(await discoverAcpModels(join(dir, 'missing-agent'), [], { timeout: 2000 })).toBeNull();
   });

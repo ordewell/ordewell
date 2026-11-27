@@ -677,6 +677,8 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
 
   function dispose(): void {
     log('Ordewell deactivating...');
+    services.modelResolver.dispose();
+    services.runnerInstallation.dispose();
     // A goal still waiting for the activation probe must not start planner
     // turns once the host has stopped its runners.
     sessionCell.current?.abortPlannerTurn();

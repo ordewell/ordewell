@@ -404,7 +404,7 @@ export type SessionMessage =
   // human may be on any surface (or several at once) and the request outlives
   // whichever HTTP call triggered it.
   | { type: 'approval_request'; id: string; kind: ApprovalKind; subject: string; scope: string; detail?: string; body?: string; turnId?: string }
-  | { type: 'approval_settled'; id: string; granted: boolean }
+  | { type: 'approval_settled'; id: string; granted: boolean; reason?: 'cancelled' | 'timeout' }
   // A decision reached with no round-trip prompt: pre-approved via config,
   // remembered from earlier in this session, or the operator's mode floor
   // (allow/deny skipping the human entirely). The interactive path above

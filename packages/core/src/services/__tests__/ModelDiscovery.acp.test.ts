@@ -94,7 +94,7 @@ describe('ModelDiscovery — the acp method with a credential hook', () => {
 
     expect((await discovery.discover('acp-agent')).map((m) => m.modelId)).toEqual(['small']);
     expect(credentials).toHaveBeenCalledWith({ env: runnerEnv });
-    expect(client).toHaveBeenCalledWith('acp-agent', ['--acp'], { env: { HOME: '/home/someone', AGENT_MODE: 'local', AGENT_API_KEY: KEY } });
+    expect(client).toHaveBeenCalledWith('acp-agent', ['--acp'], { env: { HOME: '/home/someone', AGENT_MODE: 'local', AGENT_API_KEY: KEY }, signal: expect.any(AbortSignal) });
   });
 
   it('spawns nothing when the hook finds no key, falls back, and asks again once the user has signed in', async () => {
@@ -114,7 +114,7 @@ describe('ModelDiscovery — the acp method with a credential hook', () => {
     stored = KEY;
     now += 61_000;
     expect((await discovery.discover('acp-agent')).map((m) => m.modelId)).toEqual(['small']);
-    expect(client).toHaveBeenCalledWith('acp-agent', ['--acp'], { env: { AGENT_API_KEY: KEY } });
+    expect(client).toHaveBeenCalledWith('acp-agent', ['--acp'], { env: { AGENT_API_KEY: KEY }, signal: expect.any(AbortSignal) });
   });
 
   it('starts the agent under the runner\'s env alone when the hook says it needs nothing from Ordewell', async () => {
@@ -124,7 +124,7 @@ describe('ModelDiscovery — the acp method with a credential hook', () => {
     const discovery = new ModelDiscovery(registryWith(keyed), execOf(''), undefined, undefined, undefined, undefined, async () => runnerEnv, client);
 
     await discovery.discover('acp-agent');
-    expect(client).toHaveBeenCalledWith('acp-agent', ['--acp'], { env: runnerEnv });
+    expect(client).toHaveBeenCalledWith('acp-agent', ['--acp'], { env: runnerEnv, signal: expect.any(AbortSignal) });
   });
 });
 

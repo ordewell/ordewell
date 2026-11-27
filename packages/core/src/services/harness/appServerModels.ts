@@ -22,6 +22,7 @@ const DEFAULT_TIMEOUT_MS = 20_000;
 export interface AppServerModelsOptions {
   /** How long the whole handshake gets before the call answers `null`. */
   timeout?: number;
+  signal?: AbortSignal;
   /** The environment the runner is launched with, which can name its account and home; this process's when absent. */
   env?: RunnerEnv;
   /** Tests inject the process boundary; the real call stays on the defaults. */
@@ -150,12 +151,16 @@ export async function discoverAppServerModels(
   args: string[],
   options: AppServerModelsOptions = {},
 ): Promise<AppServerModel[] | null> {
+  if (options.signal?.aborted) return null;
   const env = options.env;
   const server = await openAppServer(command, args, {
     cwd: process.cwd(),
     deps: { ...(env ? { workspaceEnv: async () => definedOnly(env) } : {}), ...options.deps },
   });
   if (!server) return null;
+  if (options.signal?.aborted) { server.dispose(); return null; }
+  const cancel = () => server.dispose();
+  options.signal?.addEventListener('abort', cancel, { once: true });
   const { rpc } = server;
 
   const asked = (async (): Promise<AppServerModel[] | null> => {
@@ -175,6 +180,7 @@ export async function discoverAppServerModels(
       onEnded: () => null,
     });
   } finally {
+    options.signal?.removeEventListener('abort', cancel);
     server.dispose();
   }
 }

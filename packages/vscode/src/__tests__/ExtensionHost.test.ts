@@ -230,6 +230,7 @@ function fakeSession() {
 
 function fakeResolver(modelsByRunner: Partial<Record<string, DiscoveredModel[]>> = { 'claude-code': models }) {
   return {
+    dispose: vi.fn(),
     refreshRunnerModels: vi.fn(),
     modelsForRunners: vi.fn(async (runners: string[]) => {
       const out: Partial<Record<string, DiscoveredModel[]>> = {};
@@ -256,6 +257,7 @@ function fakeResolver(modelsByRunner: Partial<Record<string, DiscoveredModel[]>>
 
 function fakeRunnerInstallation(installed: string[]) {
   return {
+    dispose: vi.fn(),
     filterInstalled: vi.fn(async (runners: string[]) => runners.filter((r) => installed.includes(r))),
     plannerUsability: vi.fn(async (_runner?: string): Promise<PlannerUsability> => ({ usable: true, reason: undefined })),
     runnerUsability: vi.fn(async (_runner?: string): Promise<PlannerUsability> => ({ usable: true, reason: undefined })),
@@ -350,6 +352,12 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
   });
   afterEach(() => {
     fs.rmSync(h.workspace, { recursive: true, force: true });
+  });
+
+  it('disposes discovery services with the host', () => {
+    h.host.dispose();
+    expect(h.resolver.dispose).toHaveBeenCalledOnce();
+    expect(h.installation.dispose).toHaveBeenCalledOnce();
   });
 
   it('routes a child message through its directory handle, never through the root Session', async () => {

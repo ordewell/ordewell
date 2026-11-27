@@ -425,9 +425,9 @@ export class SessionEventRelay implements StatusGate {
     this.broadcast(request);
   }
 
-  approvalSettled(id: string, granted: boolean): void {
+  approvalSettled(id: string, granted: boolean, reason?: 'cancelled' | 'timeout'): void {
     this.announced.delete(id);
-    this.broadcast({ type: 'approval_settled', id, granted });
+    this.broadcast({ type: 'approval_settled', id, granted, ...(reason ? { reason } : {}) });
   }
 
   /** The planner's approval requests still waiting, in the order they were asked. */
