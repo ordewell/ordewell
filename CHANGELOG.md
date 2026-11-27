@@ -8,6 +8,13 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.14.17] - 2026-11-27
+
+### Fixed
+
+- The Windows desktop app's taskbar button and Start search result show the Ordewell logo instead of a blank icon. Windows may keep showing a cached blank icon until reinstall or `ie4uinit.exe -show`.
+- On Windows, a discovery or install probe that times out, is cancelled or outlives its host now ends every process it started, even an agent behind a `.cmd` shim (#243).
+
 ## [0.14.16] - 2026-11-27
 
 ### Fixed
