@@ -547,6 +547,17 @@ describe('WIN_PUBLISHER_NAME with several names', () => {
   });
 });
 
+// builder-util's log writes to process.stdout, where node:test reads this
+// file's messages, and a stray line there crashes the run (test-stdout.test.mjs).
+// Swapped by hand, not with t.mock.property, which Node 22 lacks before 22.20
+// while the repository supports Node from 20.3.
+function silenceBuilderLog(t, require) {
+  const { log } = createRequire(require.resolve('app-builder-lib/package.json'))('builder-util');
+  const { stream } = log;
+  log.stream = { write: () => true };
+  t.after(() => { log.stream = stream; });
+}
+
 // The flags above only matter if electron-builder reads them as intended, so
 // they go through its own CLI parsing, config merge and schema validation, and
 // out comes the list its updater config would carry (PublishManager takes
@@ -556,11 +567,8 @@ describe('the publisher names electron-builder derives from the flags', () => {
   const desktop = fileURLToPath(new URL('../packages/desktop/', import.meta.url));
   const asList = (value) => (value == null ? null : [value].flat());
 
-  // builder-util's log writes to process.stdout, where node:test reads this
-  // file's messages, and a stray line there crashes the run (test-stdout.test.mjs).
   async function derived(t, env) {
-    const { log } = createRequire(require.resolve('app-builder-lib/package.json'))('builder-util');
-    t.mock.property(log, 'stream', { write: () => true });
+    silenceBuilderLog(t, require);
     const { configureBuildCommand, createYargs, normalizeOptions } = require('electron-builder/out/builder.js');
     const { getConfig, validateConfiguration } = require('app-builder-lib/out/util/config/config.js');
     const argv = configureBuildCommand(createYargs()).parse(builderArgs(['--win', '--dir'], 'win32', releasePlan(env, 'win32')));
@@ -593,8 +601,7 @@ describe('the deb launcher entry', () => {
   const desktop = fileURLToPath(new URL('../packages/desktop/', import.meta.url));
 
   it('opens New Window with the executable the deb installs', async (t) => {
-    const { log } = createRequire(require.resolve('app-builder-lib/package.json'))('builder-util');
-    t.mock.property(log, 'stream', { write: () => true });
+    silenceBuilderLog(t, require);
     const { getConfig, validateConfiguration } = require('app-builder-lib/out/util/config/config.js');
     const { installPrefix } = require('app-builder-lib/out/targets/LinuxTargetHelper.js');
     const config = await getConfig(desktop, null, null);
