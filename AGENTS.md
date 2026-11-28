@@ -13,7 +13,10 @@ API provider, which runs inside Ordewell on that provider's key alone.
 
 - **[CONTEXT.md](CONTEXT.md)** — the domain glossary. Every term this codebase
   cares about is defined there, with an *avoid* list of synonyms that blur a
-  distinction the project maintains. Use the vocabulary in that file.
+  distinction the project maintains. Use the vocabulary in that file. It is large
+  (tens of thousands of words), so **search it** for the terms you need
+  (`grep -n -i -A20 '^\*\*PlanStore' CONTEXT.md`, or grep for the bare word) and
+  never read it whole.
 - **[docs/adr/](docs/adr/README.md)** — the architecture decisions, grouped into
   folders by area, including the options that were rejected and why. The
   README's index lists every one with its status; read the ones that touch what
@@ -48,9 +51,10 @@ Several full suites at once overload the machine, and the load-induced failures
 they cause (timeouts, container and sandbox tests) are unrelated to your change
 and send tasks back to re-run everything. Run only what proves your own change:
 vitest on the test files covering the files you changed, the typecheck, and lint
-on what you touched. If you changed core, build it first, since the other
-packages compile against its `dist/`. Write test output to a file under `.scratch/` in your
-worktree (gitignored) and wait on the PID you started. Outside such a run, or when your
+on what you touched. A review task does the same. If you changed core, build it
+first, since the other packages compile against its `dist/`. Write test output to a file under `.scratch/` in your
+worktree (gitignored) and wait on the PID you started. Never stop processes by
+name (`pkill`, `killall`): that also kills other tasks' copies. Outside such a run, or when your
 brief names no integration check, `test:changed` stays the inner loop.
 
 The integration check runs on the merged checkout, where there are no
@@ -139,9 +143,14 @@ several times as long, every limit is three times longer: the defaults
 (`vitest.shared.ts`), each `vi.waitFor`'s, and a test's own, which it writes as
 `patient(ms)` from `@ordewell/core/testing`.
 
-Build order is not optional: `core` emits the types the other three packages
-compile against. Building a leaf package against a stale `core/dist` produces
-type errors that describe the wrong problem.
+Build order is not optional: `core` emits the types the other packages compile
+against. Building a leaf package against a stale `core/dist` produces type errors
+that describe the wrong problem. A fresh worktree may have no `dist/` at all, so
+run `npm run build:core` before testing another package there (`desktop` needs
+`build:ui` too). The narrowest inner-loop test is one file, its path relative to
+the package: `npm exec -w packages/core -- vitest run src/services/__tests__/SkillsService.test.ts`.
+In an Ordewell read-only task's sealed shell, write only under `$TMPDIR` and split
+test runs: it kills a command after 10 minutes.
 
 Offline end-to-end drive of the planner loop — no API key, no network:
 
@@ -162,7 +171,27 @@ so two worktrees' runs never collide on 3799.
 | `packages/cli` | The `ordewell` binary. `src/tui/` is a pure reducer + renderer behind a thin raw-mode driver. |
 | `packages/vscode` | Extension host and React webview. |
 | `packages/web` | Hono HTTP + WebSocket server. This is the **local daemon** the CLI and TUI drive over `127.0.0.1` — it is not a website and has no frontend. |
+| `packages/ui` | The chat and task-log React components, drawn by any host that supplies a `HostBridge`; `vscode` and `desktop` use them. |
+| `packages/desktop` | The Electron app, a client of the local daemon. |
+| `packages/cli-alias` | Publishes the unscoped `ordewell` npm package, which only requires `@ordewell/cli`. Not an npm workspace. |
+| `packaging/` | Homebrew and winget manifest templates, and the standalone binary's macOS entitlements. |
+| `scripts/` | CI, test selection, verify checks, installers and release scripts. |
+| `docs/` | User guides and, in `docs/adr/`, the architecture decisions. |
 | `bench/` | Offline dev harnesses. Zero dependencies, pure Node. |
+
+## Releasing
+
+[CONTRIBUTING.md](CONTRIBUTING.md#releasing) is the source of truth; release tasks
+also take the `ordewell-release` skill. Patch bump by default. Never publish, push
+a tag, or bump minor or major unless asked.
+
+- Work from a fresh `origin/main` in a separate worktree, never the user's checkout.
+- Use a `release/X.Y.Z` branch and PR. Required checks pass on its exact head, then
+  merge, then main's CI must be green on the merge SHA.
+- Tag that SHA as prior releases did (annotated `vX.Y.Z`, changelog notes as message).
+  Watch `release.yml`; its version guard is `.github/workflows/verify-release-tag.mjs`.
+- Verify npm, GitHub Release assets, VS Code Marketplace, Open VSX, Homebrew and
+  winget (a submitted winget PR is not an approval).
 
 ## Conventions
 
@@ -233,7 +262,8 @@ writing or changing an ADR. In short:
   keeps its number in the host's `folds`, and moving a file between folders
   changes no citation.
 - **Run `node scripts/verify-adr.mjs` after touching `docs/adr/`.** `--write`
-  regenerates the README's index; CI runs the check.
+  regenerates the README's index; CI runs the check. Never hand-merge that index:
+  on a conflict, regenerate it.
 
 ## Cautions
 
