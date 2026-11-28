@@ -71,7 +71,7 @@ export type GateVerdict = Settled | { kind: 'ask'; request: ApprovalRequest; ans
 /** A verdict nobody need be asked about: what the command meets is settled. */
 export type Settled =
   | { kind: 'refuse'; reason: string }
-  | { kind: 'sealed'; why: SealedRunReason; command: string }
+  | { kind: 'sealed'; why: SealedRunReason; command: string; note?: string }
   | { kind: 'native'; network: boolean; command: string };
 
 const SED_HINT = ` To read lines of a file, "head", "tail" and "sed -n '10,40p' FILE" run without approval.`;
@@ -80,6 +80,18 @@ const CD_HINT = ' A "cd" is followed only on a line joined by "&&" alone, so aft
 const TASK_UNSEALED = 'A read-only task asks nobody, so this command could only run sealed, and this machine has no sandbox to seal it in.';
 const TASK_CONTINUE = 'Continue without it, and say in your report if what it would have shown matters.';
 const NO_SANDBOX = `Command refused: this machine has no sandbox to run a command sealed in. Run it without "sealed", and Ordewell's command rules judge it as they do every command.`;
+
+/**
+ * What a sealed run's result adds to its header (ADR-0036 S4): why the command
+ * did not run unsealed, so a failure is read as the rule it met, not retried.
+ */
+function refusedNote(reason: string): string {
+  return `Unsealed, it is refused: ${reason}`;
+}
+
+function modeNote(scope: string): string {
+  return `Full runs only the planner allowlist, which does not cover "${scope}"; to run it unsealed, with the network, add "${scope}" to ORDEWELL_APPROVAL_ALLOW.`;
+}
 
 /** Why a command naming a path the research shell reads by rules confinement cannot follow is refused (ADR-0010). */
 function unfollowableReason(spelled: string): string {
@@ -262,11 +274,11 @@ async function envelope(original: ParsedLine, site: GateSite, policy: SitePolicy
 
   // A refusal the envelope reached without asking anyone runs sealed where the
   // host can seal it (S2), and is the refusal it was elsewhere (S6).
-  const sealedInstead = async (refused: string): Promise<Settled> =>
-    (await site.canSeal()) ? sealedUnlessDenied(policy, line, request, 'refused') : refuse(refused);
+  const sealedInstead = async (why: string): Promise<Settled> =>
+    (await site.canSeal()) ? sealedUnlessDenied(policy, line, request, 'refused', task ? undefined : refusedNote(why)) : refuse(`Command refused: ${why}${unsealedNote}`);
   const unsealedNote = task ? `\n${TASK_UNSEALED} ${TASK_CONTINUE}` : '';
-  if (tier === 'refuse') return sealedInstead(`Command refused: ${reason}${unsealedNote}`);
-  if (unfollowable !== undefined) return sealedInstead(`Command refused: ${unfollowableReason(unfollowable)}${unsealedNote}`);
+  if (tier === 'refuse') return sealedInstead(reason ?? '');
+  if (unfollowable !== undefined) return sealedInstead(unfollowableReason(unfollowable));
 
   const outbound = [...(outboundTexts ?? []), ...(webUrls ?? []).map((url) => url.href)];
   if (outbound.length && carriesSecret(outbound, [...site.outboundSecrets()])) {
@@ -315,7 +327,9 @@ async function envelope(original: ParsedLine, site: GateSite, policy: SitePolicy
   // mode's refusal is recorded as it always was. A site that asks nobody reads
   // its standing answer, whose mode refuses whatever would ask (ADR-0046).
   const standing = policy.peek?.(request);
-  if (standing?.decision === 'deny' && standing.source === 'mode' && await site.canSeal()) return sealedUnlessDenied(policy, line, request, 'refused');
+  if (standing?.decision === 'deny' && standing.source === 'mode' && await site.canSeal()) {
+    return sealedUnlessDenied(policy, line, request, 'refused', request.kind === 'shell_command' && !task ? modeNote(request.scope) : undefined);
+  }
   const denied = task
     ? `Command not run: ${command}\n${taskRefusal(standing)} ${TASK_CONTINUE}`
     : !policy.asks
@@ -333,7 +347,7 @@ async function envelope(original: ParsedLine, site: GateSite, policy: SitePolicy
  * exclusion naming the command or a path it touches, and a denial given on
  * the card this session, of the command or of one a wrapper carries.
  */
-function sealedUnlessDenied(policy: SitePolicy, line: ParsedLine, request: ApprovalRequest | undefined, why: SealedRunReason): Settled {
+function sealedUnlessDenied(policy: SitePolicy, line: ParsedLine, request: ApprovalRequest | undefined, why: SealedRunReason, note?: string): Settled {
   const command = line.raw;
   const allow = policy.allowlist();
   const rule = allow ? excludedBy(line, allow) : undefined;
@@ -347,7 +361,7 @@ function sealedUnlessDenied(policy: SitePolicy, line: ParsedLine, request: Appro
   }
   const denied = deniedInnerScope(policy, line);
   if (denied) return refuse(`Command not approved: ${command}\nThe user denied "${denied}" this session, and a denial holds for a sealed run too. Continue without it.`);
-  return { kind: 'sealed', why, command };
+  return { kind: 'sealed', why, command, ...(note ? { note } : {}) };
 }
 
 /**

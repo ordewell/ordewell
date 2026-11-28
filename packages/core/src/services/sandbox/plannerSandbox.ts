@@ -696,5 +696,10 @@ export function sealedMemoryLimitNote(outcome: { signal?: NodeJS.Signals }, memo
     : `The sealed run was ended at its memory limit of ${limit}, counted across all its processes: what it had not finished did not happen. A command that needs more belongs in the plan as a task; to read something, run it in pieces that each hold less.`;
 }
 
+const SEALED_REACH = "A sealed run cannot reach the network, the user's credentials or their files outside the workspace, and cannot change the workspace, so running it sealed again fails the same way.";
+
 /** Appended to a sealed run that failed: what it could never have done, and what to do in place of a retry. */
-export const SEALED_FAILURE_NOTE = "A sealed run cannot reach the network, the user's credentials or their files outside the workspace, and cannot change the workspace, so running it sealed again fails the same way. To read something it could not, run each command on its own, without a loop or inline code, so Ordewell's command rules can judge it; a change belongs in the plan as a task.";
+export const SEALED_FAILURE_NOTE = `${SEALED_REACH} To read something it could not, run each command on its own, without a loop or inline code, so Ordewell's command rules can judge it; a change belongs in the plan as a task.`;
+
+/** {@link SEALED_FAILURE_NOTE} for a line that already is one command, where splitting it up is no way on. */
+export const SEALED_SINGLE_FAILURE_NOTE = `${SEALED_REACH} A change, or a read that needs what a sealed run lacks, belongs in the plan as a task.`;

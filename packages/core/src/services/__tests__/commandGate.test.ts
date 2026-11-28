@@ -104,8 +104,30 @@ describe('commandGate: the planner', () => {
   describe('what the envelope refuses without asking anyone (ADR-0036 S2, S6)', () => {
     it('runs sealed where the host can seal it', async () => {
       const { approval, asked } = approvals();
-      expect(await decide(line('rm -rf build'), site('planner', approval, sealable))).toEqual({ kind: 'sealed', why: 'refused', command: 'rm -rf build' });
+      expect(await decide(line('rm -rf build'), site('planner', approval, sealable))).toEqual({
+        kind: 'sealed', why: 'refused', command: 'rm -rf build', note: expect.stringMatching(/^Unsealed, it is refused: "rm" modifies state/),
+      });
       expect(asked).toEqual([]);
+    });
+
+    // ADR-0036 S4: a sealed run's result says why it did not run unsealed, so
+    // the planner learns the rule rather than retrying.
+    it("keeps the classifier's reason as the sealed run's note", async () => {
+      const { approval } = approvals();
+      const verdict = await decide(line('gh secret list'), site('planner', approval, sealable));
+      expect(verdict).toMatchObject({ kind: 'sealed', why: 'refused', note: expect.stringContaining('"gh secret"') });
+    });
+
+    it('names the scope to add to the allowlist when Full refuses a command it does not cover', async () => {
+      const { approval } = approvals({ mode: 'deny' });
+      const verdict = await decide(line('git ls-remote origin'), site('planner', approval, sealable));
+      expect(verdict).toMatchObject({ kind: 'sealed', why: 'refused', note: expect.stringContaining('add "git ls-remote origin" to ORDEWELL_APPROVAL_ALLOW') });
+      expect(verdict).toMatchObject({ note: expect.stringMatching(/^Full runs only the planner allowlist/) });
+    });
+
+    it('gives a read-only task no planner advice in its note', async () => {
+      const { approval } = approvals();
+      expect(await decide(line('gh secret list'), site('task', approval, sealable))).not.toHaveProperty('note');
     });
 
     it('stays a refusal where it cannot', async () => {
@@ -115,7 +137,7 @@ describe('commandGate: the planner', () => {
 
     it("runs the approval mode's refusal sealed, and elsewhere hands it in to be recorded", async () => {
       const { approval, asked } = approvals({ mode: 'deny' });
-      expect(await decide(line('npm test'), site('planner', approval, sealable))).toEqual({ kind: 'sealed', why: 'refused', command: 'npm test' });
+      expect(await decide(line('npm test'), site('planner', approval, sealable))).toMatchObject({ kind: 'sealed', why: 'refused', command: 'npm test' });
       const unsealed = await decide(line('npm test'), site('planner', approval));
       expect(unsealed.kind).toBe('ask');
       expect(await settle(unsealed, approval)).toMatchObject({ kind: 'refuse', reason: expect.stringMatching(/^Command not approved: npm test/) });
@@ -127,7 +149,9 @@ describe('commandGate: the planner', () => {
       const unfollowable = { hostPath: (spelled: string) => (spelled.startsWith('/proc/') ? undefined : spelled) };
       const command = 'cat /proc/registry/x';
       expect(await decide(line(command), site('planner', approval, unfollowable))).toMatchObject({ kind: 'refuse', reason: expect.stringContaining('Git Bash reads "/proc/registry/x" by rules this check cannot follow') });
-      expect(await decide(line(command), site('planner', approval, { ...unfollowable, ...sealable }))).toEqual({ kind: 'sealed', why: 'refused', command });
+      expect(await decide(line(command), site('planner', approval, { ...unfollowable, ...sealable }))).toEqual({
+        kind: 'sealed', why: 'refused', command, note: expect.stringContaining('Git Bash reads "/proc/registry/x"'),
+      });
     });
   });
 
