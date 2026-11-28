@@ -1,3 +1,4 @@
+import { lstat, readlink, realpath } from 'fs/promises';
 import * as path from 'path';
 import { flattenTasks, isSkillName, skillNames, type Task, type TaskSkillSnapshot } from '../models/Task';
 import { skillsDirOf, skillTooLarge, workspaceSkillRoots, type SkillInfo, type SkillsService } from './SkillsService';
@@ -126,12 +127,48 @@ async function committedInHead(files: readonly string[]): Promise<Map<string, bo
       // ls-tree, not ls-files: a staged file is tracked, but a worktree is made from a commit.
       const { stdout } = await runGit('git', ['ls-tree', '--name-only', 'HEAD', '--', ...inDir.map(relative)], { cwd: dir, env: cleanEnv() });
       const listed = new Set(stdout.split('\n').map((line) => line.trim()).filter(Boolean));
-      for (const file of inDir) result.set(file, listed.has(relative(file)));
+      await Promise.all(inDir.map(async (file) => {
+        // git lists nothing under a link: it keeps the link itself, and never walks it.
+        const folder = path.dirname(file);
+        result.set(file, listed.has(relative(file)) || ((await lstat(folder)).isSymbolicLink() && await linkedSkillInHead(folder)));
+      }));
     } catch {
       // Unknown: no warning rather than a wrong one.
     }
   }));
   return result;
+}
+
+/** Links followed to reach a skill folder before giving up. */
+const MAX_LINK_HOPS = 8;
+
+/**
+ * Whether a worktree gets the skill in a linked `folder`: HEAD holds each link
+ * on the way as it now reads, and the SKILL.md of the folder they end at,
+ * inside the same repository.
+ */
+async function linkedSkillInHead(folder: string): Promise<boolean> {
+  const git = async (cwd: string, ...args: string[]) => (await runGit('git', args, { cwd, env: cleanEnv() })).stdout;
+  const parent = await realpath(path.dirname(folder));
+  const top = await realpath((await git(parent, 'rev-parse', '--show-toplevel')).replace(/\r?\n$/, ''));
+  const inRepo = (at: string) => {
+    const relative = path.relative(top, at);
+    return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+  };
+  let at = path.join(parent, path.basename(folder));
+  for (let hop = 0; hop < MAX_LINK_HOPS && (await lstat(at)).isSymbolicLink(); hop++) {
+    const target = await readlink(at);
+    if (!inRepo(at)) return false;
+    // Mode 120000 is a link, whose blob is its target.
+    const entry = /^120000 blob ([0-9a-f]+)\t/.exec(await git(top, 'ls-tree', 'HEAD', '--', path.relative(top, at).split(path.sep).join('/')));
+    if (!entry || await git(top, 'cat-file', 'blob', entry[1]) !== target) return false;
+    at = path.resolve(path.dirname(at), target);
+    at = path.join(await realpath(path.dirname(at)), path.basename(at));
+  }
+  const end = await realpath(at);
+  if (!inRepo(end)) return false;
+  const skillFile = path.relative(top, path.join(end, 'SKILL.md')).split(path.sep).join('/');
+  return (await git(top, 'ls-tree', '--name-only', 'HEAD', '--', skillFile)).trim() !== '';
 }
 
 /**

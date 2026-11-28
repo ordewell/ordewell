@@ -12,7 +12,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 - A symlinked skill folder is now listed and found. A link that is broken or
   loops, a `skills/` folder or `SKILL.md` link included, is skipped, and
-  `ordewell skills` reports it.
+  `ordewell skills` reports it. A committed link to a committed folder in the
+  repository draws no "not committed" warning.
 - A `SKILL.md` or skills folder that cannot be read no longer fails the skill
   list. It is skipped, and `ordewell skills` reports it.
 
