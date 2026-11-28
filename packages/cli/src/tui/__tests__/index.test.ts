@@ -441,9 +441,18 @@ describe('handleTui', () => {
 
     it('hands the terminal to the command the runner declares, then takes it back and repaints sign-in', async () => {
       const { child, spawn } = await signedOutTui();
-
-      type('/login');
-      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      // A host with Claude Code installed would resolve `claude` to its binary
+      // on PATH; this test is about the argv the runner declares.
+      const original = process.env.PATH;
+      try {
+        process.env.PATH = '/definitely-not-a-real-bin';
+        clearAugmentedPathCache();
+        type('/login');
+        await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      } finally {
+        process.env.PATH = original;
+        clearAugmentedPathCache();
+      }
 
       expect(fakeTerminal.suspend).toHaveBeenCalled();
       expect(spawn).toHaveBeenCalledWith('claude', ['login'], expect.objectContaining({
