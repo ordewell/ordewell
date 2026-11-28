@@ -2490,6 +2490,24 @@ describe('gh release reads ask, every other release action stays refused', () =>
   it.each(['gh -R o/r release view v1', 'gh --repo o/r pr list', 'gh alias list'])('%s asks', (cmd) => {
     expect(classifyCommand(cmd, { allow, autonomous: true }).tier).toBe('ask');
   });
+
+  // Stopping at a leading flag scoped these as bare `gh`, a grant for every gh command.
+  it.each([
+    ['gh -R o/r release view v1', 'gh release view', 'gh release view'],
+    ['gh --repo=o/r pr list --limit 3', 'gh pr list', 'gh pr list'],
+    ['gh -R o/r repo delete x', 'gh repo delete', undefined],
+    ['gh --version', 'gh --version', undefined],
+  ])('%s is scoped %s', (cmd, scope, allowedBy) => {
+    const verdict = classifyCommand(cmd, { allow, autonomous: true });
+    expect(verdict).toMatchObject({ tier: 'ask', scope });
+    expect(verdict.tier === 'ask' ? verdict.allowedBy : undefined).toBe(allowedBy);
+  });
+
+  it('still holds an exclusion against a flag before the subcommand', () => {
+    expect(classifyCommand('gh -w pr view 1', { allow, autonomous: true })).not.toHaveProperty('allowedBy');
+    const excluding = parseAllowlist([...DEFAULT_PLANNER_ALLOWLIST, '!gh --hostname']);
+    expect(classifyCommand('gh --hostname h.example pr list', { allow: excluding, autonomous: true })).not.toHaveProperty('allowedBy');
+  });
 });
 
 // `git remote -v` was refused with every other remote action, so the commonest

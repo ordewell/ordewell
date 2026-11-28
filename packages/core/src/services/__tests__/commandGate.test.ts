@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ApprovalPolicy } from '../ApprovalPolicy';
 import { decide, type GateSite, type GateVerdict, type GateWho, type Settled } from '../commandGate';
 import type { EgressCheck } from '../egressGuard';
+import { DEFAULT_PLANNER_ALLOWLIST } from '../plannerAllowlist';
 import { grantScopeFor } from '../pathScope';
 import { ParsedLine } from '../parsedLine';
 import type { ToolOutcome } from '../../interfaces/IFileSystem';
@@ -123,6 +124,29 @@ describe('commandGate: the planner', () => {
       const verdict = await decide(line('git ls-remote origin'), site('planner', approval, sealable));
       expect(verdict).toMatchObject({ kind: 'sealed', why: 'refused', note: expect.stringContaining('add "git ls-remote origin" to ORDEWELL_APPROVAL_ALLOW') });
       expect(verdict).toMatchObject({ note: expect.stringMatching(/^Full runs only the planner allowlist/) });
+    });
+
+    it('lets the default allowlist run a gh read behind a leading flag, with no note', async () => {
+      const { approval } = approvals({ mode: 'deny', preApproved: [...DEFAULT_PLANNER_ALLOWLIST] });
+      const verdict = await decide(line('gh -R o/r release view v1'), site('planner', approval, sealable));
+      expect(await settle(verdict, approval)).toEqual({ kind: 'native', network: true, command: 'gh -R o/r release view v1' });
+    });
+
+    it.each([
+      ['gh -R o/r repo delete x', 'gh repo delete'],
+      ['gh --repo o/r release view v1', 'gh release view'],
+      ['gh --version', 'gh --version'],
+    ])('never advises adding bare gh for %s', async (command, scope) => {
+      const { approval } = approvals({ mode: 'deny' });
+      const verdict = await decide(line(command), site('planner', approval, sealable));
+      expect(verdict).toMatchObject({ kind: 'sealed', note: expect.stringContaining(`add "${scope}" to ORDEWELL_APPROVAL_ALLOW`) });
+    });
+
+    it.each(['mvn -q test', 'git status && mvn -q test', 'mvn -q test && gh repo delete x'])('names the command line, and advises no entry, where %s has a scope that is a binary alone', async (command) => {
+      const { approval } = approvals({ mode: 'deny' });
+      const verdict = await decide(line(command), site('planner', approval, sealable));
+      expect(verdict).toMatchObject({ kind: 'sealed', why: 'refused' });
+      expect(verdict).toMatchObject({ note: `Full runs only the planner allowlist, which does not cover "${command}".` });
     });
 
     it('gives a read-only task no planner advice in its note', async () => {

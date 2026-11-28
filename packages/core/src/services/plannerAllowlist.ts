@@ -32,6 +32,8 @@
 export interface CommandWords {
   binary: string;
   args: readonly string[];
+  /** The arguments from the subcommand on, where flags may precede it: what a rule's words are matched against. An exclusion still reads all of {@link args}. */
+  lead?: readonly string[];
   /** How many leading arguments the command's approval scope holds; a rule must cover at least that many. */
   scopeWords?: number;
 }
@@ -128,7 +130,7 @@ function leadingWords(args: readonly string[]): string[] {
 
 function ruleCovers(rule: CommandRule, command: CommandWords): boolean {
   if (rule.binary !== command.binary) return false;
-  const lead = leadingWords(command.args);
+  const lead = leadingWords(command.lead ?? command.args);
   if (lead.length < rule.words.length || rule.words.length < (command.scopeWords ?? 0)) return false;
   return rule.words.every((word, i) => word.matches(lead[i]) && !(word.wildcard && MUTATING_VERB.test(lead[i])));
 }

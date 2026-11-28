@@ -700,13 +700,33 @@ function scopeFor(seg: Segment): string {
   const program = programName(seg.binary);
   if (!MULTIPLEXERS.includes(program)) return name;
   if (program === 'git') return gitScope(seg, name);
+  let words: readonly string[] = seg.args;
+  if (program === 'gh') {
+    const found = ghWords(seg);
+    // No subcommand to name: only the exact line is narrower than all of gh.
+    if (!found) return [name, ...seg.args].map(scopeWord).join(' ');
+    words = found;
+  }
   const lead: string[] = [];
-  for (const arg of seg.args) {
+  for (const arg of words) {
     if (arg.startsWith('-')) break;
     lead.push(arg);
     if (lead.length === SCOPE_LEAD_ARGS) break;
   }
   return [name, ...lead].join(' ');
+}
+
+/**
+ * gh's arguments from its subcommand on. gh takes flags before it (`gh -R o/r
+ * release view`), and stopping at one would scope a read and a delete alike as
+ * bare `gh`. Undefined when there is no subcommand, or the shell may change
+ * which word it is.
+ */
+function ghWords(seg: Segment): string[] | undefined {
+  const gh = { ...seg, binary: 'gh' };
+  const scan = scanSubcommand(gh);
+  const at = scan?.operandAt[0];
+  return at === undefined || subcommandShifter(gh, scan) !== undefined ? undefined : seg.args.slice(at);
 }
 
 /**
@@ -1292,7 +1312,12 @@ function allowlistRule(parts: { seg: Segment; runner?: string }[], allow: Planne
       }
       continue;
     }
-    const rule = commandAllowedBy(allow, { binary: seg.binary, args: seg.args, scopeWords: scopeFor(seg).split(' ').length - 1 });
+    const rule = commandAllowedBy(allow, {
+      binary: seg.binary,
+      args: seg.args,
+      ...(seg.binary === 'gh' ? { lead: ghWords(seg) } : {}),
+      scopeWords: scopeFor(seg).split(' ').length - 1,
+    });
     if (!rule) return undefined;
     rules.push(rule);
   }

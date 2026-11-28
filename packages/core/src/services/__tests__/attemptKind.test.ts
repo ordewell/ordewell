@@ -181,7 +181,7 @@ describe('attemptPrompt', () => {
     const check = createTask({ id: 'check', prompt: 'Review.', loop: { body: ['fix'], maxRounds: 3 } });
 
     expect(attemptPrompt(KINDS['continued read-only'], { ...sources(), task: check, plan: [check] })).toContain(
-      'You are this loop\'s check: your `task_complete` status is its verdict, `failed` when you confirm any problem and `done` only when you confirm none.',
+      'You are this loop\'s check: your `task_complete` status is its verdict, `failed` when you confirm any problem, `done` only when you confirm none, and `blocked` only when you could not check or the check is not converging.',
     );
     expect(attemptPrompt(KINDS['continued read-only'], sources())).not.toContain('loop\'s check');
   });

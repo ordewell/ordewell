@@ -89,7 +89,11 @@ function refusedNote(reason: string): string {
   return `Unsealed, it is refused: ${reason}`;
 }
 
-function modeNote(scope: string): string {
+function modeNote(scope: string, command: string): string {
+  // An entry that is a binary's name alone covers whatever that binary does, so it is never advised.
+  if (scope.split(' + ').some((part) => !part.replace(/^xargs /, '').includes(' '))) {
+    return `Full runs only the planner allowlist, which does not cover "${command}".`;
+  }
   return `Full runs only the planner allowlist, which does not cover "${scope}"; to run it unsealed, with the network, add "${scope}" to ORDEWELL_APPROVAL_ALLOW.`;
 }
 
@@ -328,7 +332,7 @@ async function envelope(original: ParsedLine, site: GateSite, policy: SitePolicy
   // its standing answer, whose mode refuses whatever would ask (ADR-0046).
   const standing = policy.peek?.(request);
   if (standing?.decision === 'deny' && standing.source === 'mode' && await site.canSeal()) {
-    return sealedUnlessDenied(policy, line, request, 'refused', request.kind === 'shell_command' && !task ? modeNote(request.scope) : undefined);
+    return sealedUnlessDenied(policy, line, request, 'refused', request.kind === 'shell_command' && !task ? modeNote(request.scope, command) : undefined);
   }
   const denied = task
     ? `Command not run: ${command}\n${taskRefusal(standing)} ${TASK_CONTINUE}`
