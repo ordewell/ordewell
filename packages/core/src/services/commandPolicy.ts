@@ -128,6 +128,7 @@ const GIT_PROMPTABLE: Record<string, (after: string[], seg: Segment) => boolean>
   'bisect': onlyAction('log'),
   'sparse-checkout': onlyAction('list'),
   'reflog': onlyAction('show', 'exists'),
+  'remote': (after, seg) => remoteReadsLocally(after, seg),
   // A second operand writes the ref, and a word the shell may split may be one.
   'symbolic-ref': (after, seg) => after.filter((a) => !a.startsWith('-')).length <= 1
     && !after.some((a) => shellRewrites(seg, a)),
@@ -166,7 +167,7 @@ export const REFUSED_COMMANDS = [
 const REFUSED_SUBCOMMANDS: Record<string, string[]> = {
   git: ['push', 'reset', 'clean', 'checkout', 'switch', 'restore', 'rebase', 'merge', 'commit',
     'am', 'apply', 'cherry-pick', 'revert', 'stash', 'gc', 'prune', 'filter-branch',
-    'update-ref', 'remote', 'config', 'init', 'clone', 'fetch', 'pull', 'submodule',
+    'update-ref', 'config', 'init', 'clone', 'fetch', 'pull', 'submodule',
     'add', 'rm', 'mv', 'format-patch', 'replace', 'mergetool',
     'repack', 'update-index', 'read-tree', 'checkout-index', 'merge-file', 'bundle',
     'commit-tree', 'write-tree', 'mktree', 'mktag', 'unpack-objects', 'fast-import',
@@ -180,6 +181,45 @@ const REFUSED_SUBCOMMANDS: Record<string, string[]> = {
   az: ['login', 'logout'],
   terraform: ['apply', 'destroy'],
 };
+
+/**
+ * The actions of a subcommand in {@link REFUSED_SUBCOMMANDS} that only read,
+ * and so ask as any other command of that CLI does. The action is the word
+ * right after the subcommand, written literally: `gh release l*` stays refused.
+ * glab's equivalents are on the planner allowlist, and `gh release` refused
+ * whole left `gh release list` running sealed, where it always fails.
+ */
+const REFUSED_SUBCOMMAND_READS: Record<string, Record<string, readonly string[]>> = {
+  gh: { release: ['list', 'view'] },
+};
+
+function readsDespiteRefusal(seg: Segment, sub: string): boolean {
+  const reads = REFUSED_SUBCOMMAND_READS[seg.binary]?.[sub];
+  if (!reads) return false;
+  const action = seg.args[seg.args.indexOf(sub) + 1];
+  return action !== undefined && reads.includes(action) && !shellRewrites(seg, action);
+}
+
+/**
+ * Whether `git remote …` only reads the repository's configuration: bare or
+ * with `-v`, `get-url <name>`, or `show -n` (without `-n`, `show` queries each
+ * remote over the network, the way `ls-remote` does, so it stays refused).
+ * Every other action (add, remove, rename, set-url, set-head, prune, update)
+ * writes the configuration or fetches. A name must be one git can only read
+ * as a remote's.
+ */
+function remoteReadsLocally(after: string[], seg: Segment): boolean {
+  if (after.some((a) => shellRewrites(seg, a))) return false;
+  const rest = after.filter((a, i) => !(['-v', '--verbose'].includes(a) && after.slice(0, i).every((b) => b.startsWith('-'))));
+  const [action, ...args] = rest;
+  if (action === undefined) return true;
+  const names = args.filter((a) => !a.startsWith('-'));
+  const flags = args.filter((a) => a.startsWith('-'));
+  if (!names.every((n) => REMOTE_NAME.test(n))) return false;
+  if (action === 'get-url') return names.length === 1 && flags.every((f) => f === '--push' || f === '--all');
+  if (action === 'show') return flags.length > 0 && flags.every((f) => f === '-n');
+  return false;
+}
 
 /**
  * Shell reserved words and compound-command openers. `toSegment` takes the
@@ -733,6 +773,7 @@ function isAuto(seg: Segment, line: ParsedLine): boolean {
   if (climbsByGlob(seg)) return false;
   if (seg.binary !== 'git') return true;
   const sub = subcommandOf(seg);
+  if (sub === 'remote') return remoteReadsLocally(gitArgsAfterSubcommand(seg), seg);
   return sub !== undefined && GIT_READONLY_SUBCOMMANDS.includes(sub);
 }
 
@@ -875,7 +916,7 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
     }
     const sub = subcommandOf(seg);
     // `npm p*` runs `npm publish` once a file of that name exists.
-    const refused = sub === undefined ? undefined : subs.find((s) => mayExpandTo(seg, sub, s));
+    const refused = sub === undefined || readsDespiteRefusal(seg, sub) ? undefined : subs.find((s) => mayExpandTo(seg, sub, s));
     if (refused) {
       return `"${seg.binary} ${refused}" changes state or reaches outward. You are a read-only planner: ${EFFECT_ROUTE}`;
     }

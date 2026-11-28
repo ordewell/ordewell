@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { AUTO_COMMANDS, classifyCommand as classifyIn, innerCommandScopes as innerCommandScopesIn, pathLikeArgs as pathLikeArgsIn, pathRefs as pathRefsIn, type CommandPolicyOptions } from '../commandPolicy';
-import { parseAllowlist } from '../plannerAllowlist';
+import { DEFAULT_PLANNER_ALLOWLIST, parseAllowlist } from '../plannerAllowlist';
 
 // A case here is a POSIX shell's unless it names the cmd dialect. Given none,
 // the classifier takes the host's (dialectFor), which is cmd on Windows.
@@ -1048,7 +1048,7 @@ describe('a multiplexer subcommand is found after its global flags, not before t
     const { tier, reason } = classifyCommand('git -C /tmp/x push origin main');
     expect(tier).toBe('refuse');
     expect(reason).toContain('git push');
-    expect(classifyCommand('git -C packages/core remote -v').tier).toBe('refuse');
+    expect(classifyCommand('git -C packages/core remote add x y').tier).toBe('refuse');
   });
 });
 
@@ -2458,5 +2458,46 @@ describe('innerCommandScopes', () => {
   it('is empty for a line of only read-only commands, which are never remembered', () => {
     expect(innerCommandScopes('ls | sort | head')).toEqual([]);
     expect(innerCommandScopes('grep -r x . && git log')).toEqual([]);
+  });
+});
+
+// `gh release` was refused whole, so in Full its reads ran sealed and always
+// failed, while glab's equivalents sat on the default allowlist.
+describe('gh release reads ask, every other release action stays refused', () => {
+  const allow = parseAllowlist(DEFAULT_PLANNER_ALLOWLIST);
+
+  it.each([
+    ['gh release list --repo o/r --limit 3', 'gh release list'],
+    ['gh release view v1.2.0 --repo o/r', 'gh release view'],
+  ])('%s is covered by %s', (cmd, rule) => {
+    expect(classifyCommand(cmd, { allow, autonomous: true })).toMatchObject({ tier: 'ask', allowedBy: rule });
+  });
+
+  it.each([
+    'gh release create v1', 'gh release download v1', 'gh release delete v1', 'gh release upload v1 a.tgz',
+    'gh release edit v1', 'gh release', 'gh release l*', 'gh release delete-asset v1 a', 'gh secret list', 'gh auth token',
+  ])('%s is refused', (cmd) => {
+    expect(classifyCommand(cmd, { allow, autonomous: true }).tier).toBe('refuse');
+  });
+});
+
+// `git remote -v` was refused with every other remote action, so the commonest
+// first look at a repository ran sealed.
+describe('git remote reads the configuration and writes nothing', () => {
+  it.each([
+    'git remote', 'git remote -v', 'git remote --verbose', 'git -C packages/core remote -v',
+    'git remote get-url origin', 'git remote show -n origin', 'git remote show -n',
+  ])('%s is auto', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('auto');
+  });
+
+  it.each([
+    'git remote add evil https://example.com/x', 'git remote remove origin', 'git remote rename origin up',
+    'git remote set-url origin https://example.com/x', 'git remote set-head origin -a', 'git remote prune origin',
+    'git remote update', 'git remote -v add x y',
+    // Without -n, show queries the remote over the network.
+    'git remote show origin', 'git remote get-url https://example.com/x', 'git remote get-url $R', 'git remote get-url origin upstream',
+  ])('%s is refused', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
   });
 });

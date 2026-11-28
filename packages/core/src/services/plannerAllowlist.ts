@@ -233,7 +233,7 @@ export const DEFAULT_PLANNER_ALLOWLIST: readonly string[] = [
   ...['issue list', 'issue view', 'issue status', 'pr list', 'pr view', 'pr diff', 'pr checks', 'pr status',
     'run list', 'run view', 'workflow list', 'workflow view', 'repo view', 'repo list', 'search', 'label list',
     'search *', 'status', 'cache list', 'project list', 'project view', 'project item-list', 'gist list', 'gist view',
-    'variable list', 'ruleset list', 'ruleset view', 'org list'].map((c) => `gh ${c}`),
+    'variable list', 'ruleset list', 'ruleset view', 'org list', 'release list', 'release view'].map((c) => `gh ${c}`),
   ...['issue list', 'issue view', 'mr list', 'mr view', 'mr diff', 'ci list', 'ci status', 'repo view',
     'release list', 'release view'].map((c) => `glab ${c}`),
   ...['issue list', 'issue view', 'sprint list', 'epic list', 'project list'].map((c) => `jira ${c}`),
