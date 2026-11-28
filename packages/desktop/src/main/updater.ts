@@ -139,3 +139,17 @@ export class UpdateController {
     for (const listener of this.listeners) listener(status);
   }
 }
+
+/**
+ * The autoUpdater out of `await import('electron-updater')`. Main is a CommonJS
+ * bundle that keeps a real import(), so Node loads the CommonJS package through
+ * its ESM loader and names only the exports cjs-module-lexer can see; the
+ * getter electron-updater defines autoUpdater with is not one of them, so it is
+ * found only on `default`, the package's exports object.
+ */
+export function autoUpdaterOf(mod: unknown): UpdaterPort {
+  const ns = mod as { autoUpdater?: UpdaterPort; default?: { autoUpdater?: UpdaterPort } } | null | undefined;
+  const updater = ns?.autoUpdater ?? ns?.default?.autoUpdater;
+  if (!updater) throw new Error('electron-updater did not provide autoUpdater');
+  return updater;
+}

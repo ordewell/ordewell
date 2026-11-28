@@ -8,6 +8,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- Updating from inside the desktop app works again: Update no longer fails with
+  "Cannot set properties of undefined (setting 'autoDownload')".
+
 ## [0.14.17] - 2026-11-27
 
 ### Fixed
