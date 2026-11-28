@@ -647,25 +647,26 @@ describe('the coordinator role and its defaults (#5)', () => {
   });
 
   // Every line of the system prompt is paid for on each turn; the rewrite had to fit in what was there.
+  // Raised by 50 for WORKFLOW step 2's "no question tool" and READ-ONLY TASKS' limits: planners called a refused question tool, and routed listeners and multi-repo prototypes to read-only tasks that could not run them.
   it('keeps the harness prompt within its word budget', () => {
     const p = buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, {
       harness: true, runner: 'claude-code', autorun: true, execution: true, isolatedExecution: { repos: ['.'], shared: [] },
     });
-    expect(words(p)).toBeLessThanOrEqual(5210);
+    expect(words(p)).toBeLessThanOrEqual(5260);
   });
 
   it('keeps a Codex planner, named its spawn_agent tool, within the same budget', () => {
     const p = buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, {
       harness: true, runner: 'codex', autorun: true, execution: true, isolatedExecution: { repos: ['.'], shared: [] },
     });
-    expect(words(p)).toBeLessThanOrEqual(5210);
+    expect(words(p)).toBeLessThanOrEqual(5260);
   });
 
   it('keeps an OpenCode planner with the research agent within the same budget (ADR-0066)', () => {
     const p = buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, {
       harness: true, runner: 'opencode', researchAgent: true, autorun: true, execution: true, isolatedExecution: { repos: ['.'], shared: [] },
     });
-    expect(words(p)).toBeLessThanOrEqual(5210);
+    expect(words(p)).toBeLessThanOrEqual(5260);
   });
 });
 
@@ -1334,5 +1335,21 @@ describe('the default thinking effort', () => {
     const text = selection(prompt);
     expect(text).toContain('- Default thinkingEffort to "medium" (else the next variant up); go higher only for architecture changes, a hard refactor or security-critical code. Use "low" for trivial edits.');
     expect(text).not.toContain('"medium" or "high" for moderate/complex tasks');
+  });
+});
+
+// The envelope refuses a harness's question tool, and Claude Code's planner has it withheld.
+describe('how the planner asks the user', () => {
+  it.each([false, true])('says questions go in the reply, with no question tool (harness: %s)', (harness) => {
+    const p = buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness, runner: 'claude-code' });
+    expect(p).toContain("Ask in your reply and end the turn; the user's next message answers. There is no question tool.");
+  });
+});
+
+// Each limit is one the code holds: Seatbelt's profile, and PatchCapture's refusal of several worktrees.
+describe('what a read-only task cannot do', () => {
+  it('names save_patch across repositories, and listeners and PTYs on macOS, as change-task work', () => {
+    const p = buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness: true, runner: 'claude-code' });
+    expect(p).toContain('A read-only task spanning several repositories cannot save_patch, and on macOS its sealed commands cannot listen on a port, even localhost, or open a PTY: such work is a change task.');
   });
 });

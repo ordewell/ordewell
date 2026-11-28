@@ -81,6 +81,8 @@ function readOnlyGuide(runnerModes: Record<RunnerId, RunnerModeInfo[]> | undefin
   const possible = tools || !runnerModes || able.length > 0;
   return [
     'Set "readOnly": true on an AI task that must land nothing: a review, an audit, an investigation, an analysis whose result is a report. It reads with its runner\'s own read tools, and its only shell is Ordewell run_command, which runs anything sealed: tests, scripts, builds, loops. Sealed means no network, no home directory or credentials, and nothing writable but the task\'s own throwaway worktree, where the run isolates. There it may edit files to try a fix, or add a failing test and run the suite on it. None of that lands: its task_complete report is its result, unless it keeps a prototype with save_patch, which a change task that depends on it applies with apply_patch. It reads the web only through Ordewell fetch and web_search, which the session\'s web-read settings decide without asking anyone, within a web-read budget of its own; a read those settings would only allow after asking is refused, and the task reports the gap. Never on an ops task, which acts in the workspace. A read-only task\'s subtasks are read-only too unless one sets "readOnly": false.',
+    // Each limit is the sandbox's or the capture's, as the code holds it: Seatbelt denies a listening socket and /dev/ptmx, bubblewrap gives a loopback and /dev/pts of the run's own (ADR-0036 S1), and PatchCapture refuses a task with several worktrees (ADR-0050).
+    'A read-only task spanning several repositories cannot save_patch, and on macOS its sealed commands cannot listen on a port, even localhost, or open a PTY: such work is a change task.',
     'You never choose a runner mode. Each task runs in its runner\'s mode for the user\'s autonomy level (Full or Guarded), or as a read-only task when "readOnly" is true.',
     ...(tools
       ? ['A read-only task must go to a runner list_runners marks "readOnly": true.']
@@ -707,7 +709,7 @@ function buildConversationBody(
     ...defaultsSection(agents),
     'WORKFLOW:',
     '1. Orient yourself as WHO EXPLORES says: read only what decides your next step or question, and delegate the rest.',
-    '2. Ask clarifying questions grounded in your findings. When the goal is vague, or a decision would materially change the outcome (storage engine, library choice, scope, API shape), ask the user before planning rather than assume: a silent guess is built into every task.',
+    '2. Ask clarifying questions grounded in your findings. When the goal is vague, or a decision would materially change the outcome (storage engine, library choice, scope, API shape), ask the user before planning rather than assume: a silent guess is built into every task. Ask in your reply and end the turn; the user\'s next message answers. There is no question tool.',
     '3. Choose a strategy for the goal (STRATEGY below).',
     '4. When the strategy calls for a plan and you have enough context, produce a prose outline.',
     `5. Write the outline in your reply, then ${submit} in the same reply.`,

@@ -239,9 +239,11 @@ function plannerAsk(name: string, input: Record<string, unknown>, server: string
  * `AskUserQuestion` reaches us as a tool request whose allow must carry the
  * user's `answers`, which no surface collects yet. Left on, the agent gets an
  * empty answer and carries on guessing; off, it asks in plain text and ends its
- * turn, which the task reads as "waiting for input" (ADR-0018, W1).
+ * turn, which a task reads as "waiting for input" (ADR-0018, W1) and a planner
+ * as its reply, the user's next message being the answer. A planner's envelope
+ * refuses the tool anyway, so left on it only spent a call on a refusal.
  */
-const TASK_DISALLOWED_TOOLS = ['AskUserQuestion'];
+const QUESTION_TOOLS = ['AskUserQuestion'];
 
 /**
  * The flags that make Claude Code speak its bidirectional protocol, the same
@@ -681,7 +683,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     const nativeShell = this.nativeShell;
     const allowedShell = nativeShell ? DISALLOWED_TOOLS.filter((tool) => !NATIVE_SHELL_TOOLS.has(tool)) : DISALLOWED_TOOLS;
     // Both names: 2.1.314 lists `Task`, and the flag takes it out of the session's tools (ADR-0056 M6).
-    const disallowed = opts.noSubagents ? [...allowedShell, ...SUBAGENT_TOOLS] : allowedShell;
+    const disallowed = [...QUESTION_TOOLS, ...allowedShell, ...(opts.noSubagents ? SUBAGENT_TOOLS : [])];
     const minimal = opts.runnerConfig === 'minimal';
     const nativeTools = [...SUBPLANNER_NATIVE_TOOLS, ...(nativeShell ? NATIVE_SHELL_TOOLS : []), ...(opts.noSubagents ? [] : ['Agent'])];
     const args = [
@@ -800,7 +802,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       ...TASK_PROTOCOL_ARGS,
       '--permission-prompt-tool', 'stdio',
       '--permission-mode', this.requestedMode,
-      '--disallowedTools', [...TASK_DISALLOWED_TOOLS, ...(readOnly ? DISALLOWED_TOOLS : [])].join(','),
+      '--disallowedTools', [...QUESTION_TOOLS, ...(readOnly ? DISALLOWED_TOOLS : [])].join(','),
       ...settingSources(readOnly, minimal, handed),
       ...(minimal && readOnly ? MINIMAL_READ_ONLY_ARGS : []),
       ...(opts.flags.effort ? claudeThinkingArgs(opts.flags.effort) : []),

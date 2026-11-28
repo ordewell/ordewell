@@ -217,6 +217,8 @@ describe('CliAgentAiService — Claude Code', () => {
     expect(disallowed).toContain('Write');
     expect(disallowed).toContain('Edit');
     expect(disallowed.split(',')).toEqual(expect.arrayContaining(['Bash', 'PowerShell', 'EnterPlanMode', 'ExitPlanMode']));
+    // The envelope refuses the question tool, so a planner asks in its reply instead.
+    expect(disallowed.split(',')).toContain('AskUserQuestion');
   });
 
   it.each([
