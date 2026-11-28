@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import type { TuiState } from '../state';
 import { machineA } from '../../../../core/src/services/__tests__/firstRunAMachine';
 import { firstRunADaemon, type FirstRunADaemon, type FirstRunTui } from './firstRunADaemon';
@@ -79,7 +79,9 @@ describe('first run, machine A: a goal refused because the planner is not ready'
 
     await tui.type(goal);
     const sent = tui.press('enter');
-    await expect.poll(() => d.turns.length).toBe(1);
+    // The turn opens after the agents' real probes (ADR-0078): vi.waitFor's
+    // patient default, not expect.poll's one second, which a loaded machine overruns.
+    await vi.waitFor(() => expect(d.turns.length).toBe(1));
     d.answer('Should the flag default to "world"?');
     await sent;
     const sessionId = tui.state().sessionId;

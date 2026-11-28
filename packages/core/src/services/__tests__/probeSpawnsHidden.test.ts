@@ -38,18 +38,20 @@ vi.mock('child_process', async (importOriginal) => {
     queueMicrotask(() => callback(null, 'ok', ''));
     return child();
   };
-  // A Windows discovery probe starts its job supervisor (ADR-0078), which
-  // says it is armed on stderr before the command answers.
+  // A Windows discovery probe goes to the host's job supervisor (ADR-0078).
+  // This one says it is ready and offers pipes that do not exist, so the
+  // probe fails before any command runs; what is pinned is the supervisor's
+  // own spawn.
   const { EventEmitter } = await import('events');
   const { PassThrough } = await import('stream');
-  const spawn = (command: string, args: string[], options: { env: Record<string, string> }) => {
+  const spawn = (command: string, args: string[], options: Record<string, unknown>) => {
     calls.push({ fn: 'spawn', command, args, options });
-    const fake = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), stdin: new PassThrough(), pid: 1, exitCode: null, signalCode: null, kill: () => true });
-    queueMicrotask(() => {
-      fake.stderr.end(`${options.env.ORDEWELL_PROBE_ARMED}\n`);
-      fake.stdout.end('v1.2.3\n');
-      setTimeout(() => fake.emit('close', 0, null), 10);
-    });
+    const stdout = new PassThrough();
+    const stdin = new PassThrough();
+    stdin.setEncoding('utf8');
+    stdin.on('data', (line: string) => { const [kind, id] = line.split(' '); if (kind === 'start') stdout.write(`listening ${id}\n`); });
+    const fake = Object.assign(new EventEmitter(), { stdout, stderr: new PassThrough(), stdin, pid: 1, exitCode: null, signalCode: null, kill: () => true, ref: () => {}, unref: () => {} });
+    queueMicrotask(() => stdout.write('ready\n'));
     return fake;
   };
   return { ...actual, default: { ...actual, exec, execFile, spawn }, exec, execFile, spawn };
@@ -67,6 +69,13 @@ function last(): (typeof calls)[number] {
   return call;
 }
 
+/** The supervisor spawns hidden, and starts each probe with no console and SW_HIDE, as windowsHide would. */
+function expectHiddenSupervisor(call: (typeof calls)[number]): void {
+  expect(call).toMatchObject({ fn: 'spawn', command: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', options: { windowsHide: true } });
+  expect(call.args?.at(-1)).toMatch(/\$creation = .*\$CREATE_NO_WINDOW/);
+  expect(call.args?.at(-1)).toContain('STARTF_USESHOWWINDOW');
+}
+
 describe('the agent probes spawn with no console window', () => {
   it('model discovery', async () => {
     const platform = process.platform;
@@ -74,9 +83,8 @@ describe('the agent probes spawn with no console window', () => {
     // Where the supervisor is found; a Linux host has no SystemRoot.
     const restore = setEnv({ SystemRoot: 'C:\\Windows' });
     try {
-      expect(await discoveryExec('opencode models', { timeout: 1000 })).toEqual({ stdout: 'v1.2.3\n' });
-      const call = last();
-      expect(call).toMatchObject({ fn: 'spawn', options: { windowsHide: true, env: { ORDEWELL_PROBE_LINE: '/d /s /c "opencode models"' } } });
+      await expect(discoveryExec('opencode models', { timeout: 1000 })).rejects.toThrow(/discovery cleanup could not be set up/);
+      expectHiddenSupervisor(last());
     } finally { restore(); Object.defineProperty(process, 'platform', { value: platform }); }
   });
 
@@ -85,9 +93,8 @@ describe('the agent probes spawn with no console window', () => {
     Object.defineProperty(process, 'platform', { value: 'win32' });
     const restore = setEnv({ SystemRoot: 'C:\\Windows' });
     try {
-      expect(await installationExec('claude --version', { timeout: 8000 })).toEqual({ stdout: 'v1.2.3\n' });
-      const call = last();
-      expect(call).toMatchObject({ fn: 'spawn', options: { windowsHide: true, env: { ORDEWELL_PROBE_LINE: '/d /s /c "claude --version"' } } });
+      await expect(installationExec('claude --version', { timeout: 8000 })).rejects.toThrow(/discovery cleanup could not be set up/);
+      expectHiddenSupervisor(last());
     } finally { restore(); Object.defineProperty(process, 'platform', { value: platform }); }
   });
 
