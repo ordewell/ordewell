@@ -45,7 +45,8 @@ it.
 
 A skill folder may be a symlink to a folder elsewhere, as may the `skills/`
 folder or a `SKILL.md`. A link that cannot be followed, because its target is
-gone or the links loop, is skipped, and `ordewell skills` reports it. On
+gone or unreadable or the links loop, is skipped, as is a `SKILL.md` that cannot
+be read, and `ordewell skills` reports it. On
 Windows, git checks a symlink out as a plain text file unless `core.symlinks` is
 on, so prefer real folders in skills you commit.
 

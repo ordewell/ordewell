@@ -581,6 +581,30 @@ describe('SkillsService', () => {
       );
     });
 
+    it('is reported when it is the skills folder itself and its target is gone', () => {
+      fs.rmdirSync(workspaceSkills);
+      link(path.join(elsewhere, 'gone'), workspaceSkills);
+
+      expect(createSkillsService(workspaceRoot).readCatalog().invalid).toEqual([
+        { name: 'skills', path: workspaceSkills, source: 'workspace', reason: unfollowable },
+      ]);
+    });
+
+    // A link to a file needs a privilege on Windows.
+    it.skipIf(process.platform === 'win32')('is reported when it is a SKILL.md and its target is gone', () => {
+      writeSkill(workspaceSkills, 'kept', { name: 'kept' }, 'Kept.');
+      const skillFile = path.join(workspaceSkills, 'broken', 'SKILL.md');
+      fs.mkdirSync(path.dirname(skillFile));
+      fs.symlinkSync(path.join(elsewhere, 'gone'), skillFile);
+      // A folder with no SKILL.md at all is no skill, and nothing to report.
+      fs.mkdirSync(path.join(workspaceSkills, 'notes'));
+
+      const svc = createSkillsService(workspaceRoot);
+
+      expect(svc.findSkill('broken')).toBeUndefined();
+      expect(svc.readCatalog().invalid).toEqual([{ name: 'broken', path: skillFile, source: 'workspace', reason: unfollowable }]);
+    });
+
     it('that leads back up the tree is not walked', () => {
       writeSkill(workspaceSkills, 'kept', { name: 'kept' }, 'Kept.');
       link(workspaceSkills, path.join(workspaceSkills, 'again'));
@@ -589,6 +613,56 @@ describe('SkillsService', () => {
 
       expect(svc.findSkill('again')).toBeUndefined();
       expect(svc.listSkills().filter((s) => s.source === 'workspace').map((s) => s.name)).toEqual(['kept']);
+    });
+  });
+
+  // Windows has no such permission bit, and root reads past it.
+  describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('what cannot be read', () => {
+    const locked: string[] = [];
+    const lock = (target: string): void => { fs.chmodSync(target, 0o000); locked.push(target); };
+    afterEach(() => { for (const target of locked.splice(0)) fs.chmodSync(target, 0o700); });
+
+    it.each(['a SKILL.md', 'the target of a linked SKILL.md'])('skips and reports %s', (what) => {
+      const dir = path.join(workspaceRoot, '.ordewell', 'skills');
+      writeSkill(dir, 'kept', { name: 'kept' }, 'Kept.');
+      const skillFile = path.join(dir, 'broken', 'SKILL.md');
+      fs.mkdirSync(path.dirname(skillFile));
+      const written = what === 'a SKILL.md' ? skillFile : path.join(tempDir('skills-locked-'), 'SKILL.md');
+      fs.writeFileSync(written, 'Body.');
+      if (written !== skillFile) fs.symlinkSync(written, skillFile);
+      lock(written);
+
+      const svc = createSkillsService(workspaceRoot);
+
+      expect(svc.listSkills().map((s) => s.name)).toContain('kept');
+      expect(svc.findSkill('broken')).toBeUndefined();
+      expect(svc.readCatalog().invalid).toEqual([
+        { name: 'broken', path: skillFile, source: 'workspace', reason: expect.stringContaining('EACCES') },
+      ]);
+    });
+
+    it('looks past an unreadable global SKILL.md to the workspace copy the catalog lists', () => {
+      const global = writeSkill(path.join(home, '.ordewell', 'skills'), 'mine', { name: 'mine' }, 'Global.');
+      writeSkill(path.join(workspaceRoot, '.ordewell', 'skills'), 'mine', { name: 'mine' }, 'Workspace.');
+      lock(global);
+
+      const svc = createSkillsService(workspaceRoot);
+
+      expect(svc.listSkills().find((s) => s.name === 'mine')?.source).toBe('workspace');
+      expect(svc.findSkill('mine')?.source).toBe('workspace');
+    });
+
+    it.each(['a linked skill folder', 'a linked skills folder'])('reports %s whose target it may not enter', (what) => {
+      const dir = path.join(workspaceRoot, '.ordewell', 'skills');
+      const target = tempDir('skills-closed-');
+      const at = what === 'a linked skill folder' ? path.join(dir, 'closed') : dir;
+      fs.mkdirSync(path.dirname(at), { recursive: true });
+      fs.symlinkSync(target, at, 'junction');
+      lock(target);
+
+      expect(createSkillsService(workspaceRoot).readCatalog().invalid).toEqual([
+        expect.objectContaining({ name: path.basename(at), reason: expect.stringContaining('EACCES') }),
+      ]);
     });
   });
 
