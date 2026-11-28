@@ -17,6 +17,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - The Claude Code planner no longer offers its question tool, which was always refused. The planner prompt says to ask in the reply.
 - The `record` tool states its length limits and that a constraint must be the user's exact words.
 - The planner prompt says what a read-only task cannot do: save a patch across several repositories, or on macOS listen on a port or open a PTY.
+- `task_complete` and the task prompt give a summary target of about 1,100 characters beside the 1,500 limit, and a refused summary is told to move the detail into `report` or `findings`.
+- The planner prompt says how a loop's AI check runs later rounds: it re-verifies the last round's problems and the fix diff, and ends a loop that is not converging so the plan can change.
+- The supervisor is told to retry a task that gave up fast on a cheaper model on a stronger model, or split it, rather than retry it unchanged.
+- The planner prompt says a read-only task's sealed command is stopped after 10 minutes, so full test suites go in a script task.
+- A read-only task's own reads can open files in its attempt's sealed scratch directory, where its commands write. Writes there, and other attempts' scratch, stay refused.
 
 ## [0.14.16] - 2026-11-27
 

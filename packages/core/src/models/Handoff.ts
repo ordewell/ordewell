@@ -235,6 +235,13 @@ export const HANDOFF_LIMITS = {
   report: REPORT_MAX_CHARS,
 } as const;
 
+/**
+ * What a summary should aim for, well under {@link HANDOFF_LIMITS}' summary
+ * so a draft that runs long still fits: summaries were refused most often
+ * a little over the limit, and each refusal re-sends the runner's context.
+ */
+export const SUMMARY_TARGET_CHARS = 1_100;
+
 /** Findings the plan's digest keeps of a handoff. */
 export const DIGEST_FINDINGS = 25;
 

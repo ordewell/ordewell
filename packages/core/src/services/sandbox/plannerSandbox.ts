@@ -583,6 +583,11 @@ export class PlannerShellSandbox {
     return this.scratchDir('sealed');
   }
 
+  /** The sealed runs' scratch directory if one has been made, without making it: what a read-only task's native reads may also read (ADR-0046). */
+  sealedScratch(): string | undefined {
+    return this.scratch.get('sealed');
+  }
+
   /** The session ended: its scratch directories go, and a next session starts with fresh ones and its own notice. */
   end(): void {
     for (const dir of this.scratch.values()) removeScratch(dir);

@@ -146,6 +146,20 @@ describe("a read-only task's shell (ADR-0046)", () => {
     }
   });
 
+  it('names its own sealed scratch once a sealed run made it, apart from another attempt\'s, for its native reads (ADR-0046)', async () => {
+    const fs = session();
+    const shell = fs.taskShell({ cwd: worktree, writable: worktree });
+    const other = fs.taskShell({ cwd: worktree, writable: worktree });
+    expect(shell.scratch?.()).toBeUndefined();
+    await shell.run('npm test');
+    await other.run('npm test');
+    expect(shell.scratch?.()).toBe(fs.ran[0].profile!.write[0]);
+    expect(other.scratch?.()).toBe(fs.ran[1].profile!.write[0]);
+    expect(other.scratch?.()).not.toBe(shell.scratch?.());
+    shell.end();
+    other.end();
+  });
+
   it("protects each worktree's .git in its sealed profile: the one writable worktree, or every repo's in a group (ADR-0046)", async () => {
     const lone = session();
     await lone.taskShell({ cwd: worktree, writable: worktree }).run('npm test');

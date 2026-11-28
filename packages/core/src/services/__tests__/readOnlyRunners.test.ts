@@ -14,7 +14,10 @@ import { resolveAssignment } from '../TaskAssignment';
 import { createTask } from '../../models/Task';
 import { mcpClientConfig } from '../mcp';
 import { decideReadOnlyTaskPermission } from '../harness/plannerPermissions';
-import { codexAnswer, fakeSpawn, fixture, flagJson, type ScriptedReply } from './harnessTestKit';
+import { codexAnswer, fakeMcpServer, fakeSpawn, fixture, flagJson, type ScriptedReply } from './harnessTestKit';
+import { StructuredRunner } from '../StructuredRunner';
+import { RunnerRegistry } from '../../plugins/RunnerRegistry';
+import type { AgentStartOptions } from '../harness/AgentAdapter';
 
 const mcp = mcpClientConfig({ token: 'test', url: 'http://127.0.0.1:4555/mcp', readOnly: true });
 const dirs: string[] = [];
@@ -78,6 +81,79 @@ describe('read-only runner profiles (ADR-0046)', () => {
     for (const root of [cwd, workspaceRoot]) { mkdirSync(root); writeFileSync(join(root, 'inside'), 'ok'); }
     expect(decideReadOnlyTaskPermission({ kind: 'path', path: 'inside', directory: false, confined: true }, { cwd, workspaceRoot })).toEqual({ decision: 'allow' });
     expect(decideReadOnlyTaskPermission({ kind: 'path', path: join(workspaceRoot, 'inside'), directory: false, confined: true }, { cwd, workspaceRoot })).toMatchObject({ decision: 'deny' });
+  });
+
+  // Its commands print paths under $TMPDIR, the attempt's sealed scratch; a native Read of one was refused as outside the workspace.
+  it('lets a read tool read the attempt\'s own sealed scratch, and nothing beside or above it', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ordewell-read-scratch-'));
+    dirs.push(dir);
+    const cwd = join(dir, 'task');
+    const workspaceRoot = join(dir, 'workspace');
+    const scratch = join(dir, 'scratch');
+    const sibling = join(dir, 'other-attempt');
+    for (const root of [cwd, workspaceRoot, scratch, sibling]) { mkdirSync(root); writeFileSync(join(root, 'out.txt'), 'ok'); }
+    writeFileSync(join(dir, 'secret'), 'secret');
+    symlinkSync(join(dir, 'secret'), join(scratch, 'planted'));
+    const site = { cwd, workspaceRoot, sealedScratch: () => scratch };
+    const read = (path: string, directory = false) => decideReadOnlyTaskPermission({ kind: 'path', path, directory }, site).decision;
+    expect(read(join(scratch, 'out.txt'))).toBe('allow');
+    expect(read(scratch, true)).toBe('allow');
+    expect(read(join(sibling, 'out.txt'))).toBe('deny');
+    expect(read(dir, true)).toBe('deny');
+    expect(read(join(scratch, '..', 'secret'))).toBe('deny');
+    // A link a sealed run left in its scratch is judged where it leads.
+    expect(read(join(scratch, 'planted'))).toBe('deny');
+    // Before the first sealed run there is no scratch, and nothing more is readable.
+    expect(decideReadOnlyTaskPermission({ kind: 'path', path: join(scratch, 'out.txt'), directory: false }, { cwd, workspaceRoot, sealedScratch: () => undefined }).decision).toBe('deny');
+    // A confined read stays in the worktree.
+    expect(decideReadOnlyTaskPermission({ kind: 'path', path: join(scratch, 'out.txt'), directory: false, confined: true }, site).decision).toBe('deny');
+  });
+
+  it('hands a read-only attempt\'s runner the scratch its own shell names, asked at each read', async () => {
+    const started: AgentStartOptions[] = [];
+    let made: string | undefined;
+    const runner = new StructuredRunner({ mcp: fakeMcpServer(), createAdapter: () => ({
+      agentId: 'claude-code', exited: false, start: async (opts: AgentStartOptions) => { started.push(opts); }, send: async () => {},
+      nativeSessionId: () => null, dispose: () => {}, mcpAttached: async () => 'connected' as const, interrupt: async () => false,
+      answerPermission: () => false, onProcessExit: () => {},
+    }) });
+    const shell = { run: async () => ({ output: '', success: true, truncated: false }), scratch: () => made, end: () => {} };
+    const session = await runner.spawn({ taskId: 'review', runner: 'claude-code', prompt: 'Review', mode: 'plan', cwd: '/task', workspaceRoot: '/workspace', registry: new RunnerRegistry(), shell });
+    try {
+      await vi.waitFor(() => expect(started).toHaveLength(1));
+      const opts = started[0];
+      expect(opts.kind === 'task' ? opts.sealedScratch?.() : 'not a task').toBeUndefined();
+      made = '/scratch/attempt-1';
+      expect(opts.kind === 'task' ? opts.sealedScratch?.() : 'not a task').toBe('/scratch/attempt-1');
+    } finally { await session.stop?.(); }
+  });
+
+  it('answers Claude\'s Read in its sealed scratch and refuses a write there', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ordewell-claude-scratch-'));
+    dirs.push(dir);
+    const scratch = join(dir, 'scratch');
+    mkdirSync(scratch);
+    writeFileSync(join(scratch, 'out.txt'), 'ok');
+    const { spawned, processDeps } = deps();
+    const adapter = new ClaudeCodeAdapter(processDeps);
+    try {
+      await adapter.start({ kind: 'task', cwd: '/task', workspaceRoot: '/workspace', sealedScratch: () => scratch, model: 'haiku', mode: 'plan', flags: resolveTaskRunnerFlags(CLAUDE_CODE_MANIFEST, { mode: 'plan' }), mcp });
+      void adapter.send('Review', () => undefined);
+      const requests: Array<[string, Record<string, unknown>, string]> = [
+        ['Read', { file_path: join(scratch, 'out.txt') }, 'allow'],
+        ['Grep', { path: scratch }, 'allow'],
+        ['Read', { file_path: join(dir, 'elsewhere') }, 'deny'],
+        ['Write', { file_path: join(scratch, 'out.txt'), content: 'bad' }, 'deny'],
+        ['Edit', { file_path: join(scratch, 'out.txt'), old_string: 'ok', new_string: 'bad' }, 'deny'],
+      ];
+      const proc = spawned.processes[0];
+      for (const [i, [tool_name, input, behavior]] of requests.entries()) {
+        proc.emitStdout(`${JSON.stringify({ type: 'control_request', request_id: String(i), request: { subtype: 'can_use_tool', tool_name, input } })}\n`);
+        await vi.waitFor(() => expect(proc.written.some((w) => w.includes(`"request_id":"${i}"`))).toBe(true));
+        const response = proc.written.map((w) => JSON.parse(w) as { response?: { request_id: string; response: { behavior: string } } }).find((w) => w.response?.request_id === String(i));
+        expect({ tool_name, behavior: response?.response?.response.behavior }).toEqual({ tool_name, behavior });
+      }
+    } finally { adapter.dispose(); }
   });
 
   it('starts Claude without native writes, shell, plan mode or hooks, and decides every native request', async () => {

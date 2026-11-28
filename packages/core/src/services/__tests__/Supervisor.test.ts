@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { LANDED_BLOCKER_ADVICE, Supervisor, wakeUpDigest, type RunEventInput, type SupervisedRun, type SupervisorHost } from '../Supervisor';
+import { LANDED_BLOCKER_ADVICE, RETRY_ESCALATION, Supervisor, wakeUpDigest, type RunEventInput, type SupervisedRun, type SupervisorHost } from '../Supervisor';
 import { boundedWakeUps, WAKE_MAX_CHARS, type RunEvent } from '../WakePolicy';
 
 const describeTask = (taskId: string) => `#${taskId.slice(1)} "Task ${taskId}"`;
@@ -773,6 +773,15 @@ describe('Supervisor', () => {
     expect(whole).toMatch(/Never give a retry a done criterion its own limits cannot meet/);
     expect(whole).toMatch(/nor call the rest solvable without evidence from the report/);
     expect(whole).toMatch(/The verdict is still its runner's task_complete, and nothing lands without a pass/);
+  });
+
+  // A cheaper model that gave up within minutes was retried unchanged, chain after chain.
+  it('tells a wake-up turn at Act to move a task that gave up fast on a cheaper model to a stronger one or split it', () => {
+    const whole = new Supervisor({ ...host({ level: 'act' }), retryLimit: () => 3 }).wakeUpTurn().brief?.whole ?? '';
+
+    expect(whole).toContain(RETRY_ESCALATION);
+    expect(RETRY_ESCALATION).toBe('When a task fails within minutes, or hands off incomplete, on a cheaper model, retry it on a stronger model or split it, rather than retrying it unchanged.');
+    expect(whole.indexOf(RETRY_ESCALATION)).toBeGreaterThan(whole.indexOf('Loop guards hold you'));
   });
 
   it('tells a wake-up turn at Act that a remainder shown undoable is a known gap with no task, and adds none for it once the run has ended (ADR-0029)', () => {

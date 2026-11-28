@@ -335,6 +335,7 @@ export abstract class BaseFileSystem implements IFileSystem {
         get scratch() { return sandbox.scratchPath(); },
         run: (script, at) => this.runOwn(site, roots, script, at, signal),
       })),
+      scratch: () => sandbox.sealedScratch(),
       end: () => sandbox.end(),
     };
   }

@@ -710,6 +710,12 @@ function watchBrief(readBudget: number): WakeBrief {
   };
 }
 
+/**
+ * Measured across runs: a cheaper model that gave up within minutes was retried
+ * unchanged, up to five times in a chain, failing the same way each time.
+ */
+export const RETRY_ESCALATION = 'When a task fails within minutes, or hands off incomplete, on a cheaper model, retry it on a stronger model or split it, rather than retrying it unchanged.';
+
 function actBrief(readBudget: number, retryLimit: number): WakeBrief {
   return {
     key: 'act',
@@ -724,6 +730,7 @@ function actBrief(readBudget: number, retryLimit: number): WakeBrief {
       'A task you stop stays on hold, and every task that depends on it waits, until it is retried or skipped: a stop alone moves nothing on. To change a stopped task\'s prompt and run it again, call edit_plan and then retry it in the same reply.',
       'A task paused on a usage limit can be resumed early with from "session" once the user says the limit has been reset.',
       `Loop guards hold you: you may retry one task up to ${retryLimit} times this run, and a skip of a task you retried counts as one more; a retry after a failure must change its prompt or model, or carry a new note; you may not re-add a task you removed or undo an edit of your own. A refused call says why and what would be accepted. When a guard stops you, escalate to the user rather than trying again.`,
+      RETRY_ESCALATION,
       'Then tell the user, in a few lines, what happened, what you did and why, and what needs them.',
     ].join('\n'),
     line: `You are the supervisor at Act now: you act and then tell the user, as you were told, with up to ${readBudget} reads a turn and ${retryLimit} retries of a task.`,
@@ -742,6 +749,7 @@ function subplannerBrief(readBudget: number, retryLimit: number): WakeBrief {
       'Otherwise act on it yourself: run, stop, retry or skip tasks, message their runners, answer their checkpoints, and change tasks with edit_plan, then retry_task in the same reply.',
       readsLine(readBudget),
       `Loop guards hold you: you may retry one task up to ${retryLimit} times this run, and a retry after a failure must change its prompt or model, or carry a new note. When a guard stops you, end with task_complete and status "blocked".`,
+      RETRY_ESCALATION,
     ].join('\n'),
     line: `You have up to ${readBudget} reads a turn and ${retryLimit} retries of a task.`,
   };

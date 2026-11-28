@@ -6,13 +6,13 @@ import { createTask, type Task } from '../../models/Task';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import { StructuredRunner } from '../StructuredRunner';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
-import { OrdewellMcpServer, READ_ONLY_TASK_TOOLS, TASK_TOOLS, type McpClientConfig } from '../mcp';
+import { OrdewellMcpServer, READ_ONLY_TASK_TOOLS, TASK_COMPLETION_CONTRACT, TASK_TOOLS, taskToolSet, type McpClientConfig } from '../mcp';
 import { fakeConfig } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 import type { AgentEvent, AgentStartOptions, TaskModeAgentAdapter } from '../harness/AgentAdapter';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { TaskLogEvent } from '../../models/TaskLog';
-import { handoffDigest, type StoredHandoff } from '../../models/Handoff';
+import { handoffDigest, SUMMARY_TARGET_CHARS, type StoredHandoff } from '../../models/Handoff';
 
 /**
  * A task run end to end over the real transport: the orchestrator spawns a
@@ -382,13 +382,23 @@ describe('the handoff a task_complete call carries (ADR-0047)', () => {
 
     expect(refused.isError).toBe(true);
     expect(text(refused)).toMatch(/summary/);
-    expect(text(refused)).toMatch(/the limit is 1500, 1 over: cut at least 1 character\. Put the long form in report/);
+    expect(text(refused)).toMatch(/summary is 1501 characters; the limit is 1500, 1 over: cut at least 1 character\. Move the detail into report \(up to 20000 characters\) or findings, and call again\./);
     await new Promise((resolve) => setTimeout(resolve, 60));
     expect(get('t1').status).toBe('in_progress');
 
     expect((await complete({ summary: 'Short.', report: 'x'.repeat(1_501) })).isError).toBe(false);
     await vi.waitFor(() => expect(get('t1').status).toBe('completed'));
     expect(get('t1').handoff?.summary).toBe('Short.');
+  });
+
+  // About three in ten first calls were refused a little over the limit: the target leaves room for a draft that runs long.
+  it('states the summary\'s target and limit where the runner writes one: the schema, the tool and the task contract', () => {
+    const tool = taskToolSet({}).find((t) => t.name === 'task_complete')!;
+    const summary = (tool.inputSchema as unknown as { properties: Record<string, { description?: string }> }).properties.summary;
+    expect(SUMMARY_TARGET_CHARS).toBe(1_100);
+    expect(summary.description).toContain('Aim for about 1100 characters; at most 1500 characters, or the call is refused');
+    expect(tool.description).toContain('the summary is at most 1500 characters, best about 1100');
+    expect(TASK_COMPLETION_CONTRACT).toContain('Aim for about 1100 characters: it is at most 1500, and a call over a limit is refused');
   });
 
   it('refuses a URL that is not http or https, naming the field, the value and what is accepted, and records nothing', async () => {

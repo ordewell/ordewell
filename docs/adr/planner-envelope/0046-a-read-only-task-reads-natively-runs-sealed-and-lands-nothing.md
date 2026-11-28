@@ -156,7 +156,13 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
 ### Its runner's own tools
 
 - **Native reads stay.** The runner's own read, search and list tools work as
-  they do for any task, each runner being built around them.
+  they do for any task, each runner being built around them. Beyond the task
+  worktree and the session workspace they read one more directory: the
+  attempt's own sealed scratch, its sealed runs' `TMPDIR`, once a sealed run
+  has made it, so a task can open what its commands wrote there. Only that
+  attempt's, never another's or a parent; `decideReadOnlyTaskPermission`
+  judges it as it judges the worktree, a link followed to where it leads, and
+  a write there is a write tool's, withheld like any other.
 - **Native writes and the native shell are withheld, on every runner.** They
   run as the user, outside any sandbox, and a sealed command can make a
   symlink in the worktree: a native write tool would write through it wherever
@@ -166,8 +172,8 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
 - **Claude Code** uses `default`, its stdio permission prompt, user setting
   sources only and hooks disabled, as the planner does (ADR-0028). `Read`,
   `Grep`, `Glob` and `LS` are decided automatically by Ordewell against the
-  task worktree and session workspace, with symlinks resolved. A read outside
-  both is refused, never asked. Edit, write, notebook, shell and plan-mode
+  task worktree, session workspace and the attempt's sealed scratch, with
+  symlinks resolved. A read outside them is refused, never asked. Edit, write, notebook, shell and plan-mode
   transition tools are withheld. Ordewell's task tools, including `read`,
   are pre-allowed.
   The assigned model runs directly; native plan mode's model pin is gone.
@@ -449,7 +455,11 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
   links point outside it. A native read at the same moment as a sealed run
   could follow a link in the instant before it is removed: any link on Linux,
   and on macOS one inside a directory the run moved in. Closing that on Linux
-  needs a seccomp filter in the bubblewrap backend.
+  needs a seccomp filter in the bubblewrap backend. The attempt's sealed
+  scratch keeps its links, since nothing outside the sandbox runs from it,
+  so a native read there is judged by where a link leads when it is decided,
+  and a sealed run that replaces the file in the instant before the read has
+  the same race.
 - No unsealed git runs below a read-only task's working directory: Ordewell's
   git runs only at repo roots, its patch capture only inside the task's seal
   (ADR-0050), each runner's own only at the task's working
@@ -509,3 +519,4 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
 - 2026-11-18 — Pi runs read-only tasks on its read tools and Ordewell's, each read decided by `decideReadOnlyTaskPermission` through the extension Ordewell loads into it (#78).
 - 2026-11-20 — a read-only task's Pi starts with `--no-context-files`, the repository's instruction files handed to it as text (#78).
 - 2026-11-21 — a plan change that brings a read-only AI task on a host with no sandbox says, in its answer, that the task can run no test, build or script.
+- 2026-11-28 — a read-only task's native reads also read its attempt's own sealed scratch directory, never write it.

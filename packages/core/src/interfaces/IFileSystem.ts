@@ -133,6 +133,8 @@ export interface TaskShell {
    * sealed runs it makes. `signal` stops those runs.
    */
   hold?<T>(work: (runs: OwnSealedRuns) => Promise<T>, signal?: AbortSignal): Promise<T>;
+  /** This attempt's own sealed scratch directory, once a sealed run has made it: its runner's native reads may read it, never write it (ADR-0046). */
+  scratch?(): string | undefined;
   /** The attempt ended: its scratch directory goes. */
   end(): void;
 }
