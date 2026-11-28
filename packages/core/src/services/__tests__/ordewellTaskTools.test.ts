@@ -392,13 +392,14 @@ describe('the handoff a task_complete call carries (ADR-0047)', () => {
   });
 
   // About three in ten first calls were refused a little over the limit: the target leaves room for a draft that runs long.
-  it('states the summary\'s target and limit where the runner writes one: the schema, the tool and the task contract', () => {
+  it('states the summary\'s target and limit where the runner writes one: the schema and the tool', () => {
     const tool = taskToolSet({}).find((t) => t.name === 'task_complete')!;
     const summary = (tool.inputSchema as unknown as { properties: Record<string, { description?: string }> }).properties.summary;
     expect(SUMMARY_TARGET_CHARS).toBe(1_100);
     expect(summary.description).toContain('Aim for about 1100 characters; at most 1500 characters, or the call is refused');
     expect(tool.description).toContain('the summary is at most 1500 characters, best about 1100');
-    expect(TASK_COMPLETION_CONTRACT).toContain('Aim for about 1100 characters: it is at most 1500, and a call over a limit is refused');
+    // The contract keeps its recorded words: ACP and Pi replays compare the first prompt with what was recorded.
+    expect(TASK_COMPLETION_CONTRACT).toContain('It is at most 1500 characters, and a call over a limit is refused');
   });
 
   it('refuses a URL that is not http or https, naming the field, the value and what is accepted, and records nothing', async () => {
