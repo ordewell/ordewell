@@ -5,6 +5,7 @@
  */
 import { _electron as electron, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { SETTINGS_ENV_ALLOWLIST } from '@ordewell/core';
+import { homeEnv } from '@ordewell/core/testing';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
@@ -51,6 +52,20 @@ export async function untilListening(port: number, up: boolean): Promise<boolean
   return false;
 }
 
+/**
+ * `env` with `vars` laid over it, an undefined one removed. Windows names a
+ * variable in any case, so an inherited `Path` or `ProgramData` is dropped
+ * where `vars` sets it, rather than left beside it for the child to choose from.
+ */
+function overlay(env: Readonly<Record<string, string | undefined>>, vars: Readonly<Record<string, string | undefined>>): Record<string, string> {
+  const fold = process.platform === 'win32' ? (key: string) => key.toUpperCase() : (key: string) => key;
+  const replaced = new Set(Object.keys(vars).map(fold));
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) if (value !== undefined && !replaced.has(fold(key))) out[key] = value;
+  for (const [key, value] of Object.entries(vars)) if (value !== undefined) out[key] = value;
+  return out;
+}
+
 export function git(sandbox: Sandbox, ...args: string[]): string {
   return execFileSync('git', args, { cwd: sandbox.repo, encoding: 'utf8', env: { ...process.env, HOME: sandbox.home } });
 }
@@ -83,6 +98,7 @@ export function makeSandbox(prefix = 'ordewell-desktop-e2e-'): Sandbox {
  */
 function hermeticPath(sandbox: Sandbox): string {
   const bin = path.join(sandbox.tmp, 'bin');
+  if (process.platform === 'win32') return windowsHermeticPath(bin);
   if (!fs.existsSync(bin)) {
     fs.mkdirSync(bin);
     fs.symlinkSync(process.execPath, path.join(bin, 'node'));
@@ -90,6 +106,28 @@ function hermeticPath(sandbox: Sandbox): string {
     for (const absent of ['codex', 'opencode']) fs.writeFileSync(path.join(bin, absent), '#!/bin/sh\nexit 127\n', { mode: 0o755 });
   }
   return [path.join(ROOT, 'bench/pipeline/fake-claude'), bin, '/usr/bin', '/bin'].join(path.delimiter);
+}
+
+/**
+ * The same PATH on Windows, where a symlink with no `.exe` starts nothing and
+ * a `#!/bin/sh` stub is no command: the directories that hold this node and
+ * git, the system's own in place of /usr/bin and /bin, and the stubs as batch
+ * files ahead of them. Git found in Git Bash's form (`/mingw64/bin/git`) would
+ * name no Windows file, so it is looked for on PATH as `git.exe`. PowerShell's
+ * directory is one of the system's own too: the app's terminal opens
+ * `powershell.exe`, which node-pty looks for on the app's own PATH.
+ */
+function windowsHermeticPath(bin: string): string {
+  if (!fs.existsSync(bin)) {
+    fs.mkdirSync(bin);
+    for (const absent of ['codex', 'opencode']) fs.writeFileSync(path.join(bin, `${absent}.cmd`), '@exit /b 127\r\n');
+  }
+  const gitDir = (process.env.PATH ?? '').split(path.delimiter)
+    .map((entry) => entry.replace(/^"|"$/g, ''))
+    .find((entry) => entry && fs.existsSync(path.join(entry, 'git.exe')));
+  if (!gitDir) throw new Error('the desktop e2e needs git.exe on PATH');
+  const system = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32');
+  return [path.join(ROOT, 'bench', 'pipeline', 'fake-claude'), bin, path.dirname(process.execPath), gitDir, system, path.join(system, 'WindowsPowerShell', 'v1.0')].join(path.delimiter);
 }
 
 export interface EnvOptions {
@@ -119,10 +157,10 @@ export function appEnv(sandbox: Sandbox, daemonPort: number, mockPort: number, o
     if (value === undefined || /^(ORDEWELL_|VSCODE_|CLAUDE)/.test(key) || key === 'ELECTRON_RUN_AS_NODE' || providerEnv(key)) continue;
     env[key] = value;
   }
+  // HOME alone moves no home on Windows: the app's daemon would read and write
+  // the developer's own ~/.ordewell, and find the agents installed under their profile.
   return {
-    ...env,
-    HOME: sandbox.home,
-    PATH: hermeticPath(sandbox),
+    ...overlay(env, { ...homeEnv(sandbox.home), PATH: hermeticPath(sandbox) }),
     ORDEWELL_PORT: String(daemonPort),
     ORDEWELL_NO_VERSION_CHECK: '1',
     // A spec's plan passes on a fresh HOME, which owes the notice; a screenshot is no place for it (ADR-0075).

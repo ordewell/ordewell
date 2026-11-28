@@ -49,7 +49,9 @@ describe('first run: an admitted opening whose planner fails', () => {
 
   /** Both deliveries are in: the saved session's broadcast and the call's failure. */
   async function bothDelivered(tui: FirstRunTui): Promise<void> {
-    await expect.poll(() => tui.actions.some((a) => a.type === 'sessionMessage' && a.message.type === 'plan_generated')).toBe(true);
+    // The plan arrives after the agents' real probes (ADR-0078): vi.waitFor's
+    // patient default, not expect.poll's one second, which a loaded machine overruns.
+    await vi.waitFor(() => expect(tui.actions.some((a) => a.type === 'sessionMessage' && a.message.type === 'plan_generated')).toBe(true));
     expect(tui.actions.filter((a) => a.type === 'failed')).toHaveLength(1);
   }
 
