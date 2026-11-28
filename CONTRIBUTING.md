@@ -481,15 +481,23 @@ home of configuration.
 
 ## Releasing
 
-Releases are driven by a version tag. Bump every package to the same version
-(`cli-alias` pins `@ordewell/cli` exactly), move each changelog's
-`[Unreleased]` entries under the new version (`CHANGELOG.md`, and
-`packages/vscode/CHANGELOG.md`, which ships in the extension and keeps only
-what a VS Code user sees), commit as `release: X.Y.Z`, then:
+Releases are driven by a version tag. On a `release/X.Y.Z` branch, bump every
+package to the same version (`cli-alias` pins `@ordewell/cli` exactly), move
+each changelog's `[Unreleased]` entries under the new version (`CHANGELOG.md`,
+and `packages/vscode/CHANGELOG.md`, which ships in the extension and keeps only
+what a VS Code user sees) and commit as `release: X.Y.Z`. Open a pull request,
+merge it once its required checks pass, and wait for `main`'s push CI to pass on
+the merge commit. Then put an annotated tag on that commit and push only the
+tag:
 
 ```bash
-git tag v0.4.6 && git push origin v0.4.6
+git tag -a vX.Y.Z <merge-sha> -F notes.md --cleanup=verbatim && git push origin vX.Y.Z
 ```
+
+`notes.md` holds the version's changelog entries. The tag's message becomes the
+GitHub Release notes, so a lightweight tag would publish the commit message
+instead. `--cleanup=verbatim` keeps Markdown headings, which git otherwise drops
+as comments.
 
 Before tagging a release that signs the macOS CLI binaries, rehearse the
 signing on `main`: `gh workflow run cli-build.yml --ref main -f
@@ -508,6 +516,14 @@ verify the tag matches every `package.json` and build, then:
 - **VS Code**: packages the extension, publishes it to the Marketplace, then
   publishes the same `.vsix` to Open VSX so Cursor, VSCodium and Windsurf never
   lag a release.
+
+Once both have published, the workflow creates the GitHub Release, attaches the
+CLI archives, `install.sh` and `SHA256SUMS` (and the desktop installers when the
+repository variable `ORDEWELL_RELEASE_DESKTOP` is `true`), and marks it latest
+if it is the highest version. From those files it publishes to
+`ordewell/homebrew-tap` when `HOMEBREW_TAP_TOKEN` or
+`HOMEBREW_TAP_DEPLOY_KEY` is set, and, for a release with the desktop app and
+`WINGET_TOKEN`, opens a pull request on `microsoft/winget-pkgs`.
 
 Secrets required: `NPM_TOKEN` (npm publish access), `VSCE_PAT` (Marketplace
 scope) and `OVSX_PAT` (an Open VSX access token). The Open VSX step fails the
