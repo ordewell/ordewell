@@ -79,7 +79,10 @@ export function skillTooLarge(skill: Pick<SkillInfo, 'name' | 'content'>): strin
   return words > SKILL_WORD_CAP ? `"${skill.name}" is ${words} words, over the ${SKILL_WORD_CAP}-word cap for a skill; shorten it` : undefined;
 }
 
-/** A skill folder no name can reach — `/name`, a plan and a spawn all use the folder name — so it is listed nowhere. */
+/**
+ * A skills-folder entry that is listed nowhere: a name no skill can have (`/name`,
+ * a plan and a spawn all use the folder name), or a link that leads nowhere.
+ */
 export interface InvalidSkill {
   name: string;
   /** Absolute path to the folder's SKILL.md. */
@@ -217,13 +220,38 @@ function fileHash(file: string): string | undefined {
   }
 }
 
+/**
+ * What a skills-folder entry leads to. A link is judged by its target, so a
+ * skill folder may live elsewhere. `stat` fails on a link that loops, as on
+ * one whose target is gone, and only a skill folder's own SKILL.md is read, so
+ * a link back up the tree is never walked.
+ */
+function followEntry(dir: string, entry: fs.Dirent): 'folder' | 'other' | { unfollowable: string } {
+  if (entry.isDirectory()) return 'folder';
+  if (!entry.isSymbolicLink()) return 'other';
+  try {
+    return fs.statSync(path.join(dir, entry.name)).isDirectory() ? 'folder' : 'other';
+  } catch (err) {
+    return { unfollowable: (err as NodeJS.ErrnoException).code ?? String(err) };
+  }
+}
+
 function readDir(dir: string, source: SkillSource): { skills: SkillInfo[]; invalid: InvalidSkill[] } {
   const skills: SkillInfo[] = [];
   const invalid: InvalidSkill[] = [];
   if (!fs.existsSync(dir)) return { skills, invalid };
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
+    const kind = followEntry(dir, entry);
+    if (kind === 'other') continue;
     const skillFile = path.join(dir, entry.name, 'SKILL.md');
+    if (kind !== 'folder') {
+      // A dot name is no skill's: an editor's lock file is a dangling link too.
+      if (!entry.name.startsWith('.')) {
+        const reason = `symlink cannot be followed (${kind.unfollowable}): its target is missing or unreadable, or the link loops`;
+        invalid.push({ name: entry.name, path: skillFile, source, reason });
+      }
+      continue;
+    }
     if (!fs.existsSync(skillFile)) continue;
     if (!isSkillName(entry.name)) {
       invalid.push({ name: entry.name, path: skillFile, source, reason: INVALID_SKILL_NAME_REASON });
@@ -247,7 +275,7 @@ function skillFileIn(dir: string, name: string): string | undefined {
   } catch {
     return undefined;
   }
-  if (!entries.some((entry) => entry.isDirectory() && entry.name === name)) return undefined;
+  if (!entries.some((entry) => entry.name === name && followEntry(dir, entry) === 'folder')) return undefined;
   const skillFile = path.join(dir, name, 'SKILL.md');
   return fs.existsSync(skillFile) ? skillFile : undefined;
 }

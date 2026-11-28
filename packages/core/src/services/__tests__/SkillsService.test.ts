@@ -2,7 +2,7 @@ import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { createSkillsService, workspaceSkillRoots } from '../SkillsService';
+import { createSkillsService, SKILL_WORD_CAP, skillTooLarge, skillWords, workspaceSkillRoots } from '../SkillsService';
 
 let home = '';
 let workspaceRoot = '';
@@ -513,6 +513,82 @@ describe('SkillsService', () => {
         { name: 'PR-Review', path: upper, source: 'global', reason: expect.stringMatching(/^not a valid skill name/) },
         { name: 'pr.review', path: dotted, source: 'workspace', reason: expect.stringMatching(/^not a valid skill name/) },
       ]);
+    });
+  });
+
+  describe('a symlinked skill folder', () => {
+    // A junction needs no privilege on Windows; elsewhere the type is ignored.
+    const link = (target: string, at: string): void => fs.symlinkSync(target, at, 'junction');
+    const unfollowable = expect.stringMatching(/^symlink cannot be followed/);
+    let workspaceSkills = '';
+    let elsewhere = '';
+
+    beforeEach(() => {
+      workspaceSkills = path.join(workspaceRoot, '.ordewell', 'skills');
+      fs.mkdirSync(workspaceSkills, { recursive: true });
+      elsewhere = tempDir('skills-elsewhere-');
+    });
+
+    it.each(['workspace', 'global'] as const)('is listed and found among the %s skills', (scope) => {
+      const dir = scope === 'workspace' ? workspaceSkills : path.join(home, '.ordewell', 'skills');
+      fs.mkdirSync(dir, { recursive: true });
+      writeSkill(elsewhere, 'linked', { name: 'linked', 'applies-to': 'task' }, 'Linked body.');
+      link(path.join(elsewhere, 'linked'), path.join(dir, 'linked'));
+
+      const svc = createSkillsService(workspaceRoot);
+
+      const expected = { name: 'linked', source: scope, content: 'Linked body.', path: path.join(dir, 'linked', 'SKILL.md') };
+      expect(svc.findSkill('linked')).toMatchObject(expected);
+      expect(svc.listSkills().find((s) => s.name === 'linked')).toMatchObject(expected);
+      expect(svc.readCatalog().invalid).toEqual([]);
+    });
+
+    it('is held to the size cap like any other', () => {
+      writeSkill(elsewhere, 'huge', { name: 'huge' }, 'word '.repeat(SKILL_WORD_CAP + 1));
+      link(path.join(elsewhere, 'huge'), path.join(workspaceSkills, 'huge'));
+
+      const skill = createSkillsService(workspaceRoot).findSkill('huge')!;
+
+      expect(skillWords(skill)).toBe(SKILL_WORD_CAP + 1);
+      expect(skillTooLarge(skill)).toMatch(/over the .*-word cap/);
+    });
+
+    it('is skipped and reported when its target is gone', () => {
+      writeSkill(workspaceSkills, 'kept', { name: 'kept' }, 'Kept.');
+      link(path.join(elsewhere, 'gone'), path.join(workspaceSkills, 'dangling'));
+      link(path.join(elsewhere, 'gone'), path.join(workspaceSkills, '.#lock'));
+
+      const svc = createSkillsService(workspaceRoot);
+
+      expect(svc.findSkill('dangling')).toBeUndefined();
+      expect(svc.listSkills().map((s) => s.name)).toContain('kept');
+      expect(svc.readCatalog().invalid).toEqual([
+        { name: 'dangling', path: path.join(workspaceSkills, 'dangling', 'SKILL.md'), source: 'workspace', reason: unfollowable },
+      ]);
+    });
+
+    it('is skipped and reported when links loop', () => {
+      writeSkill(workspaceSkills, 'kept', { name: 'kept' }, 'Kept.');
+      link(path.join(workspaceSkills, 'pong'), path.join(workspaceSkills, 'ping'));
+      link(path.join(workspaceSkills, 'ping'), path.join(workspaceSkills, 'pong'));
+
+      const svc = createSkillsService(workspaceRoot);
+
+      expect(svc.findSkill('ping')).toBeUndefined();
+      expect(svc.listSkills().map((s) => s.name)).toContain('kept');
+      expect(svc.readCatalog().invalid).toEqual(
+        ['ping', 'pong'].map((name) => expect.objectContaining({ name, reason: unfollowable })),
+      );
+    });
+
+    it('that leads back up the tree is not walked', () => {
+      writeSkill(workspaceSkills, 'kept', { name: 'kept' }, 'Kept.');
+      link(workspaceSkills, path.join(workspaceSkills, 'again'));
+
+      const svc = createSkillsService(workspaceRoot);
+
+      expect(svc.findSkill('again')).toBeUndefined();
+      expect(svc.listSkills().filter((s) => s.source === 'workspace').map((s) => s.name)).toEqual(['kept']);
     });
   });
 

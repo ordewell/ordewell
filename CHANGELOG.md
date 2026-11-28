@@ -8,6 +8,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- A symlinked skill folder is now listed and found. A link that is broken or
+  loops is skipped, and `ordewell skills` reports it.
+
 ## [0.14.16] - 2026-11-27
 
 ### Fixed

@@ -43,6 +43,12 @@ To keep one of these from being offered, add `disable-model-invocation: true` to
 your copy in `~/.ordewell/skills/<name>/SKILL.md`; Ordewell will not overwrite
 it.
 
+A skill folder may be a symlink to a folder elsewhere, as may the `skills/`
+folder or a `SKILL.md`. A link that cannot be followed, because its target is
+gone or the links loop, is skipped, and `ordewell skills` reports it. On
+Windows, git checks a symlink out as a plain text file unless `core.symlinks` is
+on, so prefer real folders in skills you commit.
+
 ## Size cap
 
 A skill body may have at most 2,000 words (the frontmatter is not counted). The
@@ -191,5 +197,5 @@ ordewell skills [--workspace /path] [--json]
 
 Prints each skill's name, scope, `applies-to`, who can invoke it, and the path
 to its `SKILL.md`, then any workspace skill shadowed by a global one and any
-skill folder skipped for an invalid name (`shadowed` and `invalid` in `--json`).
-It only reads; it changes nothing.
+skill folder skipped for an invalid name or a link that cannot be followed
+(`shadowed` and `invalid` in `--json`). It only reads; it changes nothing.
