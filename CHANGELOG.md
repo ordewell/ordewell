@@ -8,6 +8,16 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- The planner can run `gh release list` and `gh release view`, which are on the default planner allowlist. Every other `gh release` action stays refused.
+- The planner can run `git remote`, `git remote -v`, `git remote get-url` and `git remote show -n` without asking. Actions that change a remote, and `git remote show` without `-n`, stay refused.
+- A command that runs sealed instead of being refused says why when it fails: the rule it met, or in Full the allowlist entry that would let it run with the network. A single command is no longer told to split itself up.
+- The `run_command` description says what Full does with a command the allowlist does not cover.
+- The Claude Code planner no longer offers its question tool, which was always refused. The planner prompt says to ask in the reply.
+- The `record` tool states its length limits and that a constraint must be the user's exact words.
+- The planner prompt says what a read-only task cannot do: save a patch across several repositories, or on macOS listen on a port or open a PTY.
+
 ## [0.14.16] - 2026-11-27
 
 ### Fixed
