@@ -79,7 +79,10 @@ export function skillTooLarge(skill: Pick<SkillInfo, 'name' | 'content'>): strin
   return words > SKILL_WORD_CAP ? `"${skill.name}" is ${words} words, over the ${SKILL_WORD_CAP}-word cap for a skill; shorten it` : undefined;
 }
 
-/** A skill folder no name can reach — `/name`, a plan and a spawn all use the folder name — so it is listed nowhere. */
+/**
+ * A skills-folder entry that is listed nowhere: a name no skill can have (`/name`,
+ * a plan and a spawn all use the folder name), or a link that leads nowhere.
+ */
 export interface InvalidSkill {
   name: string;
   /** Absolute path to the folder's SKILL.md. */
@@ -150,7 +153,7 @@ function splitFrontmatter(raw: string): { fields: Map<string, string>; body: str
   return { fields, body: raw.slice(end + 4).replace(/^\n+/, '') };
 }
 
-function parseSkillFile(filePath: string, name: string, source: SkillSource): SkillInfo | undefined {
+function parseSkillFile(filePath: string, name: string, source: SkillSource): SkillInfo {
   const raw = readSkillText(filePath);
   const split = splitFrontmatter(raw);
   const frontmatter: Frontmatter = {};
@@ -189,6 +192,15 @@ function parseSkillFile(filePath: string, name: string, source: SkillSource): Sk
   };
 }
 
+/** A skill as lookup sees it: one that cannot be read is not there, as the catalog has it ({@link readDir}). */
+function readableSkill(filePath: string, name: string, source: SkillSource): SkillInfo | undefined {
+  try {
+    return parseSkillFile(filePath, name, source);
+  } catch {
+    return undefined;
+  }
+}
+
 function copyDirSync(src: string, dest: string): void {
   fs.mkdirSync(dest, { recursive: true });
   const entries = fs.readdirSync(src, { withFileTypes: true });
@@ -217,20 +229,86 @@ function fileHash(file: string): string | undefined {
   }
 }
 
+/**
+ * What a skills-folder entry leads to. A link is judged by its target, so a
+ * skill folder may live elsewhere. `stat` fails on a link that loops, as on
+ * one whose target is gone, and only a skill folder's own SKILL.md is read, so
+ * a link back up the tree is never walked.
+ */
+function followEntry(dir: string, entry: fs.Dirent): 'folder' | 'other' | { unfollowable: string } {
+  if (entry.isDirectory()) return 'folder';
+  if (!entry.isSymbolicLink()) return 'other';
+  try {
+    return fs.statSync(path.join(dir, entry.name)).isDirectory() ? 'folder' : 'other';
+  } catch (err) {
+    return { unfollowable: errorCode(err) };
+  }
+}
+
+function errorCode(err: unknown): string {
+  return (err as NodeJS.ErrnoException).code ?? String(err);
+}
+
+function isLink(file: string): boolean {
+  try {
+    return fs.lstatSync(file).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function unfollowableReason(code: string): string {
+  return `symlink cannot be followed (${code}): its target is missing or unreadable, or the link loops`;
+}
+
+/**
+ * Why `file`, which was to be opened and could not be, is reported; undefined
+ * when nothing is there at all, which is no fault: no skills folder, or a
+ * folder that is no skill's.
+ */
+function brokenReason(file: string, err: unknown): string | undefined {
+  const code = errorCode(err);
+  if (isLink(file)) return unfollowableReason(code);
+  return code === 'ENOENT' || code === 'ENOTDIR' ? undefined : `cannot be read (${code})`;
+}
+
 function readDir(dir: string, source: SkillSource): { skills: SkillInfo[]; invalid: InvalidSkill[] } {
   const skills: SkillInfo[] = [];
   const invalid: InvalidSkill[] = [];
-  if (!fs.existsSync(dir)) return { skills, invalid };
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (err) {
+    const reason = brokenReason(dir, err);
+    if (reason) invalid.push({ name: path.basename(dir), path: dir, source, reason });
+    return { skills, invalid };
+  }
+  for (const entry of entries) {
+    const kind = followEntry(dir, entry);
+    if (kind === 'other') continue;
     const skillFile = path.join(dir, entry.name, 'SKILL.md');
-    if (!fs.existsSync(skillFile)) continue;
-    if (!isSkillName(entry.name)) {
-      invalid.push({ name: entry.name, path: skillFile, source, reason: INVALID_SKILL_NAME_REASON });
+    const skip = (reason: string): void => { invalid.push({ name: entry.name, path: skillFile, source, reason }); };
+    if (kind !== 'folder') {
+      // A dot name is no skill's: an editor's lock file is a dangling link too.
+      if (!entry.name.startsWith('.')) skip(unfollowableReason(kind.unfollowable));
       continue;
     }
-    const parsed = parseSkillFile(skillFile, entry.name, source);
-    if (parsed) skills.push(parsed);
+    try {
+      fs.statSync(skillFile);
+    } catch (err) {
+      const reason = brokenReason(skillFile, err);
+      if (reason && !entry.name.startsWith('.')) skip(reason);
+      continue;
+    }
+    if (!isSkillName(entry.name)) {
+      skip(INVALID_SKILL_NAME_REASON);
+      continue;
+    }
+    try {
+      skills.push(parseSkillFile(skillFile, entry.name, source));
+    } catch (err) {
+      skip(`cannot be read (${errorCode(err)})`);
+    }
   }
   return { skills, invalid };
 }
@@ -247,7 +325,7 @@ function skillFileIn(dir: string, name: string): string | undefined {
   } catch {
     return undefined;
   }
-  if (!entries.some((entry) => entry.isDirectory() && entry.name === name)) return undefined;
+  if (!entries.some((entry) => entry.name === name && followEntry(dir, entry) === 'folder')) return undefined;
   const skillFile = path.join(dir, name, 'SKILL.md');
   return fs.existsSync(skillFile) ? skillFile : undefined;
 }
@@ -378,7 +456,7 @@ export class SkillsService {
     } catch {
       return undefined;
     }
-    return file ? parseSkillFile(file, name, 'global') : undefined;
+    return file ? readableSkill(file, name, 'global') : undefined;
   }
 
   seedBuiltinSkill(name: string): boolean {
@@ -422,21 +500,18 @@ export class SkillsService {
     if (!isSkillName(name)) return undefined;
     this.pruneRetired();
     const builtin = (BUILTIN_SKILL_NAMES as readonly string[]).includes(name);
-    if (builtin) {
-      this.seed(name);
-      const globalFile = skillFileIn(this.globalDir(), name);
-      if (globalFile) return parseSkillFile(globalFile, name, 'global');
-      // The seed is only a copy for the user to edit: when it cannot be made,
-      // the built-in still resolves, and still outranks a workspace copy.
-      const packaged = this.packagedBuiltin(name);
-      if (packaged) return packaged;
-    } else {
-      const globalFile = skillFileIn(this.globalDir(), name);
-      if (globalFile) return parseSkillFile(globalFile, name, 'global');
-    }
+    if (builtin) this.seed(name);
+    const read = (dir: string, source: SkillSource): SkillInfo | undefined => {
+      const file = skillFileIn(dir, name);
+      return file ? readableSkill(file, name, source) : undefined;
+    };
+    // The seed is only a copy for the user to edit: when it cannot be made,
+    // the built-in still resolves, and still outranks a workspace copy.
+    const global = read(this.globalDir(), 'global') ?? (builtin ? this.packagedBuiltin(name) : undefined);
+    if (global) return global;
     for (const workspaceDir of this.workspaceDirs()) {
-      const workspaceFile = skillFileIn(workspaceDir, name);
-      if (workspaceFile) return parseSkillFile(workspaceFile, name, 'workspace');
+      const skill = read(workspaceDir, 'workspace');
+      if (skill) return skill;
     }
     return undefined;
   }

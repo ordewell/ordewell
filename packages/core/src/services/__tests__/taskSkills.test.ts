@@ -289,6 +289,84 @@ describe('checking a plan against the folders its tasks will read', () => {
     expect(h.gitCalls.filter((args) => args[0] === 'ls-tree')).toHaveLength(1);
   });
 
+  // git on Windows keeps a junction as the folder it opens, not as a link.
+  describe.skipIf(process.platform === 'win32')('a linked skill folder', () => {
+    const check = () => checkPlanSkills(plan('linked'), plannedSkillLookup(at, workspace, { repos: ['.'], worktrees: true }));
+    const warned = { errors: [], warnings: ['Task "A": skill "linked" is not committed; commit .ordewell/skills/linked so task worktrees receive it.'] };
+    const linkTo = (target: string, name = 'linked') => {
+      fs.mkdirSync(skillsOf(workspace), { recursive: true });
+      fs.symlinkSync(target, path.join(skillsOf(workspace), name));
+    };
+    const inRepo = path.join('..', '..', 'elsewhere', 'linked');
+
+    beforeEach(() => repo(workspace));
+
+    it('draws no warning when the link and its target in the repository are committed', async () => {
+      writeSkill(path.join(workspace, 'elsewhere'), 'linked', 'task', 'x');
+      linkTo(inRepo);
+      commit(workspace, 'elsewhere/linked/SKILL.md');
+      commit(workspace, '.ordewell/skills/linked');
+
+      expect(await check()).toEqual({ errors: [], warnings: [] });
+    });
+
+    it('is warned about when its target is outside the repository', async () => {
+      const outside = tempDir('skills-outside-');
+      writeSkill(outside, 'linked', 'task', 'x');
+      linkTo(path.join(outside, 'linked'));
+      commit(workspace, '.ordewell/skills/linked');
+
+      expect(await check()).toEqual(warned);
+    });
+
+    it('is warned about when its target is not committed', async () => {
+      writeSkill(path.join(workspace, 'elsewhere'), 'linked', 'task', 'x');
+      linkTo(inRepo);
+      commit(workspace, '.ordewell/skills/linked');
+
+      expect(await check()).toEqual(warned);
+    });
+
+    it('is warned about when the link is not committed, or HEAD points it elsewhere', async () => {
+      writeSkill(path.join(workspace, 'elsewhere'), 'linked', 'task', 'x');
+      commit(workspace, 'elsewhere/linked/SKILL.md');
+      linkTo(inRepo);
+      expect(await check()).toEqual(warned);
+
+      commit(workspace, '.ordewell/skills/linked');
+      writeSkill(path.join(workspace, 'moved'), 'linked', 'task', 'x');
+      commit(workspace, 'moved/linked/SKILL.md');
+      fs.rmSync(path.join(skillsOf(workspace), 'linked'));
+      linkTo(path.join('..', '..', 'moved', 'linked'));
+      expect(await check()).toEqual(warned);
+    });
+
+    it('is warned about when a link it goes through is not committed', async () => {
+      writeSkill(path.join(workspace, 'elsewhere'), 'linked', 'task', 'x');
+      commit(workspace, 'elsewhere/linked/SKILL.md');
+      fs.symlinkSync(path.join('elsewhere', 'linked'), path.join(workspace, 'through'));
+      linkTo(path.join('..', '..', 'through'));
+      commit(workspace, '.ordewell/skills/linked');
+      expect(await check()).toEqual(warned);
+
+      commit(workspace, 'through');
+      expect(await check()).toEqual({ errors: [], warnings: [] });
+    });
+
+    it('is warned about when the chain is longer than the check follows, with its last link uncommitted', async () => {
+      writeSkill(path.join(workspace, 'elsewhere'), 'linked', 'task', 'x');
+      commit(workspace, 'elsewhere/linked/SKILL.md');
+      linkTo(path.join('..', '..', 'x1'));
+      commit(workspace, '.ordewell/skills/linked');
+      for (let n = 1; n <= 8; n++) {
+        fs.symlinkSync(n < 8 ? `x${n + 1}` : path.join('elsewhere', 'linked'), path.join(workspace, `x${n}`));
+        if (n < 8) commit(workspace, `x${n}`);
+      }
+
+      expect(await check()).toEqual(warned);
+    });
+  });
+
   it('warns about a git-ignored workspace skill, and about one in an edit batch', async () => {
     repo(workspace);
     fs.writeFileSync(path.join(workspace, '.gitignore'), '.ordewell/\n');

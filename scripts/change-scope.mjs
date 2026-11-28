@@ -277,7 +277,7 @@ const ROOT_OWNERS = [
   [/^bench\/live\/runner-smoke(\.test)?\.mjs$/, owes('bench')],
   [/^bench\/live\/drive-binary\.mjs$/, owes('binary')],
   // Run by hand against a dev build; no check runs them.
-  [/^bench\/live\/(webview-[^/]+|host-driver|load-playwright|screenshot-header-tmp)\.mjs$/, owes()],
+  [/^bench\/live\/(webview-[^/]+|host-driver|load-playwright)\.mjs$/, owes()],
   // Run by hand against a real agent and a real model (ADR-0026, ADR-0060); no check runs them.
   [/^bench\/live\/(opencode-research-agent|opencode-login-research-agent|acp-subagent)-probe\.mjs$/, owes()],
   // Its helpers and their offline test, which runs in bench.

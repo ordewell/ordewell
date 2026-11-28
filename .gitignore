@@ -26,8 +26,12 @@ packages/ui/THIRD-PARTY-NOTICES.md
 # Downloaded VS Code build used by the extension integration tests (~320 MB)
 .vscode-test/
 
-# Local session state and scratch working notes
-.ordewell/
+# Local session state and scratch working notes. Workspace skills are the one
+# part of .ordewell/ that is committed (docs/skills.md); git cannot re-include
+# a path under an ignored folder, so the contents are ignored, not the folder.
+**/.ordewell/*
+!.ordewell/skills/
+!.ordewell/skills/**
 .scratch/
 
 # Agent tooling. `.claude/settings.local.json` records approved command lines
