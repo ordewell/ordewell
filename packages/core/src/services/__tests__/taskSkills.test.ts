@@ -352,6 +352,19 @@ describe('checking a plan against the folders its tasks will read', () => {
       commit(workspace, 'through');
       expect(await check()).toEqual({ errors: [], warnings: [] });
     });
+
+    it('is warned about when the chain is longer than the check follows, with its last link uncommitted', async () => {
+      writeSkill(path.join(workspace, 'elsewhere'), 'linked', 'task', 'x');
+      commit(workspace, 'elsewhere/linked/SKILL.md');
+      linkTo(path.join('..', '..', 'x1'));
+      commit(workspace, '.ordewell/skills/linked');
+      for (let n = 1; n <= 8; n++) {
+        fs.symlinkSync(n < 8 ? `x${n + 1}` : path.join('elsewhere', 'linked'), path.join(workspace, `x${n}`));
+        if (n < 8) commit(workspace, `x${n}`);
+      }
+
+      expect(await check()).toEqual(warned);
+    });
   });
 
   it('warns about a git-ignored workspace skill, and about one in an edit batch', async () => {

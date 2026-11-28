@@ -165,6 +165,8 @@ async function linkedSkillInHead(folder: string): Promise<boolean> {
     at = path.resolve(path.dirname(at), target);
     at = path.join(await realpath(path.dirname(at)), path.basename(at));
   }
+  // A link left over was never checked, so realpath must not follow it.
+  if ((await lstat(at)).isSymbolicLink()) return false;
   const end = await realpath(at);
   if (!inRepo(end)) return false;
   const skillFile = path.relative(top, path.join(end, 'SKILL.md')).split(path.sep).join('/');
