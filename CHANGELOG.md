@@ -15,6 +15,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - The Windows desktop app's taskbar button and Start search result show the Ordewell logo instead of a blank icon. Windows may keep showing a cached blank icon until reinstall or `ie4uinit.exe -show`.
 - On Windows, a discovery or install probe that times out, is cancelled or outlives its host now ends every process it started, even an agent behind a `.cmd` shim (#243).
 - The desktop app's `/` menu lists the workspace's skills when the daemon was still starting as the window opened, as it often is on Windows; before, they were missing until a settings change.
+- The desktop app's session list says how long ago a session was updated in English, like the rest of the window, instead of in the system's language.
 - **Contributors:** on Windows, `npm run ci` and `npm run test:changed` started from PowerShell or cmd now put Git Bash's `usr\bin` first on PATH, as CI's Windows jobs run under Git Bash, instead of failing the bench tests on a missing `sh` or WSL's `bash`. The bench tests also pass on Node 22 before 22.20, which has no `t.mock.property`.
 
 ## [0.14.16] - 2026-11-27
