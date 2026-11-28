@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { exec, spawn, type ChildProcess } from 'child_process';
 import { promisify } from 'util';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'fs';
+import { copyFileSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { pathToFileURL } from 'url';
 import { RunnerInstallation } from '../RunnerInstallation';
 import { pathWithFake, patient, removeDir, setEnv } from '../../testing';
 
@@ -181,19 +182,57 @@ if (mode === 'leave') { grandchild.unref(); process.stdout.write('answer'); } el
     await expectTreeEnded(await pids());
   }, patient(20_000));
 
+  // The host is a Node process of its own that loads the supervisor's module
+  // with its types stripped, so the test can end it outright.
   it.each(['exits', 'is terminated'])('ends a running probe tree when its host %s', async (ending) => {
-    const { windowsProbeLaunch } = await import('../discoveryExec');
-    const launch = windowsProbeLaunch(`probe-tree hold "${pidfile}"`, env());
-    const hostScript = join(dir, 'host.js');
-    writeFileSync(hostScript, `const { spawn } = require('child_process'); const launch = JSON.parse(process.env.LAUNCH);
-spawn(launch.file, launch.args, { env: launch.env, windowsHide: true, stdio: 'ignore' });
+    const module = join(dir, 'windowsProbeSupervisor.mts');
+    copyFileSync(join(__dirname, '..', 'windowsProbeSupervisor.ts'), module);
+    const hostScript = join(dir, 'host.mjs');
+    writeFileSync(hostScript, `const { runWindowsProbe } = await import(${JSON.stringify(pathToFileURL(module).href)});
+runWindowsProbe(process.env.PROBE, { env: process.env, maxBuffer: 1024 * 1024 }).catch(() => {});
 setTimeout(() => {}, ${LIFETIME}); process.on('message', () => process.exit(0));`);
-    const host = spawn(process.execPath, [hostScript], { env: { ...process.env, LAUNCH: JSON.stringify(launch) }, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+    const host = spawn(process.execPath, ['--experimental-strip-types', '--no-warnings', hostScript], { env: { ...env(), PROBE: `probe-tree hold "${pidfile}"` }, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
     try {
       const tree = await pids();
       if (ending === 'exits') host.send('exit'); else host.kill();
       await expectTreeEnded(tree);
     } finally { host.kill(); }
+  }, patient(20_000));
+
+  it('reuses one supervisor across probes', async () => {
+    const { discoveryExec } = await import('../discoveryExec');
+    const { windowsProbeSupervisors } = await import('../windowsProbeSupervisor');
+    await expect(discoveryExec('echo one', { env: env() })).resolves.toEqual({ stdout: 'one\r\n' });
+    const [first] = windowsProbeSupervisors();
+    await expect(discoveryExec('echo two', { env: env() })).resolves.toEqual({ stdout: 'two\r\n' });
+    expect(windowsProbeSupervisors().map(child => child.pid)).toEqual([first?.pid]);
+  }, patient(20_000));
+
+  it('fails the probes of a supervisor that dies, ends their trees, and starts a new one for the next', async () => {
+    const { discoveryExec } = await import('../discoveryExec');
+    const { windowsProbeSupervisors } = await import('../windowsProbeSupervisor');
+    const result = discoveryExec(`probe-tree hold "${pidfile}"`, { env: env(), timeout: 60_000 });
+    const tree = await pids();
+    const [supervisor] = windowsProbeSupervisors();
+    supervisor?.kill();
+    await expect(result).rejects.toThrow(/supervisor exited/);
+    await expectTreeEnded(tree);
+    await expect(discoveryExec('echo again', { env: env() })).resolves.toEqual({ stdout: 'again\r\n' });
+    expect(windowsProbeSupervisors().map(child => child.pid)).not.toContain(supervisor?.pid);
+  }, patient(20_000));
+
+  it('keeps concurrent probes apart: each gets its own output, and ending one ends only its tree', async () => {
+    const { discoveryExec } = await import('../discoveryExec');
+    const answers = Array.from({ length: 8 }, (_, i) =>
+      discoveryExec(`"${process.execPath}" -e "setTimeout(() => { process.stdout.write('out${i}'); process.stderr.write('err${i}'); process.exit(${i + 1}) }, 300)"`, { env: env(), timeout: 60_000 })
+        .catch((error: { code: number; stdout: string; stderr: string }) => ({ code: error.code, stdout: error.stdout, stderr: error.stderr })));
+    const abort = new AbortController();
+    const held = discoveryExec(`probe-tree hold "${pidfile}"`, { env: env(), timeout: 60_000, signal: abort.signal });
+    const tree = await pids();
+    abort.abort();
+    await expect(held).rejects.toThrow(/cancelled/);
+    expect(await Promise.all(answers)).toEqual(Array.from({ length: 8 }, (_, i) => ({ code: i + 1, stdout: `out${i}`, stderr: `err${i}` })));
+    await expectTreeEnded(tree);
   }, patient(20_000));
 
   it('hands the command the environment exec would', async () => {
