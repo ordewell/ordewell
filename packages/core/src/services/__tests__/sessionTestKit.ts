@@ -1,4 +1,7 @@
-import { vi, type Mock } from 'vitest';
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, vi, type Mock } from 'vitest';
 import { createSession, type SaveSession, type Session, type SessionDeps, type SessionPlanner } from '../createSession';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { ModelResolver } from '../ModelResolver';
@@ -16,9 +19,26 @@ import { flattenTasks, type Task } from '../../models/Task';
 import type { TaskLogEvent } from '../../models/TaskLog';
 import type { TaskLogFile, TaskLogLocation } from '../../utils/taskLogStore';
 
-import { fakeConfig, FakeRunnerSession } from '../../testing';
+import { fakeConfig, FakeRunnerSession, removeDir } from '../../testing';
 
-export const testWorkspace = process.cwd();
+/**
+ * A throwaway repository that holds nothing, not the checkout the suite runs
+ * in: each task start and end walks the runner-configuration roots of its
+ * workspace and of every level up to the repository's top (taskStartConfig), so
+ * a checkout with a large `.claude` made every start cost a second. The empty
+ * `.git` is what ends that walk here, and what a test that never runs git in
+ * it needs of a repository.
+ */
+function throwawayWorkspace(): string {
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'ordewell-session-')));
+  mkdirSync(join(dir, '.git', 'objects'), { recursive: true });
+  mkdirSync(join(dir, '.git', 'refs'), { recursive: true });
+  writeFileSync(join(dir, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  afterAll(() => removeDir(dir).catch(() => undefined));
+  return dir;
+}
+
+export const testWorkspace = throwawayWorkspace();
 
 export { fakeConfig, FakeRunnerSession };
 
@@ -69,7 +89,7 @@ export interface SessionOverrides {
   taskOutput?: TaskOutputSource;
   /** Defaults to git behind a config with isolation off, so no test runs git in the repo it runs in. */
   isolation?: IWorktreeIsolation;
-  /** Defaults to the directory the suite runs in; an end-to-end test points it at a temporary workspace. */
+  /** Defaults to {@link testWorkspace}; an end-to-end test points it at a temporary workspace. */
   workspaceRoot?: () => string;
   /**
    * Defaults to a fake that writes nothing, read back through {@link saves};
