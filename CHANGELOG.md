@@ -22,7 +22,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - The planner prompt says how a loop's AI check runs later rounds: it re-verifies the last round's problems and the fix diff, and ends a loop that is not converging so the plan can change.
 - The supervisor is told to retry a task that gave up fast on a cheaper model on a stronger model, or split it, rather than retry it unchanged.
 - The planner prompt says a read-only task's sealed command is stopped after 10 minutes, so full test suites go in a script task.
-- A read-only task's own reads can open files in its attempt's sealed scratch directory, where its commands write. Writes there, and other attempts' scratch, stay refused.
+- On Claude Code, Pi, GitHub Copilot CLI, Qwen Code and Cline, a read-only task's own reads can open files in its attempt's sealed scratch directory, where its commands write. Writes there, and other attempts' scratch, stay refused. Other runners read it through `run_command`.
 
 ## [0.14.16] - 2026-11-27
 

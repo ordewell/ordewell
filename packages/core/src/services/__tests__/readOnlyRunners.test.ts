@@ -14,6 +14,7 @@ import { resolveAssignment } from '../TaskAssignment';
 import { createTask } from '../../models/Task';
 import { mcpClientConfig } from '../mcp';
 import { decideReadOnlyTaskPermission } from '../harness/plannerPermissions';
+import { OPENCODE_ORDEWELL, readOnlySessionRules } from '../harness/openCodeOrdewell';
 import { codexAnswer, fakeMcpServer, fakeSpawn, fixture, flagJson, type ScriptedReply } from './harnessTestKit';
 import { StructuredRunner } from '../StructuredRunner';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
@@ -107,6 +108,14 @@ describe('read-only runner profiles (ADR-0046)', () => {
     expect(decideReadOnlyTaskPermission({ kind: 'path', path: join(scratch, 'out.txt'), directory: false }, { cwd, workspaceRoot, sealedScratch: () => undefined }).decision).toBe('deny');
     // A confined read stays in the worktree.
     expect(decideReadOnlyTaskPermission({ kind: 'path', path: join(scratch, 'out.txt'), directory: false, confined: true }, site).decision).toBe('deny');
+  });
+
+  // OpenCode's external directories are static rules, which follow no link, so ADR-0046 names it as not reading the scratch.
+  it('names no sealed scratch among OpenCode\'s external directories', () => {
+    const site = { cwd: '/task', workspaceRoot: '/workspace', sealedScratch: () => '/scratch/attempt-1' };
+    const config = JSON.parse(OPENCODE_ORDEWELL.configContent(undefined, null, 'readOnlyTask', {}, site)!) as { permission: { external_directory: unknown } };
+    expect(config.permission.external_directory).toEqual({ '*': 'deny', '/task/*': 'allow', '/workspace/*': 'allow' });
+    expect(JSON.stringify(readOnlySessionRules(site))).not.toContain('/scratch/attempt-1');
   });
 
   it('hands a read-only attempt\'s runner the scratch its own shell names, asked at each read', async () => {

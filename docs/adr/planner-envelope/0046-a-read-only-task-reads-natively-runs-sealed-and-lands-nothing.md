@@ -162,7 +162,14 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
   has made it, so a task can open what its commands wrote there. Only that
   attempt's, never another's or a parent; `decideReadOnlyTaskPermission`
   judges it as it judges the worktree, a link followed to where it leads, and
-  a write there is a write tool's, withheld like any other.
+  a write there is a write tool's, withheld like any other. That reaches only
+  a runner whose reads Ordewell answers: Claude Code, Pi, and an ACP runner
+  whose read is a request (GitHub Copilot CLI, Qwen Code, Cline). OpenCode's
+  external directories are static rules that name the task worktree and
+  workspace alone: the scratch is not there yet when they are written, and a
+  rule would not follow a link a sealed run left in it. Codex, Gemini CLI and
+  Cursor are given no native read of it either. On those, a task opens what its
+  commands wrote with `run_command`.
 - **Native writes and the native shell are withheld, on every runner.** They
   run as the user, outside any sandbox, and a sealed command can make a
   symlink in the worktree: a native write tool would write through it wherever
