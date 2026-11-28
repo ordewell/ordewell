@@ -5,12 +5,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { inflateSync } from 'node:zlib';
 import {
   ICNS_TYPES,
   ICO_SIZES,
   encodeIco,
   encodeIcns,
+  downscale,
   encodePng,
+  renderIconFiles,
 } from '../packages/desktop/scripts/app-icon.mjs';
 import {
   appleApiKeyFile,
@@ -422,6 +425,77 @@ describe('the icon encoders', () => {
   });
 });
 
+describe('the icon downscaler', () => {
+  // 1024 is not a multiple of 24 or 48, the sizes the taskbar and Start search read.
+  for (const size of [16, 24, 32, 48, 64]) {
+    it(`keeps an opaque master opaque at ${size}px, with no NaN`, () => {
+      const master = new Float32Array(1024 * 1024 * 4).fill(255);
+      const out = downscale(master, size);
+      assert.equal(out.length, size * size * 4);
+      assert.ok(out.every((v) => v === 255), 'every channel is the average of 255s');
+    });
+  }
+
+  it('averages each output pixel over the integer source range it covers', () => {
+    // Left half of the master is 0, right half is 100: at 24px the split falls
+    // exactly on the edge between output columns 11 and 12, so neither blends.
+    const master = new Float32Array(1024 * 1024 * 4);
+    for (let y = 0; y < 1024; y++) for (let x = 512; x < 1024; x++) master[(y * 1024 + x) * 4] = 100;
+    const out = downscale(master, 24);
+    assert.equal(out[(0 * 24 + 11) * 4], 0);
+    assert.equal(out[(0 * 24 + 12) * 4], 100);
+  });
+});
+
+describe('the committed icons', () => {
+  const build = fileURLToPath(new URL('../packages/desktop/build/', import.meta.url));
+  const rendered = renderIconFiles();
+
+  /** A PNG's size and its filtered scanlines: independent of how zlib happened to compress them. */
+  const decode = (png) => {
+    const idat = [];
+    for (let offset = 8; offset < png.length; offset += 12 + png.readUInt32BE(offset)) {
+      if (png.subarray(offset + 4, offset + 8).toString('ascii') === 'IDAT') idat.push(png.subarray(offset + 8, offset + 8 + png.readUInt32BE(offset)));
+    }
+    return { size: png.readUInt32BE(16), raw: inflateSync(Buffer.concat(idat)) };
+  };
+  const icoFrames = (ico) => {
+    const frames = new Map();
+    for (let i = 0; i < ico.readUInt16LE(4); i++) {
+      const entry = 6 + 16 * i;
+      const offset = ico.readUInt32LE(entry + 12);
+      const png = ico.subarray(offset, offset + ico.readUInt32LE(entry + 8));
+      frames.set(decode(png).size, png);
+    }
+    return frames;
+  };
+  const opaquePixels = ({ size, raw }) => {
+    let count = 0;
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) if (raw[y * (1 + size * 4) + 1 + x * 4 + 3] === 255) count++;
+    return count;
+  };
+
+  it('has an icon.ico whose every frame is what the generator draws now, opaque logo pixels included', () => {
+    const frames = icoFrames(readFileSync(join(build, 'icon.ico')));
+    assert.deepEqual([...frames.keys()], ICO_SIZES);
+    const expected = icoFrames(rendered.get('icon.ico'));
+    for (const [size, png] of frames) {
+      const frame = decode(png);
+      assert.ok(frame.raw.equals(decode(expected.get(size)).raw), `${size}px frame is stale: run node packages/desktop/scripts/app-icon.mjs`);
+      assert.ok(opaquePixels(frame) > size * size * 0.4, `${size}px frame is mostly transparent`);
+    }
+  });
+
+  it('has every build/icons PNG, and icon.png, as the generator draws it now', () => {
+    for (const [name, data] of rendered) {
+      if (name !== 'icon.png' && !name.startsWith('icons/')) continue;
+      const committed = decode(readFileSync(join(build, name)));
+      assert.ok(committed.raw.equals(decode(data).raw), `${name} is stale: run node packages/desktop/scripts/app-icon.mjs`);
+      assert.ok(opaquePixels(committed) > committed.size * committed.size * 0.4, `${name} is mostly transparent`);
+    }
+  });
+});
+
 describe('WIN_PUBLISHER_NAME with several names', () => {
   it('splits on | and trims every entry, dropping empty ones', () => {
     assert.deepEqual(publisherNames('Ordewell'), ['Ordewell']);
@@ -473,6 +547,17 @@ describe('WIN_PUBLISHER_NAME with several names', () => {
   });
 });
 
+// builder-util's log writes to process.stdout, where node:test reads this
+// file's messages, and a stray line there crashes the run (test-stdout.test.mjs).
+// Swapped by hand, not with t.mock.property, which Node 22 lacks before 22.20
+// while the repository supports Node from 20.3.
+function silenceBuilderLog(t, require) {
+  const { log } = createRequire(require.resolve('app-builder-lib/package.json'))('builder-util');
+  const { stream } = log;
+  log.stream = { write: () => true };
+  t.after(() => { log.stream = stream; });
+}
+
 // The flags above only matter if electron-builder reads them as intended, so
 // they go through its own CLI parsing, config merge and schema validation, and
 // out comes the list its updater config would carry (PublishManager takes
@@ -482,11 +567,8 @@ describe('the publisher names electron-builder derives from the flags', () => {
   const desktop = fileURLToPath(new URL('../packages/desktop/', import.meta.url));
   const asList = (value) => (value == null ? null : [value].flat());
 
-  // builder-util's log writes to process.stdout, where node:test reads this
-  // file's messages, and a stray line there crashes the run (test-stdout.test.mjs).
   async function derived(t, env) {
-    const { log } = createRequire(require.resolve('app-builder-lib/package.json'))('builder-util');
-    t.mock.property(log, 'stream', { write: () => true });
+    silenceBuilderLog(t, require);
     const { configureBuildCommand, createYargs, normalizeOptions } = require('electron-builder/out/builder.js');
     const { getConfig, validateConfiguration } = require('app-builder-lib/out/util/config/config.js');
     const argv = configureBuildCommand(createYargs()).parse(builderArgs(['--win', '--dir'], 'win32', releasePlan(env, 'win32')));
@@ -519,8 +601,7 @@ describe('the deb launcher entry', () => {
   const desktop = fileURLToPath(new URL('../packages/desktop/', import.meta.url));
 
   it('opens New Window with the executable the deb installs', async (t) => {
-    const { log } = createRequire(require.resolve('app-builder-lib/package.json'))('builder-util');
-    t.mock.property(log, 'stream', { write: () => true });
+    silenceBuilderLog(t, require);
     const { getConfig, validateConfiguration } = require('app-builder-lib/out/util/config/config.js');
     const { installPrefix } = require('app-builder-lib/out/targets/LinuxTargetHelper.js');
     const config = await getConfig(desktop, null, null);

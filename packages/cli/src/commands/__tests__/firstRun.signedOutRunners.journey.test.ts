@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { existsSync, readFileSync } from 'fs';
 import { machineBSignIns, type MachineAgents } from '../../../../core/src/services/__tests__/firstRunAMachine';
 import { firstRunADaemon, toolContext, type FirstRunADaemon, type OpenedTurn } from '../../tui/__tests__/firstRunADaemon';
@@ -29,9 +29,14 @@ describe('first run: a signed-out agent is not offered to the planner', () => {
   async function opened(d: FirstRunADaemon, sessionId: string, goal: string): Promise<OpenedTurn> {
     const before = d.turns.length;
     void d.client().startConversation(sessionId, goal, undefined, d.workspace).catch(() => undefined);
-    let turn: OpenedTurn | undefined;
-    await expect.poll(() => (turn = d.turns[before])).toBeDefined();
-    return turn!;
+    // The turn opens after the agents' real probes, which on Windows each start
+    // a supervisor (ADR-0078): vi.waitFor's patient default, not expect.poll's
+    // one second, which a loaded machine overruns.
+    return vi.waitFor(() => {
+      const turn = d.turns[before];
+      expect(turn).toBeDefined();
+      return turn!;
+    });
   }
 
   async function listRunners(turn: OpenedTurn): Promise<{ text: string; ids: string[] }> {

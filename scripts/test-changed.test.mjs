@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, win32 } from 'node:path';
 import { describe, it } from 'node:test';
 import { localRuns, readWorkspaces } from './change-scope.mjs';
-import { benchStep, requiredTools, sandboxStep, toolOnHost, workflowSteps } from './ci.mjs';
+import { benchStep, gitBashPath, requiredTools, sandboxStep, toolOnHost, useGitBash, workflowSteps } from './ci.mjs';
 import { platformKey } from './shellcheck.mjs';
 import { execute, localChecks, runChecks } from './test-changed.mjs';
 
@@ -176,6 +176,32 @@ describe('the local CI proof', () => {
     assert.equal(toolOnHost({ ...everywhereOnPath, exists: (p) => p === '/bin/zsh' })('zsh'), true);
     assert.equal(toolOnHost({ path: () => false, exists: () => true })('zsh'), true);
     assert.equal(toolOnHost({ path: (tool) => tool === 'rg', exists: () => false })('rg'), true);
+  });
+
+  it("puts Git Bash's usr/bin first on a Windows PATH without sh, as ci.yml's Windows jobs run under it", () => {
+    // As Git for Windows prints it, with forward slashes.
+    const core = 'C:/Program Files/Git/mingw64/libexec/git-core';
+    const usrBin = win32.join('C:', 'Program Files', 'Git', 'usr', 'bin');
+    const system32 = win32.join('C:', 'Windows', 'system32');
+    const windows = { platform: 'win32', env: { PATH: system32 }, hasSh: () => false, execPath: () => core };
+    const checked = [];
+    const found = gitBashPath({ ...windows, exists: (p) => { checked.push(p); return true; } });
+    assert.deepEqual(checked, [win32.join(usrBin, 'sh.exe')]);
+    assert.deepEqual(found, { usrBin, PATH: `${usrBin};${system32}` });
+    assert.equal(gitBashPath({ ...windows, hasSh: () => true }), undefined, 'a shell already on PATH, as under Git Bash, is left alone');
+    assert.equal(gitBashPath({ ...windows, platform: 'linux' }), undefined);
+    assert.match(gitBashPath({ ...windows, exists: () => false }).problem, /Git Bash/);
+    assert.match(gitBashPath({ ...windows, execPath: () => undefined }).problem, /Git Bash/);
+
+    const before = process.env.PATH;
+    try {
+      const logged = [];
+      assert.equal(useGitBash((line) => logged.push(line), found), true);
+      assert.equal(process.env.PATH, found.PATH);
+      assert.match(logged[0], /Git Bash/);
+    } finally { process.env.PATH = before; }
+    assert.equal(useGitBash(() => {}, undefined), true);
+    assert.equal(process.env.PATH, before);
   });
 
   it('installs and requires the tools the sandbox tests would otherwise skip without in CI (#71 F3)', () => {

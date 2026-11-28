@@ -123,6 +123,9 @@ fs.appendFileSync(${JSON.stringify(turns)}, JSON.stringify(argv) + '\\n');
 process.stdout.write('Invalid API key · Please run /login\\n');
 process.exit(1);
 `, { mode: 0o755 });
+  // Windows starts no file by its shebang: the shims npm would write beside it, as bench/pipeline's fake has.
+  fs.writeFileSync(path.join(bin, 'claude.cmd'), '@node "%~dp0claude" %*\r\n');
+  fs.writeFileSync(path.join(bin, 'claude.ps1'), '& node "$PSScriptRoot/claude" $args\r\nexit $LASTEXITCODE\r\n');
   return { bin, turns };
 }
 

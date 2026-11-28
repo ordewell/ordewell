@@ -26,8 +26,13 @@ describe.runIf(process.platform === 'win32')('a bare program name on Windows, st
   let onPath: string;
   /** A folder on PATH holding no rg. */
   let empty: string;
+  /** This process's own NoDefaultCurrentDirectoryInExePath, which a host may set (Claude Code's shell does). */
+  let hostNoDefault: string | undefined;
 
   beforeAll(() => {
+    // Node reads it from the process that spawns, so set here it would skip the cwd in every case below.
+    hostNoDefault = process.env.NoDefaultCurrentDirectoryInExePath;
+    delete process.env.NoDefaultCurrentDirectoryInExePath;
     root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'ordewell-bare-name-')));
     repo = path.join(root, 'repo');
     onPath = path.join(root, 'on-path');
@@ -37,7 +42,10 @@ describe.runIf(process.platform === 'win32')('a bare program name on Windows, st
     copyFileSync(process.execPath, path.join(onPath, 'rg.exe'));
   });
   // Windows can still hold an rg.exe it just ran (EBUSY) for a moment after the process has exited: wait it out.
-  afterAll(() => removeDir(root));
+  afterAll(() => {
+    if (hostNoDefault !== undefined) process.env.NoDefaultCurrentDirectoryInExePath = hostNoDefault;
+    return removeDir(root);
+  });
 
   /** This process's environment with PATH replaced and `extra` added, one key per name as Windows holds them. */
   function env(pathValue: string, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
