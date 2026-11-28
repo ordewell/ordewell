@@ -125,7 +125,7 @@ export const FLAG_POLICY: Record<string, FlagSpec> = {
     //                     long spelling stays available for the read.
     booleans: ['-a', '-b', '-E', '-F', '-h', '-H', '-i', '-I', '-l', '-p', '-P', '-q', '-r',
       '-R', '-s', '-t', '-u', '-v', '-w', '-z',
-      '--oneline', '--graph', '--stat', '--shortstat', '--numstat', '--dirstat', '--summary',
+      '--push', '--oneline', '--graph', '--stat', '--shortstat', '--numstat', '--dirstat', '--summary',
       '--name-only', '--name-status', '--raw', '--patch', '--no-patch', '--patch-with-stat',
       '--cached', '--staged', '--porcelain', '--short', '--long', '--branch', '--show-stash',
       '--show-current', '--all', '--tags', '--heads', '--remotes', '--list', '--verbose',
@@ -550,6 +550,38 @@ export function scanFlags(seg: Segment): FlagScan | undefined {
 }
 
 /**
+ * The words before gh's subcommand, read the way cobra finds it: a flag
+ * written without `=`, long or a lone short one, takes the next word, whether
+ * or not the root command knows it. So `-R`/`--repo` and `--hostname`, and any
+ * flag of the command that follows, may come first: `gh -R o/r release create`
+ * creates a release, and the first word without a dash is the repository. No
+ * flag set is declared for gh, so nothing here is checked against one.
+ */
+function scanGhLead(seg: Segment): FlagScan {
+  let spreadAt: number | undefined;
+  let i = 0;
+  while (i < seg.args.length) {
+    if (spreadAt === undefined && shellRewrites(seg, seg.args[i])) spreadAt = i;
+    const token = seg.args[i];
+    if (!token.startsWith('-')) break;
+    const consumes = !token.includes('=') && (token.startsWith('--') ? token.length > 2 : token.length === 2);
+    if (consumes && spreadAt === undefined && i + 1 < seg.args.length && shellRewrites(seg, seg.args[i + 1])) spreadAt = i + 1;
+    i += consumes ? 2 : 1;
+  }
+  const found = i < seg.args.length;
+  return {
+    operands: found ? [seg.args[i]] : [],
+    operandAt: found ? [i] : [],
+    ...(spreadAt !== undefined ? { spreadAt } : {}),
+  };
+}
+
+/** The walk that locates a multiplexer's subcommand, where its arguments can be walked. */
+export function scanSubcommand(seg: Segment): FlagScan | undefined {
+  return seg.binary === 'gh' ? scanGhLead(seg) : scanFlags(seg);
+}
+
+/**
  * The subcommand a multiplexer was asked to run.
  *
  * "First argument that does not start with a dash" is wrong as soon as a global
@@ -559,12 +591,12 @@ export function scanFlags(seg: Segment): FlagScan | undefined {
  * fell to the prompt tier the refusal tier is documented never to reach.
  *
  * Where {@link FLAG_POLICY} knows the binary's flags, the answer comes from
- * walking them; a multiplexer with no declared flag set keeps the positional
- * reading, since guessing at its arities is what {@link scanWrapperArgs}
+ * walking them, and gh by {@link scanGhLead}; any other multiplexer with no
+ * declared flag set keeps the positional reading, since guessing at its arities is what {@link scanWrapperArgs}
  * already refuses to do.
  */
 export function subcommandOf(seg: Segment): string | undefined {
-  const scan = scanFlags(seg);
+  const scan = scanSubcommand(seg);
   if (scan) return subcommandShifter(seg, scan) === undefined ? scan.operands[0] : undefined;
   return seg.args.find((a) => !a.startsWith('-'));
 }
@@ -576,7 +608,7 @@ export function subcommandOf(seg: Segment): string | undefined {
  * log` runs `git -C res rm log`. Only a flag's value can sit there, since the
  * first operand is the subcommand itself.
  */
-export function subcommandShifter(seg: Segment, scan: FlagScan | undefined = scanFlags(seg)): string | undefined {
+export function subcommandShifter(seg: Segment, scan: FlagScan | undefined = scanSubcommand(seg)): string | undefined {
   if (scan?.spreadAt === undefined) return undefined;
   const at = scan.operandAt[0];
   return at === undefined || scan.spreadAt < at ? seg.args[scan.spreadAt] : undefined;

@@ -45,7 +45,7 @@
 import { ParsedLine, type LineShell } from './parsedLine';
 import { SHELL_STATE_COMMANDS, literalCdTarget, mayBecomeFlag, mayBeginWith, mayExpandTo, shellRewrites, type Segment } from './shellLexer';
 import { REFUSED_RUNNERS, XARGS_TARGETS, unwrap } from './commandRunners';
-import { FLAG_POLICY, UNIVERSAL_FLAGS, flagLabel, matchFlag, scanFlags, subcommandOf, subcommandShifter, takesNextToken, valueFlagIn } from './flagPolicy';
+import { FLAG_POLICY, UNIVERSAL_FLAGS, flagLabel, matchFlag, scanFlags, scanSubcommand, subcommandOf, subcommandShifter, takesNextToken, valueFlagIn } from './flagPolicy';
 import { AWK_FAMILY, JQ_FAMILY, SED_FAMILY, awkProgramArgs, awkRefusal, jqProgramEnd, jqRefusal, sedOnlyPrints, sedProgramArgs, sedRefusal } from './filterPrograms';
 import { commandAllowedBy, commandExcludedBy, scopeExcluded, type PlannerAllowlist } from './plannerAllowlist';
 import { EFFECT_REFUSAL_HINT, READ_REFUSAL_HINT, webCommand, wgetVersionCommands } from './webCommands';
@@ -177,7 +177,7 @@ const REFUSED_SUBCOMMANDS: Record<string, string[]> = {
   pnpm: ['publish'],
   docker: ['push', 'rm', 'rmi', 'kill', 'stop', 'prune', 'system'],
   kubectl: ['delete', 'apply', 'create', 'patch', 'replace', 'edit', 'drain', 'cordon', 'scale'],
-  gh: ['release', 'secret', 'auth'],
+  gh: ['release', 'secret', 'auth', 'alias'],
   az: ['login', 'logout'],
   terraform: ['apply', 'destroy'],
 };
@@ -190,13 +190,15 @@ const REFUSED_SUBCOMMANDS: Record<string, string[]> = {
  * whole left `gh release list` running sealed, where it always fails.
  */
 const REFUSED_SUBCOMMAND_READS: Record<string, Record<string, readonly string[]>> = {
-  gh: { release: ['list', 'view'] },
+  gh: { release: ['list', 'view'], alias: ['list'] },
 };
 
 function readsDespiteRefusal(seg: Segment, sub: string): boolean {
   const reads = REFUSED_SUBCOMMAND_READS[seg.binary]?.[sub];
   if (!reads) return false;
-  const action = seg.args[seg.args.indexOf(sub) + 1];
+  // By position, not by spelling: a flag's value before the subcommand may read the same.
+  const at = scanSubcommand(seg)?.operandAt[0] ?? seg.args.indexOf(sub);
+  const action = seg.args[at + 1];
   return action !== undefined && reads.includes(action) && !shellRewrites(seg, action);
 }
 
@@ -911,7 +913,7 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
   if (subs) {
     const shifter = subcommandShifter(seg);
     if (shifter !== undefined) {
-      const written = [seg.binary, scanFlags(seg)?.operands[0]].filter((w) => w !== undefined).join(' ');
+      const written = [seg.binary, scanSubcommand(seg)?.operands[0]].filter((w) => w !== undefined).join(' ');
       return `The shell may expand "${shifter}" into several words or none, so "${written}" may run another subcommand than the one written. Spell the words before the subcommand literally, in single quotes where they hold a "*", and re-run.`;
     }
     const sub = subcommandOf(seg);

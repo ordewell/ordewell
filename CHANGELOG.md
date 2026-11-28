@@ -11,6 +11,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 ### Fixed
 
 - The planner can run `gh release list` and `gh release view`, which are on the default planner allowlist. Every other `gh release` action stays refused.
+- A `gh` flag written before the subcommand, as in `gh -R owner/repo release create`, no longer hides it: such a `gh release`, `gh secret` or `gh auth` command is refused. `gh alias` is refused too, apart from `gh alias list`.
 - The planner can run `git remote`, `git remote -v`, `git remote get-url` and `git remote show -n` without asking. Actions that change a remote, and `git remote show` without `-n`, stay refused.
 - A command that runs sealed instead of being refused says why when it fails: the rule it met, or in Full the allowlist entry that would let it run with the network. A single command is no longer told to split itself up.
 - The `run_command` description says what Full does with a command the allowlist does not cover.

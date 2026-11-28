@@ -2476,8 +2476,19 @@ describe('gh release reads ask, every other release action stays refused', () =>
   it.each([
     'gh release create v1', 'gh release download v1', 'gh release delete v1', 'gh release upload v1 a.tgz',
     'gh release edit v1', 'gh release', 'gh release l*', 'gh release delete-asset v1 a', 'gh secret list', 'gh auth token',
+    // cobra takes a flag's value before the subcommand, so it is not the subcommand.
+    'gh -R o/r release create v1', 'gh --repo o/r release delete v1', 'gh --repo o/r secret set TOKEN',
+    'gh -R=o/r release create v1', 'gh --repo=o/r release delete v1', 'gh -Ro/r release delete v1',
+    'gh --hostname example.com auth token', 'gh -t title release create v1', 'gh -R release release delete v1',
+    'gh -R $REPO release list', 'gh -R o/r r* create v1',
+    // An alias is a second name for any of them.
+    "gh alias set rc 'release create'", 'gh -R o/r alias delete rc',
   ])('%s is refused', (cmd) => {
     expect(classifyCommand(cmd, { allow, autonomous: true }).tier).toBe('refuse');
+  });
+
+  it.each(['gh -R o/r release view v1', 'gh --repo o/r pr list', 'gh alias list'])('%s asks', (cmd) => {
+    expect(classifyCommand(cmd, { allow, autonomous: true }).tier).toBe('ask');
   });
 });
 
@@ -2486,7 +2497,7 @@ describe('gh release reads ask, every other release action stays refused', () =>
 describe('git remote reads the configuration and writes nothing', () => {
   it.each([
     'git remote', 'git remote -v', 'git remote --verbose', 'git -C packages/core remote -v',
-    'git remote get-url origin', 'git remote show -n origin', 'git remote show -n',
+    'git remote get-url origin', 'git remote get-url --push origin', 'git remote get-url --all origin', 'git remote show -n origin', 'git remote show -n',
   ])('%s is auto', (cmd) => {
     expect(classifyCommand(cmd).tier).toBe('auto');
   });
