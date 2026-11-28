@@ -1,6 +1,8 @@
+import { execFileSync } from 'node:child_process';
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { autoUpdateDefine } from '../../../tsup.config';
-import { AUTO_UPDATE_ENABLED, UpdateController, type UpdaterPort } from '../updater';
+import { AUTO_UPDATE_ENABLED, UpdateController, autoUpdaterOf, type UpdaterPort } from '../updater';
 
 type Port = UpdaterPort & { progress(percent: number): void };
 
@@ -134,5 +136,47 @@ describe('UpdateController when enabled', () => {
     expect(log).toHaveBeenCalledWith('Update download failed: disk full');
     await controller.download();
     expect(controller.status()).toEqual({ phase: 'ready', version: '1.4.0' });
+  });
+});
+
+describe('autoUpdaterOf', () => {
+  it('takes the named autoUpdater when the namespace has one', () => {
+    const updater = port();
+    expect(autoUpdaterOf({ autoUpdater: updater })).toBe(updater);
+  });
+
+  it("takes default.autoUpdater when Node's import() exposes only the CommonJS exports object", () => {
+    const updater = port();
+    expect(autoUpdaterOf({ default: { autoUpdater: updater } })).toBe(updater);
+  });
+
+  it('throws a clear error when the module provides neither', () => {
+    for (const mod of [{}, { default: {} }, { default: undefined }, undefined, null]) {
+      expect(() => autoUpdaterOf(mod)).toThrow(new Error('electron-updater did not provide autoUpdater'));
+    }
+  });
+
+  it('reports a module without autoUpdater as an update error, not a crash', async () => {
+    const log = vi.fn();
+    const controller = new UpdateController({ enabled: true, packaged: true, load: () => autoUpdaterOf({ default: {} }), log });
+    expect(await controller.check()).toEqual({ phase: 'error', message: 'electron-updater did not provide autoUpdater' });
+    expect(log).toHaveBeenCalledWith('Update check failed: electron-updater did not provide autoUpdater');
+  });
+
+  it("resolves the namespace real Node gives the built main's import('electron-updater')", () => {
+    // vitest transforms imports itself, so the interop of the CommonJS bundle's
+    // real import() is read in a plain node child. Descriptors only: reading
+    // autoUpdater outside Electron would construct a platform updater.
+    const probe = `import('electron-updater').then((ns) => {
+      const has = (o, k) => o != null && Object.getOwnPropertyDescriptor(o, k) !== undefined;
+      console.log(JSON.stringify({ named: has(ns, 'autoUpdater'), fromDefault: has(ns.default, 'autoUpdater') }));
+    });`;
+    const env = { ...process.env };
+    delete env.NODE_OPTIONS;
+    const out = execFileSync(process.execPath, ['--input-type=commonjs', '-e', probe], { cwd: path.resolve(__dirname, '../../..'), env, encoding: 'utf8' });
+    const shape = JSON.parse(out.trim().split('\n').pop() ?? '') as { named: boolean; fromDefault: boolean };
+    const updater = port();
+    const mirror = { ...(shape.named ? { autoUpdater: updater } : {}), default: shape.fromDefault ? { autoUpdater: updater } : {} };
+    expect(autoUpdaterOf(mirror)).toBe(updater);
   });
 });

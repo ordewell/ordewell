@@ -39,7 +39,7 @@ import { completeMacInstall } from './installCompletion';
 import { StartupLog } from './startupLog';
 import { PrefsStore } from './prefs';
 import { RecentsStore } from './recents';
-import { AUTO_UPDATE_ENABLED, UpdateController, type UpdaterPort } from './updater';
+import { AUTO_UPDATE_ENABLED, UpdateController, autoUpdaterOf, type UpdaterPort } from './updater';
 import { UpdateService } from './updates';
 import { lockSession, lockWebContents, registerAppScheme, serveRenderer } from './security';
 import { WindowManager } from './windows';
@@ -199,7 +199,7 @@ async function main(): Promise<void> {
     // Imported here, not at the top: a build with updates off never
     // evaluates the module. It reads the GitHub feed electron-builder wrote
     // into app-update.yml (publish in electron-builder.yml).
-    load: async (): Promise<UpdaterPort> => (await import('electron-updater')).autoUpdater,
+    load: async (): Promise<UpdaterPort> => autoUpdaterOf(await import('electron-updater')),
     log: (message) => console.warn(message),
   });
   // Started once the first windows are up, so the version check's notice and
