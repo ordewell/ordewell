@@ -8,6 +8,23 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- The planner can run `gh release list` and `gh release view`, which are on the default planner allowlist. Every other `gh release` action stays refused.
+- A `gh` flag written before the subcommand, as in `gh -R owner/repo release create`, no longer hides it: such a `gh release`, `gh secret` or `gh auth` command is refused. `gh alias` is refused too, apart from `gh alias list`.
+- A `gh` read with a flag before the subcommand, as in `gh -R owner/repo release view`, now matches the allowlist, and approving it no longer approves every `gh` command.
+- The planner can run `git remote`, `git remote -v`, `git remote get-url` and `git remote show -n` without asking. Actions that change a remote, and `git remote show` without `-n`, stay refused.
+- A command that runs sealed instead of being refused says why when it fails: the rule it met, or in Full that the planner allowlist does not cover it, so it ran without the network. It suggests no allowlist entry: what to allow is the user's choice, and the planner is pointed to the `fetch` tool for web reads, or to a task. A single command is no longer told to split itself up.
+- The `run_command` description says what Full does with a command the allowlist does not cover.
+- The Claude Code planner no longer offers its question tool, which was always refused. The planner prompt says to ask in the reply.
+- The `record` tool states its length limits and that a constraint must be the user's exact words.
+- The planner prompt says what a read-only task cannot do: save a patch across several repositories, or on macOS listen on a port or open a PTY.
+- `task_complete` gives a summary target of about 1,100 characters beside the 1,500 limit, and a refused summary is told to move the detail into `report` or `findings`.
+- The planner prompt says how a loop's AI check runs later rounds: it re-verifies the last round's problems and the fix diff, and ends a loop that is not converging so the plan can change. The check's own instructions allow it to report `blocked` then.
+- The supervisor is told to retry a task that gave up fast on a cheaper model on a stronger model, or split it, rather than retry it unchanged.
+- The planner prompt says a read-only task's sealed command is stopped after 10 minutes, so full test suites go in a script task.
+- On Claude Code, Pi, GitHub Copilot CLI, Qwen Code and Cline, a read-only task's own reads can open files in its attempt's sealed scratch directory, where its commands write. Writes there, and other attempts' scratch, stay refused. Other runners read it through `run_command`.
+
 ## [0.14.17] - 2026-11-27
 
 ### Fixed

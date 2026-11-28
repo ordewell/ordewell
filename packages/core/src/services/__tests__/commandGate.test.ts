@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ApprovalPolicy } from '../ApprovalPolicy';
 import { decide, type GateSite, type GateVerdict, type GateWho, type Settled } from '../commandGate';
 import type { EgressCheck } from '../egressGuard';
+import { DEFAULT_PLANNER_ALLOWLIST } from '../plannerAllowlist';
 import { grantScopeFor } from '../pathScope';
 import { ParsedLine } from '../parsedLine';
 import type { ToolOutcome } from '../../interfaces/IFileSystem';
@@ -104,8 +105,57 @@ describe('commandGate: the planner', () => {
   describe('what the envelope refuses without asking anyone (ADR-0036 S2, S6)', () => {
     it('runs sealed where the host can seal it', async () => {
       const { approval, asked } = approvals();
-      expect(await decide(line('rm -rf build'), site('planner', approval, sealable))).toEqual({ kind: 'sealed', why: 'refused', command: 'rm -rf build' });
+      expect(await decide(line('rm -rf build'), site('planner', approval, sealable))).toEqual({
+        kind: 'sealed', why: 'refused', command: 'rm -rf build', note: expect.stringMatching(/^Unsealed, it is refused: "rm" modifies state/),
+      });
       expect(asked).toEqual([]);
+    });
+
+    // ADR-0036 S4: a sealed run's result says why it did not run unsealed, so
+    // the planner learns the rule rather than retrying.
+    it("keeps the classifier's reason as the sealed run's note", async () => {
+      const { approval } = approvals();
+      const verdict = await decide(line('gh secret list'), site('planner', approval, sealable));
+      expect(verdict).toMatchObject({ kind: 'sealed', why: 'refused', note: expect.stringContaining('"gh secret"') });
+    });
+
+    it('says Full does not cover a command it refuses, and leaves what to allow to the user', async () => {
+      const { approval } = approvals({ mode: 'deny' });
+      const verdict = await decide(line('git ls-remote origin'), site('planner', approval, sealable));
+      expect(verdict).toMatchObject({ kind: 'sealed', why: 'refused', note: expect.stringMatching(/^Full runs only commands the planner allowlist covers, and it does not cover this one, so it ran sealed, without the network\./) });
+      expect(verdict).toMatchObject({ note: expect.stringContaining('"ordewell --help"') });
+      expect(verdict).toMatchObject({ note: expect.stringContaining('use the fetch tool') });
+    });
+
+    it('lets the default allowlist run a gh read behind a leading flag, with no note', async () => {
+      const { approval } = approvals({ mode: 'deny', preApproved: [...DEFAULT_PLANNER_ALLOWLIST] });
+      const verdict = await decide(line('gh -R o/r release view v1'), site('planner', approval, sealable));
+      expect(await settle(verdict, approval)).toEqual({ kind: 'native', network: true, command: 'gh -R o/r release view v1' });
+    });
+
+    // An entry covers every command that starts with its words, and the
+    // setting splits on commas, so advice built from the line could grant more
+    // than the line: `main,ssh` would add an `ssh` rule. The note names no entry.
+    it.each([
+      'gh -R o/r release view v1', 'gh -R o/r repo delete x', 'gh api -X DELETE repos/o/r/issues/1',
+      'git ls-remote origin main,ssh', 'npm run test,ssh', 'az group delete x', 'git ls-remote origin',
+      'mvn -q test', 'git status && gh api repos/o/r/issues',
+    ])('proposes no allowlist entry for %s', async (command) => {
+      const { approval } = approvals({ mode: 'deny' });
+      const verdict = await decide(line(command), site('planner', approval, sealable));
+      expect(verdict).toMatchObject({ kind: 'sealed' });
+      const note = (verdict as { note?: string }).note;
+      expect(note).toMatch(/^(Full runs only commands the planner allowlist covers|Unsealed, it is refused: )/);
+      if (note === undefined) return;
+      expect(note).not.toContain('add "');
+      expect(note).not.toMatch(/\badd\b/i);
+      expect(note).not.toContain(command);
+      for (const word of command.split(/[\s,]+/).filter((w) => w.length > 2 && !['git', 'gh'].includes(w))) expect(note).not.toContain(`"${word}`);
+    });
+
+    it('gives a read-only task no planner advice in its note', async () => {
+      const { approval } = approvals();
+      expect(await decide(line('gh secret list'), site('task', approval, sealable))).not.toHaveProperty('note');
     });
 
     it('stays a refusal where it cannot', async () => {
@@ -115,7 +165,7 @@ describe('commandGate: the planner', () => {
 
     it("runs the approval mode's refusal sealed, and elsewhere hands it in to be recorded", async () => {
       const { approval, asked } = approvals({ mode: 'deny' });
-      expect(await decide(line('npm test'), site('planner', approval, sealable))).toEqual({ kind: 'sealed', why: 'refused', command: 'npm test' });
+      expect(await decide(line('npm test'), site('planner', approval, sealable))).toMatchObject({ kind: 'sealed', why: 'refused', command: 'npm test' });
       const unsealed = await decide(line('npm test'), site('planner', approval));
       expect(unsealed.kind).toBe('ask');
       expect(await settle(unsealed, approval)).toMatchObject({ kind: 'refuse', reason: expect.stringMatching(/^Command not approved: npm test/) });
@@ -127,7 +177,9 @@ describe('commandGate: the planner', () => {
       const unfollowable = { hostPath: (spelled: string) => (spelled.startsWith('/proc/') ? undefined : spelled) };
       const command = 'cat /proc/registry/x';
       expect(await decide(line(command), site('planner', approval, unfollowable))).toMatchObject({ kind: 'refuse', reason: expect.stringContaining('Git Bash reads "/proc/registry/x" by rules this check cannot follow') });
-      expect(await decide(line(command), site('planner', approval, { ...unfollowable, ...sealable }))).toEqual({ kind: 'sealed', why: 'refused', command });
+      expect(await decide(line(command), site('planner', approval, { ...unfollowable, ...sealable }))).toEqual({
+        kind: 'sealed', why: 'refused', command, note: expect.stringContaining('Git Bash reads "/proc/registry/x"'),
+      });
     });
   });
 

@@ -145,7 +145,9 @@ async function afterOneBuild(provider: FakeGemini) {
   const bash = vi.fn(async () => out(45_000, 'b'));
   const kit = plannerSession(provider, fakeFileSystem({ bash }));
   await kit.session.continueConversation('run the build');
-  const limit = Math.ceil(provider.requests.at(-1)!.promptTokens * 1.45);
+  // The first turn carries the planner's instructions, so the share a second build adds falls as they grow: 1.45 stopped
+  // overflowing once the prompt grew 85 words. 1.25 to 1.42 pass with the prompt before and after that; this sits between.
+  const limit = Math.ceil(provider.requests.at(-1)!.promptTokens * 1.35);
   kit.limits.input['big-model'] = limit;
   kit.limits.output = 8_192;
   return { ...kit, bash, limit };

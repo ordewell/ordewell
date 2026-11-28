@@ -120,8 +120,12 @@ field and the limit, and the attempt stays open for the runner to resend it
 (nothing is cut for the author: an author who is told learns, one who is cut
 silently does not). Each refusal costs the runner a model call, so the
 `summary` parameter's description, which it reads as it writes one, states the
-limit, that a longer one is refused, and that what to act on goes in
-`findings` and the long form in `report`.
+limit, a target of about 1,100 characters well inside it (the tool's
+description says the same; the task's completion contract states the limit but
+not the target, since recorded ACP and Pi runs hold its wording), that a longer
+one is refused, and that what to act on goes in `findings` and the long form
+in `report`. A refused summary is told its length, the limit, and to move the
+detail into `report` or `findings`.
 
 ### What a dependent is given
 
@@ -341,3 +345,4 @@ merges findings; and any new setting.
 - 2026-11-17 — the `summary` parameter's description says a longer one is refused and where the rest goes.
 - 2026-11-21 — a `task` reference may cite any task of the plan; a finding id stays within the readable set (ADR-0073).
 - 2026-11-24 — a done task shows what its landing changed, counted from git; the contract tells a runner to leave content its brief does not name and to say if it removed any.
+- 2026-11-28 — a summary is given a target of about 1,100 characters beside its limit, and its refusal says to move the detail into `report` or `findings`.

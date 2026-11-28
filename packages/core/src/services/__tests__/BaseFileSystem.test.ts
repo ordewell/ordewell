@@ -1436,6 +1436,30 @@ describe('BaseFileSystem runs sealed what it would refuse without asking (ADR-00
     expect(classifyOutcome(outcome.success, outcome.output)).toBe('success');
   });
 
+  // S4: once a sealed run fails, the rule it met is what the planner acts on.
+  it('says why a failed sealed run did not run unsealed, without advice to split one command', async () => {
+    const fs = new SealingFileSystem();
+    fs.result = { success: false, output: 'error connecting to api.github.com', truncated: false };
+    const outcome = await fs.bash('gh secret list');
+    expect(outcome.output).toContain('Unsealed, it is refused: "gh secret" changes state or reaches outward.');
+    expect(outcome.output).not.toContain('run each command on its own');
+
+    const loop = await fs.bash('for f in *.md; do wc -l "$f"; done');
+    expect(loop.output).toContain('run each command on its own');
+  });
+
+  it('says Full does not cover the command when Full refuses it and it fails sealed, and proposes no entry', async () => {
+    const fs = new SealingFileSystem();
+    fs.setApproval(policy({ mode: 'deny' }).approval);
+    fs.result = { success: false, output: 'fatal: unable to access', truncated: false };
+    const outcome = await fs.bash('git ls-remote origin');
+    expect(outcome.output).toContain('[Full runs only commands the planner allowlist covers, and it does not cover this one, so it ran sealed, without the network.');
+    expect(outcome.output).not.toContain('add "');
+
+    fs.result = { success: true, output: 'ok', truncated: false };
+    expect((await fs.bash('git ls-remote origin')).output).not.toContain('planner allowlist');
+  });
+
   it('runs sealed, as asked, a command that would have asked, and asks nobody', async () => {
     const fs = new SealingFileSystem();
     const { approval, asked } = policy();

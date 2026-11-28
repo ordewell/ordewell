@@ -53,11 +53,18 @@ export function readOnlyTask(opts: AgentStartOptions | null | undefined): boolea
   return opts?.kind === 'task' && (opts.flags.readOnly === true || opts.mcp?.readOnly === true);
 }
 
-/** No native tool may write or ask a person on a read-only task (ADR-0046). */
-export function decideReadOnlyTaskPermission(ask: PlannerAsk | undefined, site: Pick<TaskStartOptions, 'cwd' | 'workspaceRoot'>): ApprovalDecision {
+/**
+ * No native tool may write or ask a person on a read-only task (ADR-0046). A
+ * `path` request is a read tool's, so the attempt's own sealed scratch is one
+ * more root for it, and only for it: a write there is a write tool's request,
+ * which is refused like any other, and a link a sealed run left there is
+ * judged where it leads.
+ */
+export function decideReadOnlyTaskPermission(ask: PlannerAsk | undefined, site: Pick<TaskStartOptions, 'cwd' | 'workspaceRoot' | 'sealedScratch'>): ApprovalDecision {
   if (ask?.kind === 'path') {
     const target = resolveWithin(site.cwd, ask.path).abs;
-    if ((ask.confined ? [site.cwd] : [site.cwd, site.workspaceRoot]).some((root) => root !== undefined && readTarget(root, target).inside)) return ALLOW;
+    const roots = ask.confined ? [site.cwd] : [site.cwd, site.workspaceRoot, site.sealedScratch?.()];
+    if (roots.some((root) => root !== undefined && readTarget(root, target).inside)) return ALLOW;
     return deny('This read is outside the task worktree and workspace. Nobody can approve it here.');
   }
   return deny('This native tool is unavailable on a read-only task. Use Ordewell run_command for commands, and Ordewell fetch and web_search for the web; nobody can approve native tools here.');

@@ -79,15 +79,16 @@ round *r* and round *r* + 1 the body runs once.
   evidence said, `Verdict.reported`: the status the `task_complete` call
   carried; for a script, `failed` on a non-zero exit, a signal or its time
   limit, and `blocked` when a step could not start. A check that reports
-  `blocked`, a runner that exits without reporting, and a stopped script found
-  nothing a fix could answer, so none of them starts a round. Ordewell tells an
+  `blocked`, a runner that exits without reporting, and a stopped script ask
+  for no fix, so none of them starts a round. Ordewell tells an
   AI check so itself on every round, round 1 included and whatever the check's
   prompt says: the last block of its first message, right before its own
   prompt, says that its status is the verdict, `failed` with each confirmed
   problem in `findings` when it confirms any, `done` only when it confirms
-  none, `blocked` only when it could not check, and which round of how many it
-  is. A continue of it repeats the rule in one line. The runner's generic
-  contract says `done` once the work is complete, and a review that finds
+  none, `blocked` only when it could not check or is not converging (its
+  confirmed blocker and major problems have not fallen after two rounds), and
+  which round of how many it is. A continue of it repeats the rule in one line.
+  The runner's generic contract says `done` once the work is complete, and a review that finds
   problems and reports `done` passes the round with nothing fixed. A repair of
   the check's merge is not told: it checks nothing.
 - **Between rounds the check is no failure (L3).** A check that failed with
@@ -340,3 +341,4 @@ as check or body; a user editing a loop's `loop` field by hand from a surface.
 - 2026-11-07 — Ordewell tells an AI check on every round that its status is the verdict, not only through the planner's prompt for it (L2).
 - 2026-11-13 — who skipped a task is a stored `skipOrigin`, not read off the skip's text; the blocked rule and a new round agree on which skips stop a loop (L7).
 - 2026-11-13 — a loop's rounds, its close, the carried loops and what a start of its check does are decided in one module, `LoopRounds` (L5–L7).
+- 2026-11-28 — a check that is not converging may report `blocked`, as the planner prompt already told it to, which ends the loop with no further fix (L2).

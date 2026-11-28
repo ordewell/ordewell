@@ -340,14 +340,14 @@ function renderLoopVerdict(loop: TaskLoop, round: number | undefined): string {
   return [
     '## You are this loop\'s check',
     '',
-    'Ordewell reads your `task_complete` status as this check\'s verdict. If you confirm any problem, call `task_complete` with status `failed` and put each confirmed problem in `findings`: that starts the fix. Call it with status `done` only when you confirm none; finishing the check is not a pass. Use `blocked` only when you could not do the check: it starts no fix.',
+    'Ordewell reads your `task_complete` status as this check\'s verdict. If you confirm any problem, call `task_complete` with status `failed` and put each confirmed problem in `findings`: that starts the fix. Call it with status `done` only when you confirm none; finishing the check is not a pass. Use `blocked`, which starts no fix, only when you could not do the check, or when it is not converging: your confirmed blocker and major problems have not fallen after two rounds. Then report `blocked` instead of `failed`, say that it is not converging, and still put the problems in `findings`.',
     '',
     rounds,
   ].join('\n');
 }
 
 /** A continued check's session holds the block already; a long one may have compacted it away. */
-export const LOOP_VERDICT_REMINDER = 'You are this loop\'s check: your `task_complete` status is its verdict, `failed` when you confirm any problem and `done` only when you confirm none.';
+export const LOOP_VERDICT_REMINDER = 'You are this loop\'s check: your `task_complete` status is its verdict, `failed` when you confirm any problem, `done` only when you confirm none, and `blocked` only when you could not check or the check is not converging.';
 
 const CHECKPOINT_INSTRUCTION = [
   '## Human-in-the-loop checkpoints',

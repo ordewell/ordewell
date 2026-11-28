@@ -461,11 +461,16 @@ const REFUSED_SUBCOMMANDS: CorpusEntry[] = [
   { command: 'git fetch', tier: 'refuse' },
   { command: 'git pull', tier: 'refuse' },
   { command: 'git submodule update --init', tier: 'refuse' },
-  // Read-only in themselves, but they sit under refused subcommands whose
-  // write forms share the name. Recorded so that relaxing either is a
-  // deliberate diff rather than a side effect.
-  { command: 'git remote -v', tier: 'refuse' },
+  // Read-only in itself, but it sits under a refused subcommand whose write
+  // forms share the name. Recorded so that relaxing it is a deliberate diff
+  // rather than a side effect.
   { command: 'git config --list', tier: 'refuse' },
+  // `git remote` reads only in the forms that neither write the configuration
+  // nor reach the network: `show` without `-n` queries each remote.
+  { command: 'git remote -v', tier: 'auto' },
+  { command: 'git remote show -n origin', tier: 'auto' },
+  { command: 'git remote show origin', tier: 'refuse' },
+  { command: 'git remote set-url origin https://example.com/x', tier: 'refuse' },
   { command: 'npm publish', tier: 'refuse' },
   { command: 'npm login', tier: 'refuse' },
   { command: 'npm token list', tier: 'refuse' },
@@ -481,6 +486,7 @@ const REFUSED_SUBCOMMANDS: CorpusEntry[] = [
   { command: 'kubectl edit deploy web', tier: 'refuse' },
   { command: 'kubectl scale --replicas=3 deploy/web', tier: 'refuse' },
   { command: 'gh release create v1', tier: 'refuse' },
+  { command: 'gh release list', tier: 'ask', scope: 'gh release list' },
   { command: 'gh secret set TOKEN', tier: 'refuse' },
   { command: 'gh auth login', tier: 'refuse' },
   { command: 'az login', tier: 'refuse' },

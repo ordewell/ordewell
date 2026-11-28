@@ -74,7 +74,7 @@ describe('ClaudeCodeAdapter start switch', () => {
       '--include-partial-messages',
       '--permission-prompt-tool', 'stdio',
       '--permission-mode', 'default',
-      '--disallowedTools', 'Edit,Write,MultiEdit,NotebookEdit,KillShell,Bash,Monitor,PowerShell,EnterPlanMode,ExitPlanMode',
+      '--disallowedTools', 'AskUserQuestion,Edit,Write,MultiEdit,NotebookEdit,KillShell,Bash,Monitor,PowerShell,EnterPlanMode,ExitPlanMode',
       '--setting-sources', 'user',
       '--settings', '<settings.json>',
       '--append-system-prompt-file', '<system-prompt.md>',
@@ -104,7 +104,7 @@ describe('ClaudeCodeAdapter start switch', () => {
     const args = spawned.lastArgs();
 
     expect(args.flatMap((arg, i) => (arg === '--permission-mode' ? [args[i + 1]] : []))).toEqual(['default']);
-    expect(args[args.indexOf('--disallowedTools') + 1].split(',')).toEqual(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'KillShell', 'Bash', 'Monitor', 'PowerShell', 'EnterPlanMode', 'ExitPlanMode']);
+    expect(args[args.indexOf('--disallowedTools') + 1].split(',')).toEqual(['AskUserQuestion', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'KillShell', 'Bash', 'Monitor', 'PowerShell', 'EnterPlanMode', 'ExitPlanMode']);
     expect(args[args.indexOf('--setting-sources') + 1]).toBe('user');
     expect(flagJson(spawned.lastLaunch(), '--settings')).toEqual({
       disableAllHooks: true,

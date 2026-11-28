@@ -4,7 +4,7 @@ import { TASK_QUERY_TASK_FIELDS, OUTPUT_LINES_MAX } from '../TaskQuery';
 import { TASK_LOG_KINDS } from '../taskLogRead';
 import type { ToolOutcome } from '../../interfaces/IFileSystem';
 import type { McpCaller } from './mcpCaller';
-import { HANDOFF_LIMITS } from '../../models/Handoff';
+import { HANDOFF_LIMITS, SUMMARY_TARGET_CHARS } from '../../models/Handoff';
 import { ONE_LINE } from '../../models/lineBreaks';
 import { DECISION_RECORD_KINDS, type TurnAuthority } from '../../models/Task';
 import { BOARD_LIMITS, BOARD_REF, BOARD_TYPES, TASK_ENTRY_TYPES, type BoardEntryType } from '../../models/Board';
@@ -67,8 +67,8 @@ const handoffCommit = z.object({
 const taskCompleteInput = z.object({
   status: z.enum(['done', 'blocked', 'failed'])
     .describe("'done' only when the task is fully complete; 'blocked' for an obstacle outside your control, never for how much work remains. 'blocked' or 'failed' end the attempt without passing."),
-  summary: z.string().max(HANDOFF_LIMITS.summary, 'Put the long form in report.')
-    .describe(`The handoff the next task reads first, written for that reader: what changed and why, the interfaces and paths a dependent relies on, the assumptions you acted on, what is left. At most ${HANDOFF_LIMITS.summary} characters, or the call is refused: what to act on goes in findings, the long form in report.`),
+  summary: z.string().max(HANDOFF_LIMITS.summary, `Move the detail into report (up to ${HANDOFF_LIMITS.report} characters) or findings, and call again.`)
+    .describe(`The handoff the next task reads first, written for that reader: what changed and why, the interfaces and paths a dependent relies on, the assumptions you acted on, what is left. Aim for about ${SUMMARY_TARGET_CHARS} characters; at most ${HANDOFF_LIMITS.summary} characters, or the call is refused: what to act on goes in findings, the long form in report.`),
   reason: z.string().optional().describe("Why the task is blocked or failed. Expected for anything but 'done'."),
   commit: handoffCommit.optional()
     .describe(`A change task's commit message, for a human reviewer: what changed and why. Only kept with status 'done'. The subject is one line of at most ${HANDOFF_LIMITS.commitSubject} characters, best 72 or fewer, the body at most ${HANDOFF_LIMITS.commitBody}.`),
@@ -208,8 +208,8 @@ const taskDiffInput = z.object({
 const recordInput = z.object({
   entries: z.array(z.object({
     kind: z.enum(DECISION_RECORD_KINDS),
-    text: z.string().max(600),
-    why: z.string().max(400).optional(),
+    text: z.string().max(600).describe('At most 600 characters. A constraint is the user\'s exact words, or an excerpt, with no speaker or date prefix.'),
+    why: z.string().max(400).optional().describe('At most 400 characters.'),
     supersedes: z.string().optional().describe('The id of the entry this one replaces, as Q1.'),
   })).min(1).max(20).describe('One batch, whole or not at all.'),
 });
@@ -639,7 +639,7 @@ function readTool<H extends { readTask?: Run<ReadTaskArgs> }>(description: strin
 
 /** What every task has: it ends, asks, and reads the record (ADR-0022, ADR-0047). */
 const SHARED_TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
-  refusing(REPORT_ONLY_FIELDS, tool(TASK_COMPLETE_TOOL, `Report that this task has ended, and how, with its handoff for the tasks that read it. Call it once, as your last action. A call over a limit (the summary is at most ${HANDOFF_LIMITS.summary} characters; the long form goes in report) is refused whole and recorded as nothing: the refusal says by how much, so shorten and call again.`,
+  refusing(REPORT_ONLY_FIELDS, tool(TASK_COMPLETE_TOOL, `Report that this task has ended, and how, with its handoff for the tasks that read it. Call it once, as your last action. A call over a limit (the summary is at most ${HANDOFF_LIMITS.summary} characters, best about ${SUMMARY_TARGET_CHARS}; the long form goes in report) is refused whole and recorded as nothing: the refusal says by how much, so shorten and call again.`,
     taskCompleteInput, (h) => h.taskComplete?.bind(h))),
   tool('checkpoint', "Ask a question and wait for the answer, which is this call's result: it stops this task, and every task waiting on it, until someone answers, so ask only before an effect your brief did not authorise that cannot be undone or reaches outside the workspace, or for what only a person has (a credential, a choice your brief leaves open that changes the outcome), never whether to keep waiting or to confirm what your brief says.",
     checkpointInput, (h) => h.checkpoint?.bind(h)),
@@ -767,7 +767,7 @@ export const PLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
   tool('task_diff', 'Read what a task changed since it started: file stats with repository paths, or a single file patch with path and repo. Paged by since/nextOffset. Shared runs without recorded changes report not available.',
     taskDiffInput, (h) => h.taskDiff?.bind(h), PLANNER_READ_ONLY),
   PLANNER_RECORD,
-  tool('run_command', `Run a shell command for research: git, gh, az, kubectl, the project's own tooling, anything you need to look at. Read-only commands run at once; others ask the user, once per command family; commands that write files never change anything. ${SEALED_RUNS} Use it instead of a shell of your own.`,
+  tool('run_command', `Run a shell command for research: git, gh, az, kubectl, the project's own tooling, anything you need to look at. Read-only commands run at once; others run if the planner allowlist covers them, else Guarded asks the user once per command family and Full runs them sealed, without the network. Commands that write or reach outward are refused or sealed. ${SEALED_RUNS} Use it instead of a shell of your own.`,
     runCommandInput, (h) => h.runCommand?.bind(h), PLANNER_READ_ONLY),
   // Fallbacks (ADR-0027): a runner's own fetch or search, where it has one, is
   // decided by the same policy and carries the provider's own summaries, so
@@ -828,7 +828,7 @@ export const PLANNER_POST = tool<PlannerToolHandler, typeof plannerPostInput>('p
 
 /** What a subplanner has beside a planner's tools. Named so a runner pre-allows them with the rest. */
 export const SUBPLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
-  tool(TASK_COMPLETE_TOOL, `Report that the delegated task has ended, and how, with its handoff for the plan above. Status 'done' is refused until your child plan has settled, done work and merged it; 'blocked' and 'failed' are taken at any time. A call over a limit (the summary is at most ${HANDOFF_LIMITS.summary} characters) is refused whole. Call it once, as your last action.`,
+  tool(TASK_COMPLETE_TOOL, `Report that the delegated task has ended, and how, with its handoff for the plan above. Status 'done' is refused until your child plan has settled, done work and merged it; 'blocked' and 'failed' are taken at any time. A call over a limit (the summary is at most ${HANDOFF_LIMITS.summary} characters, best about ${SUMMARY_TARGET_CHARS}) is refused whole. Call it once, as your last action.`,
     subplannerCompleteInput, (h) => h.taskComplete?.bind(h), PLANNER_READ_ONLY),
   tool('checkpoint', 'Ask the plan above a question, then end your turn: the call returns at once, and the answer opens your next turn. One at a time.',
     subplannerCheckpointInput, (h) => h.checkpoint?.bind(h), PLANNER_READ_ONLY),

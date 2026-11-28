@@ -288,7 +288,7 @@ describe('a check sees what changed since its last round (ADR-0047)', () => {
 });
 
 describe('a loop\'s AI check is told its status is the verdict (ADR-0045 L2)', () => {
-  const VERDICT_RULE = 'Ordewell reads your `task_complete` status as this check\'s verdict. If you confirm any problem, call `task_complete` with status `failed` and put each confirmed problem in `findings`: that starts the fix. Call it with status `done` only when you confirm none; finishing the check is not a pass. Use `blocked` only when you could not do the check: it starts no fix.';
+  const VERDICT_RULE = 'Ordewell reads your `task_complete` status as this check\'s verdict. If you confirm any problem, call `task_complete` with status `failed` and put each confirmed problem in `findings`: that starts the fix. Call it with status `done` only when you confirm none; finishing the check is not a pass. Use `blocked`, which starts no fix, only when you could not do the check, or when it is not converging: your confirmed blocker and major problems have not fallen after two rounds. Then report `blocked` instead of `failed`, say that it is not converging, and still put the problems in `findings`.';
 
   it('gets the block on round 1, right before its own prompt', () => {
     const build = createTask({ id: 'build', order: 1, title: 'Build', handoff: { summary: 'Built it.', findings: [], findingCount: 0 } });

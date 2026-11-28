@@ -279,6 +279,13 @@ export interface TaskStartOptions extends AgentStartCommon {
   kind: 'task';
   /** The session workspace, also readable when cwd is an isolated task worktree (ADR-0046). */
   workspaceRoot?: string;
+  /**
+   * A read-only attempt's own sealed scratch directory, its sealed runs'
+   * `TMPDIR`, once one has been made: its native reads may read there too,
+   * so it can open what its commands wrote (ADR-0046). Asked at each read,
+   * since the directory is made at the first sealed run.
+   */
+  sealedScratch?: () => string | undefined;
   /** The task's runner mode id, as the plan names it. */
   mode: string;
   flags: TaskRunnerFlags;

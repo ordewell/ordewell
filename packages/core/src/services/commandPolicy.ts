@@ -45,7 +45,7 @@
 import { ParsedLine, type LineShell } from './parsedLine';
 import { SHELL_STATE_COMMANDS, literalCdTarget, mayBecomeFlag, mayBeginWith, mayExpandTo, shellRewrites, type Segment } from './shellLexer';
 import { REFUSED_RUNNERS, XARGS_TARGETS, unwrap } from './commandRunners';
-import { FLAG_POLICY, UNIVERSAL_FLAGS, flagLabel, matchFlag, scanFlags, subcommandOf, subcommandShifter, takesNextToken, valueFlagIn } from './flagPolicy';
+import { FLAG_POLICY, UNIVERSAL_FLAGS, flagLabel, matchFlag, scanFlags, scanSubcommand, subcommandOf, subcommandShifter, takesNextToken, valueFlagIn } from './flagPolicy';
 import { AWK_FAMILY, JQ_FAMILY, SED_FAMILY, awkProgramArgs, awkRefusal, jqProgramEnd, jqRefusal, sedOnlyPrints, sedProgramArgs, sedRefusal } from './filterPrograms';
 import { commandAllowedBy, commandExcludedBy, scopeExcluded, type PlannerAllowlist } from './plannerAllowlist';
 import { EFFECT_REFUSAL_HINT, READ_REFUSAL_HINT, webCommand, wgetVersionCommands } from './webCommands';
@@ -128,6 +128,7 @@ const GIT_PROMPTABLE: Record<string, (after: string[], seg: Segment) => boolean>
   'bisect': onlyAction('log'),
   'sparse-checkout': onlyAction('list'),
   'reflog': onlyAction('show', 'exists'),
+  'remote': (after, seg) => remoteReadsLocally(after, seg),
   // A second operand writes the ref, and a word the shell may split may be one.
   'symbolic-ref': (after, seg) => after.filter((a) => !a.startsWith('-')).length <= 1
     && !after.some((a) => shellRewrites(seg, a)),
@@ -166,7 +167,7 @@ export const REFUSED_COMMANDS = [
 const REFUSED_SUBCOMMANDS: Record<string, string[]> = {
   git: ['push', 'reset', 'clean', 'checkout', 'switch', 'restore', 'rebase', 'merge', 'commit',
     'am', 'apply', 'cherry-pick', 'revert', 'stash', 'gc', 'prune', 'filter-branch',
-    'update-ref', 'remote', 'config', 'init', 'clone', 'fetch', 'pull', 'submodule',
+    'update-ref', 'config', 'init', 'clone', 'fetch', 'pull', 'submodule',
     'add', 'rm', 'mv', 'format-patch', 'replace', 'mergetool',
     'repack', 'update-index', 'read-tree', 'checkout-index', 'merge-file', 'bundle',
     'commit-tree', 'write-tree', 'mktree', 'mktag', 'unpack-objects', 'fast-import',
@@ -176,10 +177,51 @@ const REFUSED_SUBCOMMANDS: Record<string, string[]> = {
   pnpm: ['publish'],
   docker: ['push', 'rm', 'rmi', 'kill', 'stop', 'prune', 'system'],
   kubectl: ['delete', 'apply', 'create', 'patch', 'replace', 'edit', 'drain', 'cordon', 'scale'],
-  gh: ['release', 'secret', 'auth'],
+  gh: ['release', 'secret', 'auth', 'alias'],
   az: ['login', 'logout'],
   terraform: ['apply', 'destroy'],
 };
+
+/**
+ * The actions of a subcommand in {@link REFUSED_SUBCOMMANDS} that only read,
+ * and so ask as any other command of that CLI does. The action is the word
+ * right after the subcommand, written literally: `gh release l*` stays refused.
+ * glab's equivalents are on the planner allowlist, and `gh release` refused
+ * whole left `gh release list` running sealed, where it always fails.
+ */
+const REFUSED_SUBCOMMAND_READS: Record<string, Record<string, readonly string[]>> = {
+  gh: { release: ['list', 'view'], alias: ['list'] },
+};
+
+function readsDespiteRefusal(seg: Segment, sub: string): boolean {
+  const reads = REFUSED_SUBCOMMAND_READS[seg.binary]?.[sub];
+  if (!reads) return false;
+  // By position, not by spelling: a flag's value before the subcommand may read the same.
+  const at = scanSubcommand(seg)?.operandAt[0] ?? seg.args.indexOf(sub);
+  const action = seg.args[at + 1];
+  return action !== undefined && reads.includes(action) && !shellRewrites(seg, action);
+}
+
+/**
+ * Whether `git remote …` only reads the repository's configuration: bare or
+ * with `-v`, `get-url <name>`, or `show -n` (without `-n`, `show` queries each
+ * remote over the network, the way `ls-remote` does, so it stays refused).
+ * Every other action (add, remove, rename, set-url, set-head, prune, update)
+ * writes the configuration or fetches. A name must be one git can only read
+ * as a remote's.
+ */
+function remoteReadsLocally(after: string[], seg: Segment): boolean {
+  if (after.some((a) => shellRewrites(seg, a))) return false;
+  const rest = after.filter((a, i) => !(['-v', '--verbose'].includes(a) && after.slice(0, i).every((b) => b.startsWith('-'))));
+  const [action, ...args] = rest;
+  if (action === undefined) return true;
+  const names = args.filter((a) => !a.startsWith('-'));
+  const flags = args.filter((a) => a.startsWith('-'));
+  if (!names.every((n) => REMOTE_NAME.test(n))) return false;
+  if (action === 'get-url') return names.length === 1 && flags.every((f) => f === '--push' || f === '--all');
+  if (action === 'show') return flags.length > 0 && flags.every((f) => f === '-n');
+  return false;
+}
 
 /**
  * Shell reserved words and compound-command openers. `toSegment` takes the
@@ -658,13 +700,33 @@ function scopeFor(seg: Segment): string {
   const program = programName(seg.binary);
   if (!MULTIPLEXERS.includes(program)) return name;
   if (program === 'git') return gitScope(seg, name);
+  let words: readonly string[] = seg.args;
+  if (program === 'gh') {
+    const found = ghWords(seg);
+    // No subcommand to name: only the exact line is narrower than all of gh.
+    if (!found) return [name, ...seg.args].map(scopeWord).join(' ');
+    words = found;
+  }
   const lead: string[] = [];
-  for (const arg of seg.args) {
+  for (const arg of words) {
     if (arg.startsWith('-')) break;
     lead.push(arg);
     if (lead.length === SCOPE_LEAD_ARGS) break;
   }
   return [name, ...lead].join(' ');
+}
+
+/**
+ * gh's arguments from its subcommand on. gh takes flags before it (`gh -R o/r
+ * release view`), and stopping at one would scope a read and a delete alike as
+ * bare `gh`. Undefined when there is no subcommand, or the shell may change
+ * which word it is.
+ */
+function ghWords(seg: Segment): string[] | undefined {
+  const gh = { ...seg, binary: 'gh' };
+  const scan = scanSubcommand(gh);
+  const at = scan?.operandAt[0];
+  return at === undefined || subcommandShifter(gh, scan) !== undefined ? undefined : seg.args.slice(at);
 }
 
 /**
@@ -733,6 +795,7 @@ function isAuto(seg: Segment, line: ParsedLine): boolean {
   if (climbsByGlob(seg)) return false;
   if (seg.binary !== 'git') return true;
   const sub = subcommandOf(seg);
+  if (sub === 'remote') return remoteReadsLocally(gitArgsAfterSubcommand(seg), seg);
   return sub !== undefined && GIT_READONLY_SUBCOMMANDS.includes(sub);
 }
 
@@ -870,12 +933,12 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
   if (subs) {
     const shifter = subcommandShifter(seg);
     if (shifter !== undefined) {
-      const written = [seg.binary, scanFlags(seg)?.operands[0]].filter((w) => w !== undefined).join(' ');
+      const written = [seg.binary, scanSubcommand(seg)?.operands[0]].filter((w) => w !== undefined).join(' ');
       return `The shell may expand "${shifter}" into several words or none, so "${written}" may run another subcommand than the one written. Spell the words before the subcommand literally, in single quotes where they hold a "*", and re-run.`;
     }
     const sub = subcommandOf(seg);
     // `npm p*` runs `npm publish` once a file of that name exists.
-    const refused = sub === undefined ? undefined : subs.find((s) => mayExpandTo(seg, sub, s));
+    const refused = sub === undefined || readsDespiteRefusal(seg, sub) ? undefined : subs.find((s) => mayExpandTo(seg, sub, s));
     if (refused) {
       return `"${seg.binary} ${refused}" changes state or reaches outward. You are a read-only planner: ${EFFECT_ROUTE}`;
     }
@@ -1249,7 +1312,12 @@ function allowlistRule(parts: { seg: Segment; runner?: string }[], allow: Planne
       }
       continue;
     }
-    const rule = commandAllowedBy(allow, { binary: seg.binary, args: seg.args, scopeWords: scopeFor(seg).split(' ').length - 1 });
+    const rule = commandAllowedBy(allow, {
+      binary: seg.binary,
+      args: seg.args,
+      ...(seg.binary === 'gh' ? { lead: ghWords(seg) } : {}),
+      scopeWords: scopeFor(seg).split(' ').length - 1,
+    });
     if (!rule) return undefined;
     rules.push(rule);
   }

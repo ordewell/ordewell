@@ -1226,6 +1226,7 @@ export class StructuredRunner extends AbstractRunner<StructuredSession> {
         kind: 'task',
         cwd: opts.cwd,
         workspaceRoot: opts.workspaceRoot,
+        ...(opts.shell?.scratch ? { sealedScratch: opts.shell.scratch.bind(opts.shell) } : {}),
         model: opts.modelId,
         mode: opts.mode ?? 'default',
         flags: resolveTaskRunnerFlags(manifest, { mode: opts.mode ?? 'default', model: opts.modelId, thinkingEffort: opts.thinkingEffort }),

@@ -1,6 +1,7 @@
 import { forbiddenFields } from '../../models/TaskKind';
 import { describe, it, expect } from 'vitest';
 import { buildConflictRepairPrompt, buildConflictResolutionPrompt, buildConversationSystemPrompt, buildPlanWithResults, buildResearchPrompt, buildResearchToolsPrompt, buildSubagentSystemPrompt, inTurnAgents, NATIVE_SHELL_GUIDE, PARALLELISM_RULE, whoExploresSection } from '../PlanPrompts';
+import { TASK_SEALED_LIMITS } from '../sandbox/plannerSandbox';
 import type { RepoGroupLayout } from '../../interfaces/IWorktreeIsolation';
 import { createTask, type DiscoveredModel, type RunnerId } from '../../models/Task';
 
@@ -647,25 +648,27 @@ describe('the coordinator role and its defaults (#5)', () => {
   });
 
   // Every line of the system prompt is paid for on each turn; the rewrite had to fit in what was there.
+  // Raised by 50 for WORKFLOW step 2's "no question tool" and READ-ONLY TASKS' limits: planners called a refused question tool, and routed listeners and multi-repo prototypes to read-only tasks that could not run them.
+  // Raised by 85 for LOOPS' later rounds and non-converging check, and READ-ONLY TASKS' sealed time limit: review loops re-audited the whole change for up to 13 rounds, and full suites ran out a read-only task's clock.
   it('keeps the harness prompt within its word budget', () => {
     const p = buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, {
       harness: true, runner: 'claude-code', autorun: true, execution: true, isolatedExecution: { repos: ['.'], shared: [] },
     });
-    expect(words(p)).toBeLessThanOrEqual(5210);
+    expect(words(p)).toBeLessThanOrEqual(5345);
   });
 
   it('keeps a Codex planner, named its spawn_agent tool, within the same budget', () => {
     const p = buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, {
       harness: true, runner: 'codex', autorun: true, execution: true, isolatedExecution: { repos: ['.'], shared: [] },
     });
-    expect(words(p)).toBeLessThanOrEqual(5210);
+    expect(words(p)).toBeLessThanOrEqual(5345);
   });
 
   it('keeps an OpenCode planner with the research agent within the same budget (ADR-0066)', () => {
     const p = buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, {
       harness: true, runner: 'opencode', researchAgent: true, autorun: true, execution: true, isolatedExecution: { repos: ['.'], shared: [] },
     });
-    expect(words(p)).toBeLessThanOrEqual(5210);
+    expect(words(p)).toBeLessThanOrEqual(5345);
   });
 });
 
@@ -1143,6 +1146,14 @@ describe('loops in the conversation prompt (ADR-0045)', () => {
     expect(loops).toMatch(/Only a "failed" report starts a round: "blocked".*start none/);
   });
 
+  // Review loops that re-audited the whole change each round never converged.
+  it.each(variants)('has an AI check re-verify the last round and the fix diff, and end a loop that is not converging (%o)', ({ harness, execution }) => {
+    const loops = section(prompt(harness, { execution }), 'LOOPS:');
+    expect(loops).toMatch(/every confirmed problem in its report/);
+    expect(loops).toMatch(/Have an AI check's later rounds re-verify the last round's problems and review the fix diff for regressions, not re-audit the whole change\./);
+    expect(loops).toMatch(/If its confirmed blocker and major problems have not fallen after two rounds, it reports "blocked", saying it is not converging: the loop ends failed, and you replan: split the work, or change the fixer's or reviewer's model\./);
+  });
+
   it('hands the body the check\'s report and has the planner choose the rounds', () => {
     const loops = section(prompt(false), 'LOOPS:');
     expect(loops).toMatch(/given the check's latest report as its prior task output, told which round it is from/);
@@ -1334,5 +1345,30 @@ describe('the default thinking effort', () => {
     const text = selection(prompt);
     expect(text).toContain('- Default thinkingEffort to "medium" (else the next variant up); go higher only for architecture changes, a hard refactor or security-critical code. Use "low" for trivial edits.');
     expect(text).not.toContain('"medium" or "high" for moderate/complex tasks');
+  });
+});
+
+// The envelope refuses a harness's question tool, and Claude Code's planner has it withheld.
+describe('how the planner asks the user', () => {
+  it.each([false, true])('says questions go in the reply, with no question tool (harness: %s)', (harness) => {
+    const p = buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness, runner: 'claude-code' });
+    expect(p).toContain("Ask in your reply and end the turn; the user's next message answers. There is no question tool.");
+  });
+});
+
+// Each limit is one the code holds: Seatbelt's profile, and PatchCapture's refusal of several worktrees.
+describe('what a read-only task cannot do', () => {
+  it('names save_patch across repositories, and listeners and PTYs on macOS, as change-task work', () => {
+    const p = buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness: true, runner: 'claude-code' });
+    expect(p).toContain('A read-only task spanning several repositories cannot save_patch, and on macOS its sealed commands cannot listen on a port, even localhost, or open a PTY: such work is a change task.');
+  });
+});
+
+// A read-only task's sealed command has TASK_SEALED_LIMITS' wall time; full suites ran out of it.
+describe('the time a read-only task\'s sealed command has', () => {
+  it.each([false, true])('states the limit from the code and sends full suites to a script task (harness: %s)', (harness) => {
+    const p = buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness, runner: 'claude-code' });
+    expect(TASK_SEALED_LIMITS.wallTimeMs).toBe(10 * 60_000);
+    expect(p).toContain('A sealed command is killed after 10 minutes: a read-only task runs targeted tests, and a full suite goes in a script task.');
   });
 });

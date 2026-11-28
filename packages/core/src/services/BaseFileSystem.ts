@@ -11,10 +11,10 @@ import {
   type TaskShellSite,
 } from '../interfaces/IFileSystem';
 import { IApproval, DENY_ALL } from '../interfaces/IApproval';
-import { decide, type GateSite, type GateWho } from './commandGate';
+import { decide, type GateSite, type GateWho, type Settled } from './commandGate';
 import { ParsedLine } from './parsedLine';
 import { resolveResearchShell, researchShellWarning, researchLineShell, type ResearchShell, type ShellLaunch } from './researchShell';
-import { PlannerShellSandbox, SEALED_FAILURE_NOTE, TASK_SEALED_FAILURE_NOTE, TASK_SEALED_LIMITS, sandboxedFailureNote, sealedMemoryLimitNote, sealedRunHeader, sealedTimeLimitNote, type SealedRunOptions, type SealedRunReason } from './sandbox/plannerSandbox';
+import { PlannerShellSandbox, SEALED_FAILURE_NOTE, SEALED_SINGLE_FAILURE_NOTE, TASK_SEALED_FAILURE_NOTE, TASK_SEALED_LIMITS, sandboxedFailureNote, sealedMemoryLimitNote, sealedRunHeader, sealedTimeLimitNote, type SealedRunOptions } from './sandbox/plannerSandbox';
 import { resolveWithin, grantScopeFor } from './pathScope';
 import { definitionPattern, referencePattern, languageForId, includeGlobFor } from './symbolPatterns';
 import { resolveAll, vetEgress, type ResolveAll } from './egressGuard';
@@ -335,6 +335,7 @@ export abstract class BaseFileSystem implements IFileSystem {
         get scratch() { return sandbox.scratchPath(); },
         run: (script, at) => this.runOwn(site, roots, script, at, signal),
       })),
+      scratch: () => sandbox.sealedScratch(),
       end: () => sandbox.end(),
     };
   }
@@ -365,7 +366,7 @@ export abstract class BaseFileSystem implements IFileSystem {
     }
     switch (verdict.kind) {
       case 'refuse': return refusal(verdict.reason);
-      case 'sealed': return this.runSealed(site, verdict.command, verdict.why, signal);
+      case 'sealed': return this.runSealed(site, verdict, signal);
       case 'native': return this.runShell(site, verdict.command, verdict.network, signal);
     }
   }
@@ -388,15 +389,19 @@ export abstract class BaseFileSystem implements IFileSystem {
   }
 
   /** One sealed run (ADR-0036 S1): no network, no home, nothing it writes reaching the workspace, and nobody asked. */
-  private async runSealed(site: ShellSite, command: string, why: SealedRunReason, signal?: AbortSignal): Promise<ToolOutcome> {
+  private async runSealed(site: ShellSite, { command, why, note }: Extract<Settled, { kind: 'sealed' }>, signal?: AbortSignal): Promise<ToolOutcome> {
     const sealed = await this.sealedRun(site, command, site.root, signal);
     if ('refused' in sealed) return sealed.refused;
     const { outcome, shell, first, swept } = sealed;
     if (signal?.aborted) return { ...outcome, output: `${outcome.output}${swept}` };
     const failed = outcome.timedOut && shell.wallTimeMs !== undefined
       ? sealedTimeLimitNote(shell.wallTimeMs, site.task !== undefined)
-      : sealedMemoryLimitNote(outcome, shell.memoryBytes, site.task !== undefined) ?? (site.task ? TASK_SEALED_FAILURE_NOTE : SEALED_FAILURE_NOTE);
-    const output = `${sealedRunHeader(why, site.task && { worktree: site.task.worktree, first })}\n${outcome.output}${outcome.success ? '' : `\n\n[${failed}]`}${swept}`;
+      : sealedMemoryLimitNote(outcome, shell.memoryBytes, site.task !== undefined)
+        // One command: the advice to split a loop or inline code into commands of their own does not apply.
+        ?? (site.task ? TASK_SEALED_FAILURE_NOTE : this.parse(command).lexed.segments.length === 1 ? SEALED_SINGLE_FAILURE_NOTE : SEALED_FAILURE_NOTE);
+    // Why it ran sealed matters once it fails (ADR-0036 S4): the rule it met is what to act on.
+    const failure = outcome.success ? '' : `\n\n[${note ? `${note} ` : ''}${failed}]`;
+    const output = `${sealedRunHeader(why, site.task && { worktree: site.task.worktree, first })}\n${outcome.output}${failure}${swept}`;
     return { ...outcome, output };
   }
 
