@@ -49,9 +49,12 @@ const SETTLE_MS = 400;
  * A hidden test window, never throttled, still draws one frame a second until
  * a screenshot wakes it, and a theme or size change puts it back to sleep, so
  * every settle and every shot waited out whole seconds. Unlimited, it draws as
- * a shown window does.
+ * a shown window does. The shots are judged at a scale factor of 1, and on a
+ * display scaled to 125% emulating one sets devicePixelRatio but still snaps a
+ * 1px border to 0.8px, so a 24px target measures 23.6px: the window is drawn
+ * at 1 from the start.
  */
-const SWITCHES = ['--disable-frame-rate-limit'];
+const SWITCHES = ['--disable-frame-rate-limit', '--force-device-scale-factor=1'];
 const ALL_RUNNERS = 'claude-code,codex,opencode,copilot-cli,qwen-code,cline,gemini-cli,cursor-agent';
 const RUNNERS_GOAL = 'Spread the work across every agent';
 const GOAL = 'Add greeting and farewell modules';

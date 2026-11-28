@@ -10,6 +10,13 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { checkDesktopPackage } from './desktop-package-check.mjs';
+import { npmCommand } from './npm.mjs';
+
+/** npm's output, started as scripts/npm.mjs starts it: a bare `npm` is no program on Windows, where it is npm.cmd. */
+const runNpm = (args, options) => {
+  const { file, args: argv, shell } = npmCommand(args);
+  return execFileSync(file, argv, { ...options, shell });
+};
 
 const root = process.cwd();
 let failures = 0;
@@ -55,7 +62,7 @@ try {
     const pkg = JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf8'));
     console.log(`\n${pkg.name}@${pkg.version}`);
     const before = failures;
-    const dryRun = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], { cwd, encoding: 'utf8' }));
+    const dryRun = JSON.parse(runNpm(['pack', '--dry-run', '--json', '--ignore-scripts'], { cwd, encoding: 'utf8' }));
     const files = new Set(dryRun[0].files.map((file) => file.path));
     for (const target of entryTargets(pkg)) {
       if (!files.has(target)) fail(`${dir}: entry target ${target} is not in the tarball`);
@@ -64,7 +71,7 @@ try {
       if (!files.has(notice)) fail(`${dir}: ${notice} is not in the tarball (list it in "files")`);
     }
     if (failures === before) ok(`${files.size} files, every entry target and notice present`);
-    const packed = execFileSync('npm', ['pack', '--pack-destination', packDir, '--ignore-scripts'], { cwd, encoding: 'utf8' })
+    const packed = runNpm(['pack', '--pack-destination', packDir, '--ignore-scripts'], { cwd, encoding: 'utf8' })
       .trim()
       .split('\n')
       .pop();
@@ -88,7 +95,8 @@ try {
   const userconfig = join(packDir, 'empty.npmrc');
   writeFileSync(userconfig, '');
   const installEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toLowerCase().replace(/-/g, '_') !== 'npm_config_allow_scripts'));
-  const installed = spawnSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', `--userconfig=${userconfig}`], { cwd: consumer, stdio: 'inherit', env: installEnv });
+  const install = npmCommand(['install', '--ignore-scripts', '--no-audit', '--no-fund', `--userconfig=${userconfig}`]);
+  const installed = spawnSync(install.file, install.args, { cwd: consumer, stdio: 'inherit', env: installEnv, shell: install.shell });
   if (installed.status !== 0) {
     fail('npm install of the packed tarballs failed');
   } else {

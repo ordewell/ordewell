@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { clearAugmentedPathCache } from '@ordewell/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TerminalEvent } from '../../../shared/bridge';
 import { fileSystemPlacement } from '../placement';
@@ -34,6 +35,21 @@ function setup(platform: NodeJS.Platform = 'darwin', words?: (file: string, env:
   const sent: Array<{ id: number; event: TerminalEvent }> = [];
   const caller = (owner = 1): Caller => ({ owner, workspace: root, send: (id, event) => sent.push({ id, event }) });
   return { channel, fake, host, sent, caller };
+}
+/**
+ * Runs `open` on a PATH that holds no agent: a host with Codex installed
+ * would resolve `codex` to its shim, and these tests are about core's argv.
+ */
+async function onBarePath<T>(open: () => Promise<T>): Promise<T> {
+  const original = process.env.PATH;
+  process.env.PATH = join(root, 'no-bin');
+  clearAugmentedPathCache();
+  try {
+    return await open();
+  } finally {
+    process.env.PATH = original;
+    clearAugmentedPathCache();
+  }
 }
 const spec = (extra: Record<string, unknown> = {}) => ({ id: 1, repo: '.', scope: { kind: 'checkout' }, cols: 90, rows: 30, ...extra });
 
@@ -124,7 +140,7 @@ describe('TerminalChannel (ADR-0062 G11)', () => {
 
   it('runs an agent\'s login as core\'s argv, never through a shell', async () => {
     const { channel, fake, caller } = setup();
-    const result = await channel.open(caller(), spec({ login: { runner: 'codex' } }));
+    const result = await onBarePath(() => channel.open(caller(), spec({ login: { runner: 'codex' } })));
     expect(result).toMatchObject({ ok: true, id: 1, shell: 'codex' });
     expect(fake.calls[0]!.file).toBe('codex');
     expect(fake.calls[0]!.args).toEqual(['login']);
@@ -133,7 +149,7 @@ describe('TerminalChannel (ADR-0062 G11)', () => {
 
   it('runs a launcher\'s login in home, with no checkout to open', async () => {
     const { channel, fake } = setup();
-    const result = await channel.open({ owner: 9, send: () => undefined }, spec({ login: { runner: 'codex' } }));
+    const result = await onBarePath(() => channel.open({ owner: 9, send: () => undefined }, spec({ login: { runner: 'codex' } })));
     expect(result).toMatchObject({ ok: true });
     expect(fake.calls[0]!.file).toBe('codex');
     expect(fake.calls[0]!.cwd).toBe(root);

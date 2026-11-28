@@ -130,22 +130,32 @@ function renderMaster() {
   return out;
 }
 
-/** Box-filter `master` down to `size`; each output pixel averages the pixels it covers. */
-function downscale(master, size) {
+/**
+ * Box-filter `master` down to `size`; each output pixel averages the pixels it
+ * covers. MASTER / size is fractional for 24 and 48, so the source range is
+ * rounded to whole pixels: indexing a typed array at a fraction yields
+ * undefined, which turned those frames into NaN and then transparent.
+ */
+export function downscale(master, size) {
   if (size === MASTER) return master;
-  const factor = MASTER / size;
   const out = new Float32Array(size * size * 4);
+  const edge = (n) => Math.floor((n * MASTER) / size);
   for (let y = 0; y < size; y++) {
+    const y0 = edge(y);
+    const y1 = Math.max(edge(y + 1), y0 + 1);
     for (let x = 0; x < size; x++) {
+      const x0 = edge(x);
+      const x1 = Math.max(edge(x + 1), x0 + 1);
       const acc = [0, 0, 0, 0];
-      for (let sy = 0; sy < factor; sy++) {
-        for (let sx = 0; sx < factor; sx++) {
-          const i = ((y * factor + sy) * MASTER + x * factor + sx) * 4;
+      for (let sy = y0; sy < y1; sy++) {
+        for (let sx = x0; sx < x1; sx++) {
+          const i = (sy * MASTER + sx) * 4;
           for (let c = 0; c < 4; c++) acc[c] += master[i + c];
         }
       }
+      const count = (y1 - y0) * (x1 - x0);
       const o = (y * size + x) * 4;
-      for (let c = 0; c < 4; c++) out[o + c] = acc[c] / (factor * factor);
+      for (let c = 0; c < 4; c++) out[o + c] = acc[c] / count;
     }
   }
   return out;
