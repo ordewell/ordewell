@@ -121,7 +121,8 @@ field and the limit, and the attempt stays open for the runner to resend it
 silently does not). Each refusal costs the runner a model call, so the
 `summary` parameter's description, which it reads as it writes one, states the
 limit, a target of about 1,100 characters well inside it (the tool's
-description and the task's completion contract say the same), that a longer
+description says the same; the task's completion contract states the limit but
+not the target, since recorded ACP and Pi runs hold its wording), that a longer
 one is refused, and that what to act on goes in `findings` and the long form
 in `report`. A refused summary is told its length, the limit, and to move the
 detail into `report` or `findings`.
