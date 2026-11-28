@@ -14,7 +14,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - A `gh` flag written before the subcommand, as in `gh -R owner/repo release create`, no longer hides it: such a `gh release`, `gh secret` or `gh auth` command is refused. `gh alias` is refused too, apart from `gh alias list`.
 - A `gh` read with a flag before the subcommand, as in `gh -R owner/repo release view`, now matches the allowlist, and approving it no longer approves every `gh` command.
 - The planner can run `git remote`, `git remote -v`, `git remote get-url` and `git remote show -n` without asking. Actions that change a remote, and `git remote show` without `-n`, stay refused.
-- A command that runs sealed instead of being refused says why when it fails: the rule it met, or in Full the allowlist entry that would let it run with the network. An entry that is only a program's name is never suggested. A single command is no longer told to split itself up.
+- A command that runs sealed instead of being refused says why when it fails: the rule it met, or in Full the allowlist entry that would let it run with the network. An entry that is only a program's name is never suggested, and for `gh` only a read on the default allowlist or `gh --version` is, so no suggested entry covers a `gh` write. A single command is no longer told to split itself up.
 - The `run_command` description says what Full does with a command the allowlist does not cover.
 - The Claude Code planner no longer offers its question tool, which was always refused. The planner prompt says to ask in the reply.
 - The `record` tool states its length limits and that a constraint must be the user's exact words.

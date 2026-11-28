@@ -133,13 +133,27 @@ describe('commandGate: the planner', () => {
     });
 
     it.each([
-      ['gh -R o/r repo delete x', 'gh repo delete'],
       ['gh --repo o/r release view v1', 'gh release view'],
+      ['gh -R o/r search repos x', 'gh search repos'],
       ['gh --version', 'gh --version'],
     ])('never advises adding bare gh for %s', async (command, scope) => {
       const { approval } = approvals({ mode: 'deny' });
       const verdict = await decide(line(command), site('planner', approval, sealable));
       expect(verdict).toMatchObject({ kind: 'sealed', note: expect.stringContaining(`add "${scope}" to ORDEWELL_APPROVAL_ALLOW`) });
+    });
+
+    // An entry covers every command that starts with its words, whatever flags
+    // follow: `gh api <path>` covers `-X DELETE`, and `gh pr`, left by a flag
+    // before the action, covers `gh pr merge`.
+    it.each([
+      'gh api repos/o/r/issues', 'gh api --method GET repos/o/r/issues', './bin/gh api repos/o/r/issues',
+      'gh pr --repo o/r view', 'gh -R o/r repo delete x', 'gh pr create --title x', 'gh -R o/r',
+      'git ls-remote origin && gh api repos/o/r/issues', 'cd "$DIR" && gh repo delete x',
+    ])('advises no entry for %s, which would cover a gh write', async (command) => {
+      const { approval } = approvals({ mode: 'deny' });
+      const verdict = await decide(line(command), site('planner', approval, sealable));
+      expect(verdict).toMatchObject({ kind: 'sealed', why: 'refused' });
+      expect(verdict).toMatchObject({ note: `Full runs only the planner allowlist, which does not cover "${command}".` });
     });
 
     it.each(['mvn -q test', 'git status && mvn -q test', 'mvn -q test && gh repo delete x'])('names the command line, and advises no entry, where %s has a scope that is a binary alone', async (command) => {

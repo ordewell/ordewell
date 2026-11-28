@@ -47,7 +47,7 @@ import { SHELL_STATE_COMMANDS, literalCdTarget, mayBecomeFlag, mayBeginWith, may
 import { REFUSED_RUNNERS, XARGS_TARGETS, unwrap } from './commandRunners';
 import { FLAG_POLICY, UNIVERSAL_FLAGS, flagLabel, matchFlag, scanFlags, scanSubcommand, subcommandOf, subcommandShifter, takesNextToken, valueFlagIn } from './flagPolicy';
 import { AWK_FAMILY, JQ_FAMILY, SED_FAMILY, awkProgramArgs, awkRefusal, jqProgramEnd, jqRefusal, sedOnlyPrints, sedProgramArgs, sedRefusal } from './filterPrograms';
-import { commandAllowedBy, commandExcludedBy, scopeExcluded, type PlannerAllowlist } from './plannerAllowlist';
+import { DEFAULT_PLANNER_ALLOWLIST, commandAllowedBy, commandExcludedBy, parseAllowlist, scopeExcluded, type PlannerAllowlist } from './plannerAllowlist';
 import { EFFECT_REFUSAL_HINT, READ_REFUSAL_HINT, webCommand, wgetVersionCommands } from './webCommands';
 import { EFFECT_ROUTE } from './effectRoute';
 
@@ -714,6 +714,26 @@ function scopeFor(seg: Segment): string {
     if (lead.length === SCOPE_LEAD_ARGS) break;
   }
   return [name, ...lead].join(' ');
+}
+
+const GH_DEFAULT_READS = parseAllowlist(DEFAULT_PLANNER_ALLOWLIST);
+
+/**
+ * Whether an allowlist entry for each `gh` command on this line would cover
+ * reads only. An entry covers every command that starts with its words,
+ * whatever follows, so only a scope that names a read on the default planner
+ * allowlist qualifies, or `gh --version`. Not `gh api <path>`, which `-X DELETE`
+ * turns into a write, nor `gh pr`, left by a flag before the action.
+ */
+export function ghEntriesOnlyRead(line: ParsedLine): boolean {
+  const { dialect } = line;
+  return line.lexed.segments.every((segment) => {
+    const { seg } = unwrap(segment, dialect);
+    if (programName(seg.binary) !== 'gh') return true;
+    const [, ...words] = scopeFor({ ...seg, binaryPath: undefined }).split(' ');
+    if (words.join(' ') === '--version') return true;
+    return commandAllowedBy(GH_DEFAULT_READS, { binary: 'gh', args: words, scopeWords: words.length }) !== undefined;
+  });
 }
 
 /**
