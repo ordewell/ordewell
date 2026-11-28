@@ -208,8 +208,8 @@ const taskDiffInput = z.object({
 const recordInput = z.object({
   entries: z.array(z.object({
     kind: z.enum(DECISION_RECORD_KINDS),
-    text: z.string().max(600),
-    why: z.string().max(400).optional(),
+    text: z.string().max(600).describe('At most 600 characters. A constraint is the user\'s exact words, or an excerpt, with no speaker or date prefix.'),
+    why: z.string().max(400).optional().describe('At most 400 characters.'),
     supersedes: z.string().optional().describe('The id of the entry this one replaces, as Q1.'),
   })).min(1).max(20).describe('One batch, whole or not at all.'),
 });
@@ -767,7 +767,7 @@ export const PLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
   tool('task_diff', 'Read what a task changed since it started: file stats with repository paths, or a single file patch with path and repo. Paged by since/nextOffset. Shared runs without recorded changes report not available.',
     taskDiffInput, (h) => h.taskDiff?.bind(h), PLANNER_READ_ONLY),
   PLANNER_RECORD,
-  tool('run_command', `Run a shell command for research: git, gh, az, kubectl, the project's own tooling, anything you need to look at. Read-only commands run at once; others ask the user, once per command family; commands that write files never change anything. ${SEALED_RUNS} Use it instead of a shell of your own.`,
+  tool('run_command', `Run a shell command for research: git, gh, az, kubectl, the project's own tooling, anything you need to look at. Read-only commands run at once; others run if the planner allowlist covers them, else Guarded asks the user once per command family and Full runs them sealed, without the network. Commands that write or reach outward are refused or sealed. ${SEALED_RUNS} Use it instead of a shell of your own.`,
     runCommandInput, (h) => h.runCommand?.bind(h), PLANNER_READ_ONLY),
   // Fallbacks (ADR-0027): a runner's own fetch or search, where it has one, is
   // decided by the same policy and carries the provider's own summaries, so
