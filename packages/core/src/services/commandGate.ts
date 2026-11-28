@@ -1,6 +1,6 @@
 import type { ApprovalRequest, IApproval, StandingDecision } from '../interfaces/IApproval';
 import type { ToolOutcome } from '../interfaces/IFileSystem';
-import { cdUnfollowed, classifyCommand, excludedBy, ghEntriesOnlyRead, innerCommandScopes, pathRefs, type PolicyInputs } from './commandPolicy';
+import { cdUnfollowed, classifyCommand, excludedBy, innerCommandScopes, pathRefs, type PolicyInputs } from './commandPolicy';
 import type { EgressCheck } from './egressGuard';
 import { NOT_APPROVED_HINT } from './effectRoute';
 import { carriesSecret } from './outboundSecrets';
@@ -89,14 +89,16 @@ function refusedNote(reason: string): string {
   return `Unsealed, it is refused: ${reason}`;
 }
 
-function modeNote(scope: string, line: ParsedLine): string {
-  const command = line.raw;
-  // An entry that is a binary's name alone covers whatever that binary does, so it is never advised, and nor is one under which a gh write runs.
-  if (scope.split(' + ').some((part) => !part.replace(/^xargs /, '').includes(' ')) || !ghEntriesOnlyRead(line)) {
-    return `Full runs only the planner allowlist, which does not cover "${command}".`;
-  }
-  return `Full runs only the planner allowlist, which does not cover "${scope}"; to run it unsealed, with the network, add "${scope}" to ORDEWELL_APPROVAL_ALLOW.`;
-}
+/**
+ * What a sealed run's result adds in Full, where the allowlist did not cover
+ * the command. It proposes no entry: an entry covers every command that starts
+ * with its words, and the setting splits on commas, so advice derived from the
+ * command line could grant more than the command. Which commands to allow is
+ * the user's choice.
+ */
+const MODE_NOTE = 'Full runs only commands the planner allowlist covers, and it does not cover this one, so it ran sealed, without the network. '
+  + 'Which commands the allowlist covers is the user\'s choice: it is the ordewell.plannerAllowlist setting in VS Code and ORDEWELL_APPROVAL_ALLOW elsewhere, described in "ordewell --help". '
+  + 'To read a web page, use the fetch tool; for anything else that needs the network, plan a task.';
 
 /** Why a command naming a path the research shell reads by rules confinement cannot follow is refused (ADR-0010). */
 function unfollowableReason(spelled: string): string {
@@ -333,7 +335,7 @@ async function envelope(original: ParsedLine, site: GateSite, policy: SitePolicy
   // its standing answer, whose mode refuses whatever would ask (ADR-0046).
   const standing = policy.peek?.(request);
   if (standing?.decision === 'deny' && standing.source === 'mode' && await site.canSeal()) {
-    return sealedUnlessDenied(policy, line, request, 'refused', request.kind === 'shell_command' && !task ? modeNote(request.scope, line) : undefined);
+    return sealedUnlessDenied(policy, line, request, 'refused', request.kind === 'shell_command' && !task ? MODE_NOTE : undefined);
   }
   const denied = task
     ? `Command not run: ${command}\n${taskRefusal(standing)} ${TASK_CONTINUE}`

@@ -1448,15 +1448,16 @@ describe('BaseFileSystem runs sealed what it would refuse without asking (ADR-00
     expect(loop.output).toContain('run each command on its own');
   });
 
-  it('names the scope to add to the allowlist when Full refuses a command and it fails sealed', async () => {
+  it('says Full does not cover the command when Full refuses it and it fails sealed, and proposes no entry', async () => {
     const fs = new SealingFileSystem();
     fs.setApproval(policy({ mode: 'deny' }).approval);
     fs.result = { success: false, output: 'fatal: unable to access', truncated: false };
     const outcome = await fs.bash('git ls-remote origin');
-    expect(outcome.output).toContain('Full runs only the planner allowlist, which does not cover "git ls-remote origin"; to run it unsealed, with the network, add "git ls-remote origin" to ORDEWELL_APPROVAL_ALLOW.');
+    expect(outcome.output).toContain('[Full runs only commands the planner allowlist covers, and it does not cover this one, so it ran sealed, without the network.');
+    expect(outcome.output).not.toContain('add "');
 
     fs.result = { success: true, output: 'ok', truncated: false };
-    expect((await fs.bash('git ls-remote origin')).output).not.toContain('ORDEWELL_APPROVAL_ALLOW');
+    expect((await fs.bash('git ls-remote origin')).output).not.toContain('planner allowlist');
   });
 
   it('runs sealed, as asked, a command that would have asked, and asks nobody', async () => {

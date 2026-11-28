@@ -119,11 +119,12 @@ describe('commandGate: the planner', () => {
       expect(verdict).toMatchObject({ kind: 'sealed', why: 'refused', note: expect.stringContaining('"gh secret"') });
     });
 
-    it('names the scope to add to the allowlist when Full refuses a command it does not cover', async () => {
+    it('says Full does not cover a command it refuses, and leaves what to allow to the user', async () => {
       const { approval } = approvals({ mode: 'deny' });
       const verdict = await decide(line('git ls-remote origin'), site('planner', approval, sealable));
-      expect(verdict).toMatchObject({ kind: 'sealed', why: 'refused', note: expect.stringContaining('add "git ls-remote origin" to ORDEWELL_APPROVAL_ALLOW') });
-      expect(verdict).toMatchObject({ note: expect.stringMatching(/^Full runs only the planner allowlist/) });
+      expect(verdict).toMatchObject({ kind: 'sealed', why: 'refused', note: expect.stringMatching(/^Full runs only commands the planner allowlist covers, and it does not cover this one, so it ran sealed, without the network\./) });
+      expect(verdict).toMatchObject({ note: expect.stringContaining('"ordewell --help"') });
+      expect(verdict).toMatchObject({ note: expect.stringContaining('use the fetch tool') });
     });
 
     it('lets the default allowlist run a gh read behind a leading flag, with no note', async () => {
@@ -132,42 +133,24 @@ describe('commandGate: the planner', () => {
       expect(await settle(verdict, approval)).toEqual({ kind: 'native', network: true, command: 'gh -R o/r release view v1' });
     });
 
+    // An entry covers every command that starts with its words, and the
+    // setting splits on commas, so advice built from the line could grant more
+    // than the line: `main,ssh` would add an `ssh` rule. The note names no entry.
     it.each([
-      ['gh --repo o/r release view v1', 'gh release view'],
-      ['gh -R o/r search repos x', 'gh search repos'],
-      ['gh --version', 'gh --version'],
-    ])('never advises adding bare gh for %s', async (command, scope) => {
+      'gh -R o/r release view v1', 'gh -R o/r repo delete x', 'gh api -X DELETE repos/o/r/issues/1',
+      'git ls-remote origin main,ssh', 'npm run test,ssh', 'az group delete x', 'git ls-remote origin',
+      'mvn -q test', 'git status && gh api repos/o/r/issues',
+    ])('proposes no allowlist entry for %s', async (command) => {
       const { approval } = approvals({ mode: 'deny' });
       const verdict = await decide(line(command), site('planner', approval, sealable));
-      expect(verdict).toMatchObject({ kind: 'sealed', note: expect.stringContaining(`add "${scope}" to ORDEWELL_APPROVAL_ALLOW`) });
-    });
-
-    // An entry covers every command that starts with its words, whatever flags
-    // follow: `gh api <path>` covers `-X DELETE`, and `gh pr`, left by a flag
-    // before the action, covers `gh pr merge`.
-    it.each([
-      'gh api repos/o/r/issues', 'gh api --method GET repos/o/r/issues',
-      'gh pr --repo o/r view', 'gh -R o/r repo delete x', 'gh pr create --title x', 'gh -R o/r',
-      'git ls-remote origin && gh api repos/o/r/issues', 'cd "$DIR" && gh repo delete x',
-    ])('advises no entry for %s, which would cover a gh write', async (command) => {
-      const { approval } = approvals({ mode: 'deny' });
-      const verdict = await decide(line(command), site('planner', approval, sealable));
-      expect(verdict).toMatchObject({ kind: 'sealed', why: 'refused' });
-      expect(verdict).toMatchObject({ note: `Full runs only the planner allowlist, which does not cover "${command}".` });
-    });
-
-    // cmd.exe, the default on Windows, reads "./bin/gh" as the command ".".
-    it.skipIf(process.platform === 'win32')('advises no entry for gh named by its path either', async () => {
-      const { approval } = approvals({ mode: 'deny' });
-      const verdict = await decide(line('./bin/gh api repos/o/r/issues'), site('planner', approval, sealable));
-      expect(verdict).toMatchObject({ note: 'Full runs only the planner allowlist, which does not cover "./bin/gh api repos/o/r/issues".' });
-    });
-
-    it.each(['mvn -q test', 'git status && mvn -q test', 'mvn -q test && gh repo delete x'])('names the command line, and advises no entry, where %s has a scope that is a binary alone', async (command) => {
-      const { approval } = approvals({ mode: 'deny' });
-      const verdict = await decide(line(command), site('planner', approval, sealable));
-      expect(verdict).toMatchObject({ kind: 'sealed', why: 'refused' });
-      expect(verdict).toMatchObject({ note: `Full runs only the planner allowlist, which does not cover "${command}".` });
+      expect(verdict).toMatchObject({ kind: 'sealed' });
+      const note = (verdict as { note?: string }).note;
+      expect(note).toMatch(/^(Full runs only commands the planner allowlist covers|Unsealed, it is refused: )/);
+      if (note === undefined) return;
+      expect(note).not.toContain('add "');
+      expect(note).not.toMatch(/\badd\b/i);
+      expect(note).not.toContain(command);
+      for (const word of command.split(/[\s,]+/).filter((w) => w.length > 2 && !['git', 'gh'].includes(w))) expect(note).not.toContain(`"${word}`);
     });
 
     it('gives a read-only task no planner advice in its note', async () => {

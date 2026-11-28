@@ -571,4 +571,4 @@ shell.
 - 2026-10-31 — the launcher reads no startup file and starts with only what the profile keeps of the host's environment; what names scratch is set inside the sandbox.
 - 2026-10-31 — a scratch directory for each profile, so nothing a sealed run writes takes effect under a wider profile (S8); a planner command's `$TMPDIR` and a native shell's `HOME` are no longer a sealed run's.
 - 2026-11-06 — on Linux the process limit is set above the host's threads, not its processes, since the kernel counts each thread: a host with many left a sealed test run's workers failing to start.
-- 2026-11-28 — S4: a sealed run that fails also says why it did not run unsealed (the classifier's reason, or in Full the allowlist scope that would cover it), and a single command is not told to split itself up.
+- 2026-11-28 — S4: a sealed run that fails also says why it did not run unsealed (the classifier's reason, or in Full that the planner allowlist does not cover it, with no entry proposed), and a single command is not told to split itself up.
