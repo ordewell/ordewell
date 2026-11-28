@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { shellFor } from '../src/main/terminal/shellChoice';
 import { appEnv, type Sandbox } from './fixtures';
 
 /** The developer's own provider setup, which must never reach the app under test. */
@@ -78,5 +79,13 @@ describe('appEnv', () => {
     expect(run('git --version')).toMatchObject({ status: 0, stdout: expect.stringContaining('git version') });
     expect(run('codex --version').status).not.toBe(0);
     expect(run('opencode --version').status).not.toBe(0);
+  });
+
+  it("starts the shell the app's terminal opens from the PATH it gives the app", () => {
+    const env = appEnv(sandbox(), 1, 2);
+    const shell = shellFor(process.platform, env);
+    // node-pty looks a bare `powershell.exe` up on the app's PATH, so a PATH without it opens no terminal.
+    const script = process.platform === 'win32' ? ['-NoProfile', '-Command', 'exit 0'] : ['-c', 'exit 0'];
+    expect(() => execFileSync(shell.file, [...shell.args, ...script], { env, stdio: 'ignore' })).not.toThrow();
   });
 });

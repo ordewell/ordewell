@@ -113,7 +113,9 @@ function hermeticPath(sandbox: Sandbox): string {
  * a `#!/bin/sh` stub is no command: the directories that hold this node and
  * git, the system's own in place of /usr/bin and /bin, and the stubs as batch
  * files ahead of them. Git found in Git Bash's form (`/mingw64/bin/git`) would
- * name no Windows file, so it is looked for on PATH as `git.exe`.
+ * name no Windows file, so it is looked for on PATH as `git.exe`. PowerShell's
+ * directory is one of the system's own too: the app's terminal opens
+ * `powershell.exe`, which node-pty looks for on the app's own PATH.
  */
 function windowsHermeticPath(bin: string): string {
   if (!fs.existsSync(bin)) {
@@ -125,7 +127,7 @@ function windowsHermeticPath(bin: string): string {
     .find((entry) => entry && fs.existsSync(path.join(entry, 'git.exe')));
   if (!gitDir) throw new Error('the desktop e2e needs git.exe on PATH');
   const system = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32');
-  return [path.join(ROOT, 'bench', 'pipeline', 'fake-claude'), bin, path.dirname(process.execPath), gitDir, system].join(path.delimiter);
+  return [path.join(ROOT, 'bench', 'pipeline', 'fake-claude'), bin, path.dirname(process.execPath), gitDir, system, path.join(system, 'WindowsPowerShell', 'v1.0')].join(path.delimiter);
 }
 
 export interface EnvOptions {
