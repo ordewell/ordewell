@@ -2,13 +2,13 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { execFileSync } from 'child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { delimiter, join, resolve } from 'path';
+import { join, resolve } from 'path';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
 import { LeaseHost } from '../sessionLease';
 import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import { StructuredRunner } from '../StructuredRunner';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
-import { fakeConfig, patient, removeDir } from '../../testing';
+import { fakeConfig, pathWithFake, patient, removeDir } from '../../testing';
 import { loadChildSession, saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
 import { nodeOfTask } from './delegationTestKit';
@@ -68,7 +68,8 @@ interface Said { sessionId: string; prompt?: string; tool?: string; reply?: { te
 
 describe('two sibling delegated tasks on a real harness', () => {
   it('coordinate through a provided interface and the board: one posts a contract, the other gets a line and reads it, and both land', async () => {
-    process.env.PATH = [FAKE_CLAUDE, saved.PATH].filter(Boolean).join(delimiter);
+    // pathWithFake leaves off a host's own native `claude.exe`, which a lookup would start before the fake's `.cmd`.
+    process.env.PATH = pathWithFake(FAKE_CLAUDE, 'claude', saved.PATH ?? '');
     const state = tempDir();
     const log = join(state, 'said.jsonl');
     const gate = join(state, 'line-arrived');

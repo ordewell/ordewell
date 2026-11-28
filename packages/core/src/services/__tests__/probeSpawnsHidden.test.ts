@@ -4,6 +4,7 @@ import { defaultExec as discoveryExec } from '../ModelDiscovery';
 import { defaultExec as installationExec } from '../RunnerInstallation';
 import { defaultExec as authExec } from '../runnerAuth';
 import { defaultDeps as workspaceEnvDeps } from '../workspaceEnv';
+import { setEnv } from '../../testing';
 
 /**
  * The agent probes a daemon runs at startup (is it installed, is it signed
@@ -15,7 +16,7 @@ import { defaultDeps as workspaceEnvDeps } from '../workspaceEnv';
  * here through its real default against a recording child_process, so the
  * option is pinned with the ones the spawn already passed.
  */
-const calls = vi.hoisted(() => [] as Array<{ fn: 'exec' | 'execFile'; command: string; args?: string[]; options: Record<string, unknown> }>);
+const calls = vi.hoisted(() => [] as Array<{ fn: 'exec' | 'execFile' | 'spawn'; command: string; args?: string[]; options: Record<string, unknown> }>);
 
 vi.mock('child_process', async (importOriginal) => {
   const { promisify } = await import('util');
@@ -37,7 +38,23 @@ vi.mock('child_process', async (importOriginal) => {
     queueMicrotask(() => callback(null, 'ok', ''));
     return child();
   };
-  return { ...actual, default: { ...actual, exec, execFile }, exec, execFile };
+  // A Windows discovery probe goes to the host's job supervisor (ADR-0078).
+  // This one says it is ready and offers pipes that do not exist, so the
+  // probe fails before any command runs; what is pinned is the supervisor's
+  // own spawn.
+  const { EventEmitter } = await import('events');
+  const { PassThrough } = await import('stream');
+  const spawn = (command: string, args: string[], options: Record<string, unknown>) => {
+    calls.push({ fn: 'spawn', command, args, options });
+    const stdout = new PassThrough();
+    const stdin = new PassThrough();
+    stdin.setEncoding('utf8');
+    stdin.on('data', (line: string) => { const [kind, id] = line.split(' '); if (kind === 'start') stdout.write(`listening ${id}\n`); });
+    const fake = Object.assign(new EventEmitter(), { stdout, stderr: new PassThrough(), stdin, pid: 1, exitCode: null, signalCode: null, kill: () => true, ref: () => {}, unref: () => {} });
+    queueMicrotask(() => stdout.write('ready\n'));
+    return fake;
+  };
+  return { ...actual, default: { ...actual, exec, execFile, spawn }, exec, execFile, spawn };
 });
 
 vi.mock('../../utils/shellPath', async (importOriginal) => {
@@ -52,28 +69,33 @@ function last(): (typeof calls)[number] {
   return call;
 }
 
+/** The supervisor spawns hidden, and starts each probe with no console and SW_HIDE, as windowsHide would. */
+function expectHiddenSupervisor(call: (typeof calls)[number]): void {
+  expect(call).toMatchObject({ fn: 'spawn', command: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', options: { windowsHide: true } });
+  expect(call.args?.at(-1)).toMatch(/\$creation = .*\$CREATE_NO_WINDOW/);
+  expect(call.args?.at(-1)).toContain('STARTF_USESHOWWINDOW');
+}
+
 describe('the agent probes spawn with no console window', () => {
   it('model discovery', async () => {
     const platform = process.platform;
     Object.defineProperty(process, 'platform', { value: 'win32' });
+    // Where the supervisor is found; a Linux host has no SystemRoot.
+    const restore = setEnv({ SystemRoot: 'C:\\Windows' });
     try {
-      expect(await discoveryExec('opencode models', { timeout: 1000 })).toEqual({ stdout: 'v1.2.3\n' });
-      const call = last();
-      expect(call).toMatchObject({ fn: 'exec', command: 'opencode models' });
-      expect(call.options).toMatchObject({ timeout: 1000, maxBuffer: 32 * 1024 * 1024, windowsHide: true });
-      expect(call.options.env).toBeDefined();
-    } finally { Object.defineProperty(process, 'platform', { value: platform }); }
+      await expect(discoveryExec('opencode models', { timeout: 1000 })).rejects.toThrow(/discovery cleanup could not be set up/);
+      expectHiddenSupervisor(last());
+    } finally { restore(); Object.defineProperty(process, 'platform', { value: platform }); }
   });
 
   it('the installation check', async () => {
     const platform = process.platform;
     Object.defineProperty(process, 'platform', { value: 'win32' });
+    const restore = setEnv({ SystemRoot: 'C:\\Windows' });
     try {
-      expect(await installationExec('claude --version', { timeout: 8000 })).toEqual({ stdout: 'v1.2.3\n' });
-      const call = last();
-      expect(call).toMatchObject({ fn: 'exec', command: 'claude --version' });
-      expect(call.options).toMatchObject({ timeout: 8000, windowsHide: true });
-    } finally { Object.defineProperty(process, 'platform', { value: platform }); }
+      await expect(installationExec('claude --version', { timeout: 8000 })).rejects.toThrow(/discovery cleanup could not be set up/);
+      expectHiddenSupervisor(last());
+    } finally { restore(); Object.defineProperty(process, 'platform', { value: platform }); }
   });
 
   it('the sign-in check', async () => {

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { makeSession, FakeRunnerSession, taskOf, saves } from './sessionTestKit';
+import { makeSession, FakeRunnerSession, taskOf, saves, testWorkspace } from './sessionTestKit';
 import { fakeConfig, FakeWorktreeIsolation, flushMicrotasks } from '../../testing';
 import * as sessionStore from '../../utils/sessionStore';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
@@ -235,7 +235,7 @@ describe('Session with worktree isolation', () => {
 
       await session.continueWithoutIsolation();
 
-      expect(spawn.mock.calls[0][0].cwd).toBe(process.cwd());
+      expect(spawn.mock.calls[0][0].cwd).toBe(testWorkspace);
     });
   });
 
@@ -245,8 +245,8 @@ describe('Session with worktree isolation', () => {
       ...plan([task('t1', 1, { status: 'completed' }), task('t2', 2, { dependencies: ['t1'] })]),
       isolation: {
         run: {
-          id: 'old', session: OWN, workspaceRoot: process.cwd(), shared: [], sharedRepos: [],
-          repos: [{ path: '.', root: process.cwd(), baseRef: 'abc', integrationBranch: 'ordewell/old/integration' }],
+          id: 'old', session: OWN, workspaceRoot: testWorkspace, shared: [], sharedRepos: [],
+          repos: [{ path: '.', root: testWorkspace, baseRef: 'abc', integrationBranch: 'ordewell/old/integration' }],
           tasks: { t1: { taskId: 't1', order: 1, title: 'Task t1', branch: 'ordewell/old/1-t1', workspace: '/wt/1', status: 'merged', repos: { '.': { worktree: '/wt/1', linked: [], changed: true } } } },
         },
         resolvers: {},
@@ -268,7 +268,7 @@ describe('Session with worktree isolation', () => {
         // The ADR-0013 record, as 0.4.23 wrote it: the refs on the run, one worktree per task.
         isolation: {
           run: {
-            id: 'old', workspaceRoot: process.cwd(), baseRef: 'abc', baseBranch: 'main', integrationBranch: 'ordewell/old/integration',
+            id: 'old', workspaceRoot: testWorkspace, baseRef: 'abc', baseBranch: 'main', integrationBranch: 'ordewell/old/integration',
             tasks: { t1: { taskId: 't1', order: 1, title: 'Task t1', branch: 'ordewell/old/1-t1', worktree: '/wt/1', status: 'merged', linked: [] } },
           },
           resolvers: {},
@@ -311,8 +311,8 @@ describe('Session with worktree isolation', () => {
       ...plan([task('t1', 1, { status: 'completed' }), task('t2', 2, { status: 'awaiting_user' }), task('t3', 3)]),
       isolation: {
         run: {
-          id: 'old', session: OWN, workspaceRoot: process.cwd(), shared: [], sharedRepos: [],
-          repos: [{ path: '.', root: process.cwd(), baseRef: 'abc', integrationBranch: 'ordewell/old/integration' }],
+          id: 'old', session: OWN, workspaceRoot: testWorkspace, shared: [], sharedRepos: [],
+          repos: [{ path: '.', root: testWorkspace, baseRef: 'abc', integrationBranch: 'ordewell/old/integration' }],
           tasks: { t2: record('t2', 2, 'conflict'), t1: record('t1', 1, 'merged') },
         },
         resolvers: {},
@@ -344,8 +344,8 @@ describe('Session with worktree isolation', () => {
       ...plan([task('t1', 1)]),
       isolation: {
         run: {
-          id: 'old', session: OWN, workspaceRoot: process.cwd(), shared: [], sharedRepos: [], tasks: {},
-          repos: [{ path: '.', root: process.cwd(), baseRef: 'abc', integrationBranch: 'ordewell/old/integration' }],
+          id: 'old', session: OWN, workspaceRoot: testWorkspace, shared: [], sharedRepos: [], tasks: {},
+          repos: [{ path: '.', root: testWorkspace, baseRef: 'abc', integrationBranch: 'ordewell/old/integration' }],
         },
         resolvers: {},
       },
@@ -367,8 +367,8 @@ describe('Session with worktree isolation', () => {
       ...plan(records.map((r) => task(r.taskId, r.order, { status: r.status === 'merged' ? 'completed' : 'failed' }))),
       isolation: {
         run: {
-          id, session: OWN, workspaceRoot: process.cwd(), shared: [], sharedRepos: [],
-          repos: [{ path: '.', root: process.cwd(), baseRef: 'abc', baseBranch: 'main', integrationBranch: `ordewell/${id}/integration` }],
+          id, session: OWN, workspaceRoot: testWorkspace, shared: [], sharedRepos: [],
+          repos: [{ path: '.', root: testWorkspace, baseRef: 'abc', baseBranch: 'main', integrationBranch: `ordewell/${id}/integration` }],
           tasks: Object.fromEntries(records.map((r) => [r.taskId, r])),
         },
         resolvers: {},

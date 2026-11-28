@@ -32,13 +32,15 @@ const UNITS: ReadonlyArray<[Intl.RelativeTimeFormatUnit, number]> = [
   ['day', 86_400_000], ['hour', 3_600_000], ['minute', 60_000],
 ];
 
+// English like every other word in the window, never the host's locale beside an English 'now'.
+const RELATIVE = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+
 export function relativeTime(iso: string, now = Date.now()): string {
   const at = Date.parse(iso);
   if (Number.isNaN(at)) return '';
   const ago = now - at;
-  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
   for (const [unit, ms] of UNITS) {
-    if (Math.abs(ago) >= ms) return rtf.format(-Math.round(ago / ms), unit);
+    if (Math.abs(ago) >= ms) return RELATIVE.format(-Math.round(ago / ms), unit);
   }
   return 'now';
 }

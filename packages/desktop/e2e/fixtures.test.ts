@@ -1,7 +1,9 @@
+import { execFileSync, execSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { shellFor } from '../src/main/terminal/shellChoice';
 import { appEnv, type Sandbox } from './fixtures';
 
 /** The developer's own provider setup, which must never reach the app under test. */
@@ -31,8 +33,7 @@ function sandbox(): Sandbox {
   return { tmp, home: path.join(tmp, 'home'), repo: path.join(tmp, 'repo'), userData: path.join(tmp, 'user-data'), fakeClaudeLog: path.join(tmp, 'fake-claude.log') };
 }
 
-// appEnv builds a PATH of POSIX shims and symlinks, as the desktop e2e it serves runs on.
-describe.skipIf(process.platform === 'win32')('appEnv', () => {
+describe('appEnv', () => {
   it('passes the app none of the developer\'s provider keys, endpoints or model choice when it has no provider', () => {
     for (const [key, value] of Object.entries(DEVELOPER)) vi.stubEnv(key, value);
 
@@ -52,5 +53,39 @@ describe.skipIf(process.platform === 'win32')('appEnv', () => {
       OPENROUTER_API_KEY: 'mock-key',
       OPENROUTER_BASE_URL: 'http://127.0.0.1:2/v1',
     });
+  });
+
+  it('makes the sandbox the home of what it starts, as os.homedir() reads it', () => {
+    const box = sandbox();
+
+    const env = appEnv(box, 1, 2);
+
+    // The daemon keeps its token, settings and version check under os.homedir(); HOME alone moves none of it on Windows.
+    expect(execFileSync(process.execPath, ['-p', 'require("node:os").homedir()'], { env, encoding: 'utf8' }).trim()).toBe(box.home);
+    expect(Object.keys(env).filter((key) => key.toUpperCase() === 'PATH')).toEqual(['PATH']);
+  });
+
+  it('starts the fake claude, node and git from the PATH it gives the app, and no codex or opencode', () => {
+    const env = appEnv(sandbox(), 1, 2);
+    const run = (command: string): { status: number; stdout: string } => {
+      try {
+        return { status: 0, stdout: execSync(command, { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }) };
+      } catch (error) {
+        return { status: (error as { status?: number }).status ?? -1, stdout: '' };
+      }
+    };
+
+    expect(run('claude --version').stdout).toContain('(Claude Code)');
+    expect(run('git --version')).toMatchObject({ status: 0, stdout: expect.stringContaining('git version') });
+    expect(run('codex --version').status).not.toBe(0);
+    expect(run('opencode --version').status).not.toBe(0);
+  });
+
+  it("starts the shell the app's terminal opens from the PATH it gives the app", () => {
+    const env = appEnv(sandbox(), 1, 2);
+    const shell = shellFor(process.platform, env);
+    // node-pty looks a bare `powershell.exe` up on the app's PATH, so a PATH without it opens no terminal.
+    const script = process.platform === 'win32' ? ['-NoProfile', '-Command', 'exit 0'] : ['-c', 'exit 0'];
+    expect(() => execFileSync(shell.file, [...shell.args, ...script], { env, stdio: 'ignore' })).not.toThrow();
   });
 });

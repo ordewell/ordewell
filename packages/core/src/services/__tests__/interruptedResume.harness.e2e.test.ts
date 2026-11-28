@@ -2,14 +2,14 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { execFileSync } from 'child_process';
 import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { delimiter, join, resolve } from 'path';
+import { join, resolve } from 'path';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
 import { LeaseHost } from '../sessionLease';
 import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import { StructuredRunner } from '../StructuredRunner';
 import { createTask, type LegacyPlanState } from '../../models/Task';
 import type { Session } from '../createSession';
-import { fakeConfig, patient, removeDir } from '../../testing';
+import { fakeConfig, pathWithFake, patient, removeDir } from '../../testing';
 import { loadSession, saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
 import { closeSessions, makeSession } from './sessionTestKit';
@@ -35,7 +35,8 @@ const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd,
 const dirs: string[] = [];
 const saved = { PATH: process.env.PATH, FAKE_CLAUDE_STATE: process.env.FAKE_CLAUDE_STATE, FAKE_CLAUDE_LOG: process.env.FAKE_CLAUDE_LOG, FAKE_ACP_NO_RESUME: process.env.FAKE_ACP_NO_RESUME };
 // The PATH a runner is looked up on is resolved once a process, so every test here gives the same one.
-const fakesFirst = () => [FAKE_CLAUDE, FAKE_ACP, saved.PATH].filter(Boolean).join(delimiter);
+// pathWithFake leaves off a host's own native `claude.exe`, which a lookup would start before the fake's `.cmd`.
+const fakesFirst = () => pathWithFake(FAKE_CLAUDE, 'claude', pathWithFake(FAKE_ACP, 'copilot', saved.PATH ?? ''));
 afterEach(async () => {
   await closeSessions();
   for (const [name, value] of Object.entries(saved)) {

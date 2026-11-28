@@ -15,7 +15,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, win32 } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { load } from 'js-yaml';
 import { npm as runNpm } from './npm.mjs';
@@ -170,6 +170,39 @@ export function benchStep(step, { fetch = () => sh('node', ['scripts/shellcheck.
   return run(['run', 'test:bench'], toolsEnv(step, has));
 }
 
+const gitExecPath = () => spawnSync('git', ['--exec-path'], { encoding: 'utf8' }).stdout?.trim();
+
+/**
+ * ci.yml's Windows jobs run every step under Git Bash (`shell: bash`), and the
+ * bench tests use its `sh` and `bash` as tools (AGENTS.md). Started from
+ * PowerShell or cmd, Windows has no `sh` on PATH and its `bash` is WSL's, so
+ * those tests fail on the shell rather than on what they test. This finds Git
+ * for Windows' usr/bin, three levels above `git --exec-path`
+ * (`<root>/mingw64/libexec/git-core`), to put first on PATH as Git Bash does.
+ * Undefined where `sh` is already there; `problem` where Git's shell is not.
+ */
+export function gitBashPath({ platform = process.platform, env = process.env, hasSh = () => onPath('sh'), execPath = gitExecPath, exists = existsSync } = {}) {
+  if (platform !== 'win32' || hasSh()) return undefined;
+  const core = execPath();
+  const usrBin = core ? win32.resolve(core, '..', '..', '..', 'usr', 'bin') : undefined;
+  if (!usrBin || !exists(win32.join(usrBin, 'sh.exe'))) {
+    return { problem: "no sh on PATH and no Git for Windows shell beside git: run this from Git Bash, as ci.yml's Windows jobs run" };
+  }
+  return { usrBin, PATH: `${usrBin}${win32.delimiter}${env.PATH ?? ''}` };
+}
+
+/** Puts Git Bash's tools on this process's PATH, which every step inherits; false when it cannot. */
+export function useGitBash(log = console.log, found = gitBashPath()) {
+  if (!found) return true;
+  if (found.problem) {
+    console.error(found.problem);
+    return false;
+  }
+  process.env.PATH = found.PATH;
+  log(`Putting ${found.usrBin} first on PATH, as ci.yml's Windows jobs run under Git Bash.`);
+  return true;
+}
+
 /** Run here, keyed by the step's name in ci.yml, and handed that step. */
 export const STEPS = {
   // CI installs exactly the lockfile here; a local run checks what it has against it instead.
@@ -256,6 +289,7 @@ async function main() {
     for (const { name } of local) console.log(name);
     return 0;
   }
+  if (!useGitBash()) return 1;
   for (const step of local) {
     console.log(`\n=== ${step.name}`);
     if ((await STEPS[step.name](step)) !== 0) {
